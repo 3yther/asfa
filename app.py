@@ -26,6 +26,7 @@ logger = logging.getLogger("asfa")
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "asfa-dev-secret-change-me")
+app.config["PREFERRED_URL_SCHEME"] = "https"
 
 db.init_db()
 
