@@ -288,7 +288,7 @@ function botRow(b) {
 async function loadBots() {
   try {
     const b = await api("/api/bots");
-    $("#bots-body").innerHTML = botRow(b.quant) + botRow(b.scanner);
+    $("#bots-body").innerHTML = botRow(b.scanner);
   } catch (e) {
     $("#bots-body").innerHTML = '<span class="muted">Bots unreachable</span>';
   }

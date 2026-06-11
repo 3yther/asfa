@@ -1,6 +1,5 @@
 import requests
 
-QUANT_BOT_URL = "https://quant-bot-production-96db.up.railway.app/api/status"
 SCANNER_URL = "https://stock-scanner-production-0b0d.up.railway.app/api/status"
 TIMEOUT = 8
 
@@ -20,22 +19,17 @@ def _fetch(url, name):
 
 
 def get_bots_status():
-    quant = _fetch(QUANT_BOT_URL, "Quant Bot")
     scanner = _fetch(SCANNER_URL, "Stock Scanner")
-    return {"quant": quant, "scanner": scanner}
+    return {"scanner": scanner}
 
 
 def get_bots_summary_text(status=None):
     if status is None:
         status = get_bots_status()
-    lines = []
-    for key in ("quant", "scanner"):
-        b = status[key]
-        if not b.get("online"):
-            lines.append(f"{b['bot_name']}: offline ({b.get('error', '')})")
-        else:
-            equity = b.get("equity") or b.get("portfolio_value") or "?"
-            pnl = b.get("pnl") or b.get("daily_pnl") or b.get("total_pnl") or "?"
-            positions = b.get("positions") or b.get("open_positions") or 0
-            lines.append(f"{b['bot_name']}: equity={equity}, P&L={pnl}, positions={positions}")
-    return "\n".join(lines)
+    b = status["scanner"]
+    if not b.get("online"):
+        return f"Stock Scanner: offline ({b.get('error', '')})"
+    equity = b.get("equity") or b.get("portfolio_value") or "?"
+    pnl = b.get("pnl") or b.get("daily_pnl") or b.get("total_pnl") or "?"
+    positions = b.get("positions") or b.get("open_positions") or 0
+    return f"Stock Scanner: equity={equity}, P&L={pnl}, positions={positions}"
