@@ -313,7 +313,7 @@ def api_add_event():
 
 @app.route("/auth/google")
 def auth_google():
-    redirect_uri = url_for("oauth_callback", _external=True)
+    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI") or url_for("oauth_callback", _external=True)
     print("REDIRECT URI:", redirect_uri, flush=True)
     if redirect_uri.startswith("http://"):
         os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"  # local dev only
