@@ -52,117 +52,174 @@ function typewriter(el, text, speed = 12) {
   });
 }
 
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-/* ── Clock & particles ─────────────────────────────────────────────── */
-setInterval(() => {
-  $("#clock").textContent = new Date().toLocaleTimeString("en-GB");
-}, 1000);
+/* ── Clock ─────────────────────────────────────────────────────────────── */
+setInterval(() => { $("#clock").textContent = new Date().toLocaleTimeString("en-GB"); }, 1000);
 
-(function particles() {
+/* ── Particles ─────────────────────────────────────────────────────────── */
+(function spawnParticles() {
   const box = $("#particles");
-  for (let i = 0; i < 26; i++) {
+  for (let i = 0; i < 20; i++) {
     const p = document.createElement("div");
     p.className = "particle";
     p.style.left = Math.random() * 100 + "vw";
-    p.style.animationDuration = 14 + Math.random() * 18 + "s";
-    p.style.animationDelay = -Math.random() * 20 + "s";
+    p.style.animationDuration = 16 + Math.random() * 18 + "s";
+    p.style.animationDelay = -Math.random() * 24 + "s";
     p.style.background = Math.random() > 0.5 ? "#06B6D4" : "#7C3AED";
     box.appendChild(p);
   }
 })();
 
-/* stagger card entrance */
-$$(".card").forEach((c, i) => (c.style.animationDelay = i * 100 + "ms"));
+/* ── Stagger card entrance ─────────────────────────────────────────────── */
+$$(".card").forEach((c, i) => (c.style.animationDelay = i * 80 + "ms"));
 
-/* ── Tabs (mobile bottom nav) ──────────────────────────────────────── */
-document.body.dataset.tab = "home";
-$$(".nav-btn").forEach((btn) =>
-  btn.addEventListener("click", () => {
-    $$(".nav-btn").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    document.body.dataset.tab = btn.dataset.tab;
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  })
-);
-
-/* ── Chart defaults ────────────────────────────────────────────────── */
+/* ── Chart defaults ────────────────────────────────────────────────────── */
 Chart.defaults.color = "#8B949E";
 Chart.defaults.font.family = "'JetBrains Mono', monospace";
 Chart.defaults.font.size = 10;
-Chart.defaults.borderColor = "rgba(139,148,158,.12)";
+Chart.defaults.borderColor = "rgba(139,148,158,.1)";
 Chart.defaults.animation.duration = 1300;
 const charts = {};
 function makeChart(id, config) {
   if (charts[id]) charts[id].destroy();
-  charts[id] = new Chart($("#" + id), config);
+  const el = $("#" + id);
+  if (!el) return;
+  charts[id] = new Chart(el, config);
 }
 
-/* ── Briefing ──────────────────────────────────────────────────────── */
+/* ── Bottom nav — sliding pill ─────────────────────────────────────────── */
+document.body.dataset.tab = "home";
+const navBtns = $$(".nav-btn");
+const navPill = $("#nav-pill");
+
+function moveNavPill(btn) {
+  if (!navPill || !btn) return;
+  const navRect = btn.closest(".bottom-nav").getBoundingClientRect();
+  const btnRect = btn.getBoundingClientRect();
+  navPill.style.left = (btnRect.left - navRect.left + btn.closest(".bottom-nav").scrollLeft) + "px";
+  navPill.style.width = btnRect.width + "px";
+}
+
+navBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    navBtns.forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.body.dataset.tab = btn.dataset.tab;
+    moveNavPill(btn);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+});
+// Init pill position
+requestAnimationFrame(() => moveNavPill($(".nav-btn.active")));
+
+/* ── Briefing ──────────────────────────────────────────────────────────── */
 let briefingText = "";
 async function loadBriefing(refresh = false) {
-  $("#briefing-scan").classList.remove("hidden");
-  $("#briefing-body").innerHTML = '<span class="muted">Generating briefing…</span>';
+  const scan = $("#briefing-scan");
+  const body = $("#briefing-body");
+  const refreshBtn = $("#briefing-refresh");
+  scan.classList.remove("hidden");
+  body.innerHTML = '<span class="muted">Generating briefing…</span>';
+  refreshBtn.classList.add("btn-spinning");
   try {
     const b = await api("/api/briefing" + (refresh ? "?refresh=1" : ""));
-    briefingText = b.text || b.content;
-    $("#briefing-body").textContent = b.content;
+    briefingText = b.text || b.content || "";
+    body.textContent = "";
+    await typewriter(body, briefingText, 8);
   } catch (e) {
-    $("#briefing-body").innerHTML = `<span class="muted">Briefing unavailable: ${esc(e.message)}</span>`;
+    body.innerHTML = `<span class="muted">Briefing unavailable: ${esc(e.message)}</span>`;
   } finally {
-    $("#briefing-scan").classList.add("hidden");
+    scan.classList.add("hidden");
+    refreshBtn.classList.remove("btn-spinning");
   }
 }
 $("#briefing-refresh").addEventListener("click", () => loadBriefing(true));
 $("#briefing-play").addEventListener("click", () => speak(briefingText || "No briefing available yet."));
 
-/* ── Score ring ────────────────────────────────────────────────────── */
+/* ── Score ring ────────────────────────────────────────────────────────── */
+let _currentWater = 0, _currentSleep = 0;
+
+function setOrbColor(score) {
+  let color;
+  if      (score < 40) color = "rgba(248, 81, 73, 0.7)";
+  else if (score <= 70) color = "rgba(245, 197, 66, 0.7)";
+  else                  color = "rgba(63, 185, 80, 0.7)";
+  document.documentElement.style.setProperty("--orb-glow-color", color);
+}
+
+function updateContribBars(waterMl, sleepHrs, goalsPct) {
+  const w = Math.min(100, (waterMl / 2000) * 100);
+  const s = Math.min(100, (sleepHrs / 8) * 100);
+  const g = Math.min(100, goalsPct);
+  const set = (id, pct) => {
+    const el = $("#" + id);
+    if (el) setTimeout(() => el.style.width = pct + "%", 300);
+  };
+  set("contrib-water", w);
+  set("contrib-sleep", s);
+  set("contrib-goals", g);
+}
+
 async function loadScore() {
   try {
     const s = await api("/api/score");
     const arc = $("#score-arc");
-    const C = 2 * Math.PI * 52;
+    const C = 2 * Math.PI * 68;
     arc.style.strokeDashoffset = C - (C * s.score) / 100;
-    arc.style.stroke = s.score < 40 ? "#F0506E" : s.score <= 70 ? "#F5C542" : "#2EE6A8";
-    $("#score-num").style.color = arc.style.stroke;
-    countUp($("#score-num"), s.score);
+    const color = s.score < 40 ? "#F85149" : s.score <= 70 ? "#F5C542" : "#3FB950";
+    arc.style.stroke = color;
+    const num = $("#score-num");
+    num.style.color = color;
+    num.style.textShadow = `0 0 20px ${color}80`;
+    countUp(num, s.score);
+    setOrbColor(s.score);
     const hist = s.history || [];
     makeChart("score-chart", {
       type: "line",
       data: {
         labels: hist.map((h) => h.date.slice(5)),
         datasets: [{ data: hist.map((h) => h.score), borderColor: "#06B6D4",
-          backgroundColor: "rgba(6,182,212,.12)", fill: true, tension: 0.4, pointRadius: 2 }],
+          backgroundColor: "rgba(6,182,212,.1)", fill: true, tension: 0.4, pointRadius: 2 }],
       },
       options: { plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100 } } },
     });
   } catch (e) { console.warn("score", e); }
 }
 
-/* ── Habits ────────────────────────────────────────────────────────── */
+/* ── Habits ────────────────────────────────────────────────────────────── */
 async function loadHabits() {
   try {
     const h = await api("/api/habits");
-    const water = h.today.water_ml || 0;
-    countUp($("#water-num"), water);
-    $("#water-bar").style.width = Math.min(100, (water / 2000) * 100) + "%";
+    _currentWater = h.today.water_ml || 0;
+    _currentSleep = h.today.sleep_hours || 0;
+    countUp($("#water-num"), _currentWater);
+    $("#water-bar").style.width = Math.min(100, (_currentWater / 2000) * 100) + "%";
     const s = h.water_streak;
     const fireSize = Math.min(2, 1 + s * 0.08);
     $("#water-streak").innerHTML = s > 0
-      ? `<span class="fire" style="font-size:${fireSize}em">🔥</span> <span class="mono">${s}d</span>` : "";
+      ? `<span style="font-size:${fireSize}em">🔥</span> <span class="mono">${s}d</span>` : "";
     const days = [...h.history].reverse();
     makeChart("sleep-chart", {
       type: "bar",
       data: {
         labels: days.map((d) => d.date.slice(5)),
         datasets: [{ data: days.map((d) => d.sleep_hours || 0),
-          backgroundColor: days.map((d) => (d.sleep_hours >= 7 ? "rgba(46,230,168,.7)" : "rgba(124,58,237,.6)")),
+          backgroundColor: days.map((d) => d.sleep_hours >= 7 ? "rgba(63,185,80,.7)" : "rgba(124,58,237,.6)"),
           borderRadius: 6 }],
       },
       options: { plugins: { legend: { display: false } }, scales: { y: { suggestedMax: 9 } } },
     });
+    _refreshContribBars();
   } catch (e) { console.warn("habits", e); }
 }
+
+function _refreshContribBars() {
+  const avgGoals = _lastGoalsPct;
+  updateContribBars(_currentWater, _currentSleep, avgGoals);
+}
+
+let _lastGoalsPct = 0;
 
 $$(".water-add").forEach((b) =>
   b.addEventListener("click", async () => {
@@ -181,52 +238,33 @@ $("#sleep-form").addEventListener("submit", async (e) => {
   e.target.reset(); loadHabits(); loadScore();
 });
 
-/* ── Gym ───────────────────────────────────────────────────────────── */
-async function loadGym() {
+/* ── Body weight ───────────────────────────────────────────────────────── */
+async function loadBodyWeight() {
+  try {
+    const g = await api("/api/gym");
+    makeChart("weight-chart", {
+      type: "line",
+      data: {
+        labels: g.body_weight.map((w) => w.date.slice(5)),
+        datasets: [{ data: g.body_weight.map((w) => w.weight_kg), borderColor: "#3FB950",
+          backgroundColor: "rgba(63,185,80,.1)", fill: true, tension: 0.35, pointRadius: 2 }],
+      },
+      options: { plugins: { legend: { display: false } } },
+    });
+  } catch (e) { console.warn("bodyweight", e); }
+}
+
+async function loadPBs() {
   try {
     const g = await api("/api/gym");
     $("#pbs-body").innerHTML = g.pbs.length
-      ? g.pbs.map((p) => `<div class="list-item"><span>${esc(p.exercise)}</span>
-          <span class="mono glow" style="margin-left:auto">${p.best_weight}kg × ${p.best_reps}</span></div>`).join("")
-      : '<span class="muted">No PBs yet — log a workout</span>';
-    const warn = $("#neglected-warn");
-    if (g.neglected.length) {
-      warn.textContent = `⚠️ Not trained in 7+ days: ${g.neglected.join(", ")}`;
-      warn.classList.remove("hidden");
-    } else warn.classList.add("hidden");
-    const groups = ["chest", "back", "legs", "shoulders", "arms", "core"];
-    makeChart("balance-chart", {
-      type: "radar",
-      data: { labels: groups,
-        datasets: [{ data: groups.map((x) => g.balance[x] || 0), borderColor: "#7C3AED",
-          backgroundColor: "rgba(124,58,237,.22)", pointBackgroundColor: "#06B6D4" }] },
-      options: { plugins: { legend: { display: false } },
-        scales: { r: { ticks: { display: false }, grid: { color: "rgba(139,148,158,.15)" },
-          angleLines: { color: "rgba(139,148,158,.15)" }, pointLabels: { color: "#8B949E" } } } },
-    });
-    makeChart("weight-chart", {
-      type: "line",
-      data: { labels: g.body_weight.map((w) => w.date.slice(5)),
-        datasets: [{ data: g.body_weight.map((w) => w.weight_kg), borderColor: "#2EE6A8",
-          backgroundColor: "rgba(46,230,168,.1)", fill: true, tension: 0.35, pointRadius: 2 }] },
-      options: { plugins: { legend: { display: false } } },
-    });
-  } catch (e) { console.warn("gym", e); }
+      ? g.pbs.map((p) => `<div class="list-item">
+          <span>${esc(p.exercise)}</span>
+          <span class="mono glow" style="margin-left:auto">${p.best_weight}kg × ${p.best_reps}</span>
+        </div>`).join("")
+      : '<span class="muted">No PBs yet</span>';
+  } catch (e) { console.warn("pbs", e); }
 }
-
-$("#workout-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const r = await api("/api/gym/workout", { method: "POST", body: {
-    exercise: $("#wo-exercise").value, weight_kg: $("#wo-weight").value || 0,
-    reps: $("#wo-reps").value || 0, muscle_group: $("#wo-muscle").value } });
-  if (r.is_pb) {
-    const pb = $("#pb-celebrate");
-    pb.classList.remove("hidden");
-    setTimeout(() => pb.classList.add("hidden"), 3200);
-  }
-  toast(r.is_pb ? "🏆 NEW PB!" : "🏋️ Logged");
-  e.target.reset(); loadGym(); loadScore();
-});
 
 $("#weight-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -234,10 +272,10 @@ $("#weight-form").addEventListener("submit", async (e) => {
   if (!kg) return;
   await api("/api/gym/weight", { method: "POST", body: { weight_kg: kg } });
   toast(`⚖️ ${kg}kg logged`);
-  e.target.reset(); loadGym();
+  e.target.reset(); loadBodyWeight();
 });
 
-/* ── Money ─────────────────────────────────────────────────────────── */
+/* ── Money ─────────────────────────────────────────────────────────────── */
 async function loadMoney() {
   try {
     const m = await api("/api/money");
@@ -248,11 +286,11 @@ async function loadMoney() {
       type: "doughnut",
       data: { labels: cats,
         datasets: [{ data: cats.map((c) => m.by_category[c]),
-          backgroundColor: ["#7C3AED", "#06B6D4", "#2EE6A8", "#F5C542", "#F0506E", "#8B949E"],
+          backgroundColor: ["#7C3AED","#06B6D4","#3FB950","#F5C542","#F85149","#8B949E"],
           borderColor: "#050507", borderWidth: 3 }] },
       options: { plugins: { legend: { position: "right" } }, cutout: "68%" },
     });
-    $("#spend-recent").innerHTML = m.spending.slice(0, 6).map((s) =>
+    $("#spend-recent").innerHTML = m.spending.slice(0, 5).map((s) =>
       `<div class="list-item"><span class="time">${s.date.slice(5)}</span>
        <span>${esc(s.note || s.category)}</span>
        <span class="mono" style="margin-left:auto">£${s.amount.toFixed(2)}</span></div>`).join("");
@@ -267,22 +305,40 @@ $("#spend-form").addEventListener("submit", async (e) => {
   e.target.reset(); loadMoney(); loadScore();
 });
 
-/* ── Bots ──────────────────────────────────────────────────────────── */
+/* ── Bots ──────────────────────────────────────────────────────────────── */
 function botRow(b) {
-  if (!b.online) return `<div class="bot-row"><div class="bot-name">${esc(b.bot_name)}</div>
-    <div class="offline">⚪ offline ${esc(b.error || "")}</div></div>`;
-  const equity = b.equity ?? b.portfolio_value ?? "—";
-  const pnl = b.pnl ?? b.daily_pnl ?? b.total_pnl ?? 0;
-  const pnlNum = parseFloat(pnl) || 0;
-  let positions = b.positions ?? b.open_positions ?? [];
-  const posCount = Array.isArray(positions) ? positions.length : positions;
-  return `<div class="bot-row"><div class="bot-name">🟢 ${esc(b.bot_name)}</div>
+  if (!b || !b.online) return `<div class="bot-row">
+    <div class="bot-name">${esc(b?.bot_name || "Stock Scanner")}</div>
+    <div class="offline">⚪ offline — ${esc(b?.error || "unreachable")}</div></div>`;
+  const equity  = b.equity ?? b.portfolio_value ?? "—";
+  const pnl     = b.pnl ?? b.daily_pnl ?? b.total_pnl ?? 0;
+  const pnlNum  = parseFloat(pnl) || 0;
+  const pnlPct  = b.total_pnl_pct != null ? ` (${pnlNum >= 0 ? "+" : ""}${parseFloat(b.total_pnl_pct).toFixed(2)}%)` : "";
+  const positions = b.positions ?? b.open_positions ?? [];
+  const posCount  = Array.isArray(positions) ? positions.length : positions;
+  const regime    = b.regime || "";
+  const regimePill = regime
+    ? `<span style="font-size:.65rem;padding:2px 8px;border-radius:999px;margin-left:8px;
+        background:${regime==="BULLISH"?"rgba(63,185,80,.15)":regime==="BEARISH"?"rgba(248,81,73,.15)":"rgba(139,148,158,.12)"};
+        color:${regime==="BULLISH"?"#3FB950":regime==="BEARISH"?"#F85149":"#8B949E"}">${regime}</span>`
+    : "";
+  return `<div class="bot-row">
+    <div class="bot-name">🟢 ${esc(b.bot_name)}${regimePill}</div>
     <div class="bot-stats">
-      <div class="bot-stat"><div class="label">Equity</div><div class="val mono glow">$${esc(equity)}</div></div>
-      <div class="bot-stat"><div class="label">P&amp;L</div>
-        <div class="val mono ${pnlNum >= 0 ? "pos" : "neg"}">${pnlNum >= 0 ? "+" : ""}${esc(pnl)}</div></div>
-      <div class="bot-stat"><div class="label">Positions</div><div class="val mono">${esc(posCount)}</div></div>
-    </div></div>`;
+      <div class="bot-stat">
+        <div class="label">Equity</div>
+        <div class="val pos">$${esc(String(equity))}</div>
+      </div>
+      <div class="bot-stat">
+        <div class="label">P&amp;L</div>
+        <div class="val ${pnlNum >= 0 ? "pos" : "neg"}">${pnlNum >= 0 ? "+" : ""}${esc(String(pnl))}${esc(pnlPct)}</div>
+      </div>
+      <div class="bot-stat">
+        <div class="label">Positions</div>
+        <div class="val mono">${esc(String(posCount))}</div>
+      </div>
+    </div>
+  </div>`;
 }
 
 async function loadBots() {
@@ -295,35 +351,60 @@ async function loadBots() {
 }
 $("#bots-refresh").addEventListener("click", loadBots);
 
-/* ── Weather, news ─────────────────────────────────────────────────── */
+/* ── Weather ────────────────────────────────────────────────────────────── */
 async function loadWeather() {
   try {
     const w = await api("/api/weather");
     $("#weather-chip").textContent = `${w.current.temp}°C · ${w.current.description} · London`;
-  } catch { /* chip stays dash */ }
+  } catch { /* stays dash */ }
 }
 
+/* ── News — ticker + top 3 cards ─────────────────────────────────────── */
 async function loadNews() {
   try {
     const n = await api("/api/news");
-    const items = [...n.top.slice(0, 4), ...n.finance.slice(0, 3)];
-    $("#news-body").innerHTML = items.length
-      ? items.map((a) => `<div class="list-item"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title)}</a></div>`).join("")
-      : '<span class="muted">Set NEWS_API_KEY for headlines</span>';
+    const top     = n.top.slice(0, 3);
+    const finance = n.finance.slice(0, 4);
+    const all     = [...n.top.slice(0, 5), ...n.finance.slice(0, 4)];
+
+    // Top-3 headline cards
+    const badges = { top: "", finance: "finance" };
+    $("#news-headlines").innerHTML = top.length
+      ? top.map((a) => `<a class="news-article" href="${esc(a.url)}" target="_blank" rel="noopener">
+          <div class="news-badge">BBC</div>
+          <h3>${esc(a.title)}</h3></a>`).join("")
+      : '<span class="muted small">Set NEWS_API_KEY for headlines</span>';
+
+    // Ticker — duplicate for seamless loop
+    if (all.length) {
+      const items = all.map((a) =>
+        `<a href="${esc(a.url)}" target="_blank" rel="noopener"
+            style="color:inherit;text-decoration:none">${esc(a.title)}</a>
+         <span class="ticker-sep">◆</span>`).join("");
+      $("#ticker-track").innerHTML = items + items; // double for infinite loop
+    }
   } catch { /* leave placeholder */ }
 }
 
-/* ── Calendar & inbox ──────────────────────────────────────────────── */
-const fmtTime = (iso) => (iso && iso.includes("T")) ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "all day";
+/* ── Calendar & inbox ───────────────────────────────────────────────────── */
+const fmtTime = (iso) => iso?.includes("T")
+  ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+  : "all day";
 
 async function loadCalendar() {
   try {
     const c = await api("/api/calendar");
-    if (!c.connected) { $("#calendar-body").innerHTML = '<span class="muted">Connect Google to see events</span>'; return; }
-    const block = (label, evs) => evs.filter((e) => !e.error).length
-      ? `<div class="label" style="margin:6px 0 2px">${label}</div>` + evs.filter((e) => !e.error).map((e) =>
-        `<div class="list-item"><span class="time">${fmtTime(e.start)}</span><span>${esc(e.title)}</span></div>`).join("")
-      : `<div class="label" style="margin:6px 0 2px">${label}</div><div class="muted small">Nothing scheduled</div>`;
+    if (!c.connected) {
+      $("#calendar-body").innerHTML = '<span class="muted">Connect Google to see events</span>';
+      return;
+    }
+    const block = (label, evs) => {
+      const filtered = evs.filter((e) => !e.error);
+      return `<div class="label" style="margin:6px 0 4px">${label}</div>`
+        + (filtered.length
+          ? filtered.map((e) => `<div class="list-item"><span class="time">${fmtTime(e.start)}</span><span>${esc(e.title)}</span></div>`).join("")
+          : `<div class="muted small">Nothing scheduled</div>`);
+    };
     $("#calendar-body").innerHTML = block("Today", c.today) + block("Tomorrow", c.tomorrow);
   } catch (e) { console.warn("calendar", e); }
 }
@@ -331,7 +412,7 @@ async function loadCalendar() {
 $("#event-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const start = new Date($("#ev-start").value);
-  const end = new Date(start.getTime() + 3600e3);
+  const end   = new Date(start.getTime() + 3600e3);
   const isoLocal = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 19);
   try {
     await api("/api/calendar", { method: "POST", body: {
@@ -343,30 +424,39 @@ $("#event-form").addEventListener("submit", async (e) => {
 async function loadInbox() {
   try {
     const m = await api("/api/emails");
-    if (!m.connected) { $("#inbox-body").innerHTML = '<span class="muted">Connect Google to see emails</span>'; return; }
+    if (!m.connected) {
+      $("#inbox-body").innerHTML = '<span class="muted">Connect Google to see emails</span>';
+      return;
+    }
     const emails = m.emails.filter((e) => !e.error);
     $("#inbox-body").innerHTML = emails.length
       ? emails.slice(0, 6).map((e) =>
-        `<div class="list-item"><div><strong class="small">${esc((e.from || "").replace(/<.*>/, "").trim())}</strong><br>
-         <span class="small muted">${esc(e.summary || e.subject)}</span></div></div>`).join("")
-      : '<span class="muted">Inbox zero — nothing unread 🎉</span>';
+        `<div class="list-item"><div>
+           <strong class="small">${esc((e.from || "").replace(/<.*>/, "").trim())}</strong><br>
+           <span class="small muted">${esc(e.summary || e.subject)}</span>
+         </div></div>`).join("")
+      : '<span class="muted">Inbox zero 🎉</span>';
     $("#suggested-events").innerHTML = (m.suggested_events || []).map((s) =>
-      `<div class="suggest-row"><span>📅 ${esc(s.title)} — ${esc(s.start).replace("T", " ").slice(0, 16)}</span>
-       <button class="btn btn-grad btn-suggest" data-ev='${esc(JSON.stringify(s))}'>Add</button></div>`).join("");
+      `<div class="suggest-row">
+         <span>📅 ${esc(s.title)} — ${esc(s.start).replace("T"," ").slice(0,16)}</span>
+         <button class="btn btn-grad btn-suggest" data-ev='${esc(JSON.stringify(s))}'>Add</button>
+       </div>`).join("");
     $$(".btn-suggest").forEach((b) => b.addEventListener("click", async () => {
       const s = JSON.parse(b.dataset.ev);
       try {
         await api("/api/calendar", { method: "POST", body: { title: s.title, start: s.start, end: s.end } });
-        toast("📅 Added to calendar"); b.disabled = true; b.textContent = "✓"; loadCalendar();
+        toast("📅 Added"); b.disabled = true; b.textContent = "✓"; loadCalendar();
       } catch (err) { toast("Error: " + err.message); }
     }));
   } catch (e) { console.warn("inbox", e); }
 }
 
-/* ── Goals & review ────────────────────────────────────────────────── */
+/* ── Goals ──────────────────────────────────────────────────────────────── */
 async function loadGoals() {
   try {
     const goals = await api("/api/goals");
+    _lastGoalsPct = goals.length ? Math.round(goals.reduce((s, g) => s + g.progress, 0) / goals.length) : 0;
+    _refreshContribBars();
     $("#goals-body").innerHTML = goals.length
       ? goals.map((g) => `<div class="goal-row">
           <div class="goal-top"><span>${esc(g.title)}</span><span class="mono">${g.progress}%</span></div>
@@ -395,8 +485,9 @@ $("#review-btn").addEventListener("click", async () => {
   body.textContent = r.content;
 });
 
-/* ── Reflection ────────────────────────────────────────────────────── */
+/* ── Reflection ─────────────────────────────────────────────────────────── */
 $("#refl-score").addEventListener("input", (e) => ($("#refl-score-label").textContent = e.target.value));
+
 $("#reflection-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   await api("/api/reflection", { method: "POST", body: {
@@ -405,6 +496,7 @@ $("#reflection-form").addEventListener("submit", async (e) => {
   $("#refl-text").value = "";
   loadReflections();
 });
+
 async function loadReflections() {
   try {
     const rs = await api("/api/reflection");
@@ -414,12 +506,13 @@ async function loadReflections() {
   } catch (e) { console.warn("refl", e); }
 }
 
-/* ── Ideas ─────────────────────────────────────────────────────────── */
+/* ── Ideas ──────────────────────────────────────────────────────────────── */
 async function loadIdeas() {
   try {
     const ideas = await api("/api/ideas");
     $("#ideas-body").innerHTML = ideas.slice(0, 8).map((i) =>
-      `<div class="list-item">💡 ${esc(i.content)}</div>`).join("") || '<span class="muted">Capture your first idea</span>';
+      `<div class="list-item">💡 ${esc(i.content)}</div>`).join("")
+      || '<span class="muted">Capture your first idea</span>';
   } catch (e) { console.warn("ideas", e); }
 }
 $("#idea-form").addEventListener("submit", async (e) => {
@@ -428,13 +521,18 @@ $("#idea-form").addEventListener("submit", async (e) => {
   e.target.reset(); loadIdeas();
 });
 
-/* ── Notifications ─────────────────────────────────────────────────── */
+/* ── Notifications ──────────────────────────────────────────────────────── */
 async function loadNotifications() {
   try {
     const n = await api("/api/notifications");
     const badge = $("#bell-badge");
+    const prev  = parseInt(badge.textContent) || 0;
     badge.textContent = n.unread;
     badge.classList.toggle("hidden", n.unread === 0);
+    if (n.unread > prev) {
+      $("#bell-btn").classList.add("badge-bounce");
+      setTimeout(() => $("#bell-btn").classList.remove("badge-bounce"), 700);
+    }
     $("#notif-list").innerHTML = n.notifications.length
       ? n.notifications.map((x) =>
         `<div class="notif-item ${x.is_read ? "" : "unread"}">${esc(x.message)}
@@ -448,8 +546,8 @@ $("#notif-clear").addEventListener("click", async () => {
   loadNotifications();
 });
 
-/* ── Chat + voice ──────────────────────────────────────────────────── */
-const orb = $("#orb");
+/* ── Chat + voice ───────────────────────────────────────────────────────── */
+const orb     = $("#orb");
 const chatLog = $("#chat-log");
 
 function addMsg(text, who) {
@@ -466,8 +564,8 @@ function speak(text) {
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text.replace(/[#*_]/g, ""));
   u.lang = "en-GB"; u.rate = 1.04;
-  u.onstart = () => orb.className = "orb orb-speaking";
-  u.onend = () => orb.className = "orb orb-idle";
+  u.onstart = () => (orb.className = "orb orb-speaking");
+  u.onend   = () => (orb.className = "orb orb-idle");
   speechSynthesis.speak(u);
 }
 
@@ -484,7 +582,7 @@ async function sendChat(message, viaVoice = false) {
     });
     if (viaVoice) speak(r.reply);
     await typewriter(aiDiv, r.reply);
-    loadHabits(); loadScore(); loadMoney(); loadGym();
+    loadHabits(); loadScore(); loadMoney();
   } catch (e) {
     aiDiv.textContent = "Error: " + e.message;
   }
@@ -498,34 +596,37 @@ $("#chat-form").addEventListener("submit", (e) => {
   sendChat(v);
 });
 
-/* voice via the orb */
+/* Voice via orb */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognizing = false;
 orb.addEventListener("click", () => {
   if (!SR) { toast("Voice not supported in this browser"); return; }
   if (recognizing) return;
   const rec = new SR();
-  rec.lang = "en-GB";
-  rec.interimResults = false;
+  rec.lang = "en-GB"; rec.interimResults = false;
   recognizing = true;
   orb.className = "orb orb-listening";
   $("#orb-hint").textContent = "listening…";
   rec.onresult = (e) => {
     const transcript = e.results[0][0].transcript;
     document.body.dataset.tab = "chat";
-    $$(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === "chat"));
+    navBtns.forEach((b) => {
+      const isChat = b.dataset.tab === "chat";
+      b.classList.toggle("active", isChat);
+      if (isChat) moveNavPill(b);
+    });
     sendChat(transcript, true);
   };
   rec.onend = () => {
     recognizing = false;
     if (!orb.classList.contains("orb-speaking")) orb.className = "orb orb-idle";
-    $("#orb-hint").textContent = "tap the orb & speak — “log 500ml water”, “how's my day?”";
+    $("#orb-hint").textContent = "tap the orb & speak — "log 500ml water", "how's my day?"";
   };
   rec.onerror = rec.onend;
   rec.start();
 });
 
-/* ── Photo logging ─────────────────────────────────────────────────── */
+/* ── Photo logging ──────────────────────────────────────────────────────── */
 $("#photo-input").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -539,9 +640,9 @@ $("#photo-input").addEventListener("change", async (e) => {
     try {
       const m = r.analysis.match(/\{[\s\S]*\}/);
       if (m) data = JSON.parse(m[0]);
-    } catch { /* not JSON, show raw */ }
+    } catch { /* show raw */ }
     await typewriter(aiDiv, r.analysis);
-    if (data && data.type) {
+    if (data && data.type && data.type !== "workout") {
       const btn = document.createElement("button");
       btn.className = "btn btn-grad";
       btn.style.alignSelf = "center";
@@ -549,12 +650,9 @@ $("#photo-input").addEventListener("change", async (e) => {
       btn.onclick = async () => {
         const res = await api("/api/photo/confirm", { method: "POST", body: {
           type: data.type, amount: data.total ?? data.amount,
-          exercise: data.exercise || (data.exercises && data.exercises[0]?.name),
-          weight_kg: data.weight_kg || (data.exercises && data.exercises[0]?.weight),
-          reps: data.reps || (data.exercises && data.exercises[0]?.reps),
           category: data.category, note: data.merchant || data.note || JSON.stringify(data).slice(0, 120) } });
         toast(res.message || "Logged");
-        btn.remove(); loadMoney(); loadGym(); loadScore();
+        btn.remove(); loadMoney(); loadScore();
       };
       chatLog.appendChild(btn);
     }
@@ -562,20 +660,31 @@ $("#photo-input").addEventListener("change", async (e) => {
   e.target.value = "";
 });
 
-/* ── Conversation history ──────────────────────────────────────────── */
+/* ── Conversation history ────────────────────────────────────────────────── */
 async function loadConversation() {
   try {
     const msgs = await api("/api/conversation");
-    msgs.slice(-12).forEach((m) => addMsg(m.content, m.role === "user" ? "user" : "ai"));
+    msgs.slice(-10).forEach((m) => addMsg(m.content, m.role === "user" ? "user" : "ai"));
   } catch (e) { console.warn("conv", e); }
 }
 
-/* ── Boot ──────────────────────────────────────────────────────────── */
-loadWeather(); loadScore(); loadHabits(); loadBots(); loadGym();
-loadMoney(); loadNews(); loadGoals(); loadReflections(); loadIdeas();
-loadNotifications(); loadConversation();
+/* ── Boot ────────────────────────────────────────────────────────────────── */
+loadWeather();
+loadScore();
+loadHabits();
+loadBots();
+loadBodyWeight();
+loadPBs();
+loadMoney();
+loadNews();
+loadGoals();
+loadReflections();
+loadIdeas();
+loadNotifications();
+loadConversation();
 loadBriefing();
-loadCalendar(); loadInbox();
+loadCalendar();
+loadInbox();
 
 setInterval(loadBots, 120e3);
 setInterval(loadNotifications, 60e3);

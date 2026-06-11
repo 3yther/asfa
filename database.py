@@ -205,41 +205,6 @@ def get_water_streak():
     return streak
 
 
-# ── Workout helpers ────────────────────────────────────────────────────────────
-
-def log_workout(date, exercise, weight_kg, reps, sets, muscle_group, notes=""):
-    is_pb = 0
-    with get_db() as conn:
-        cur = conn.cursor()
-        ph = "%s" if USE_POSTGRES else "?"
-        cur.execute(
-            f"SELECT MAX(weight_kg) as max_w FROM workouts WHERE exercise = {ph}",
-            (exercise,))
-        row = cur.fetchone()
-        prev_best = row["max_w"] if row and row["max_w"] else 0
-        if weight_kg and weight_kg > prev_best:
-            is_pb = 1
-        cur.execute(
-            f"INSERT INTO workouts (date, exercise, weight_kg, reps, sets, muscle_group, notes, is_pb) "
-            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
-            (date, exercise, weight_kg, reps, sets, muscle_group, notes, is_pb))
-    return is_pb
-
-
-def get_workouts(days: int = 7):
-    with get_db() as conn:
-        cur = conn.cursor()
-        if USE_POSTGRES:
-            cur.execute(
-                "SELECT * FROM workouts WHERE date >= NOW() - INTERVAL '%s days' ORDER BY date DESC LIMIT 50",
-                (days,))
-        else:
-            cur.execute(
-                "SELECT * FROM workouts WHERE date >= date('now', ?) ORDER BY date DESC LIMIT 50",
-                (f"-{days} days",))
-        return [dict(r) for r in cur.fetchall()]
-
-
 def get_pbs():
     with get_db() as conn:
         cur = conn.cursor()

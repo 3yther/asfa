@@ -65,28 +65,11 @@ COMMANDS = [
      lambda m: _do_sleep(float(m.group(1)))),
     (re.compile(r"\blog\s+weight\s+(\d{2,3}(?:\.\d+)?)\s*kg\b", re.I),
      lambda m: _do_body_weight(float(m.group(1)))),
-    (re.compile(r"\blog\s+([a-zA-Z][a-zA-Z ]{2,30}?)\s+(\d{1,3}(?:\.\d+)?)\s*kg\s+(\d{1,2})\s*reps?\b", re.I),
-     lambda m: _do_workout(m.group(1).strip(), float(m.group(2)), int(m.group(3)))),
     (re.compile(r"\bspent\s+[£$]?(\d+(?:\.\d{1,2})?)\s+(?:on\s+)?([a-zA-Z][\w ]{1,40})", re.I),
      lambda m: _do_spend(float(m.group(1)), m.group(2).strip())),
     (re.compile(r"\bremember\s+(?:that\s+)?(.{4,})", re.I),
      lambda m: _do_memory(m.group(1).strip())),
 ]
-
-MUSCLE_MAP = {
-    "bench": "chest", "press": "shoulders", "squat": "legs", "deadlift": "back",
-    "row": "back", "curl": "arms", "pull": "back", "dip": "chest", "lunge": "legs",
-    "fly": "chest", "extension": "arms", "raise": "shoulders", "shrug": "shoulders",
-}
-
-
-def _guess_muscle(exercise: str) -> str:
-    low = exercise.lower()
-    for key, group in MUSCLE_MAP.items():
-        if key in low:
-            return group
-    return "other"
-
 
 def _do_water(ml):
     db.log_water(_today(), ml)
@@ -102,11 +85,6 @@ def _do_sleep(hours):
 def _do_body_weight(kg):
     db.log_body_weight(_today(), kg)
     return f"Logged body weight {kg}kg."
-
-
-def _do_workout(exercise, kg, reps):
-    is_pb = db.log_workout(_today(), exercise.title(), kg, reps, 1, _guess_muscle(exercise))
-    return f"Logged {exercise.title()} {kg}kg x{reps}." + (" 🏆 NEW PB!" if is_pb else "")
 
 
 def _do_spend(amount, note):
@@ -187,35 +165,12 @@ def api_log_sleep():
     return jsonify({"ok": True, "message": _do_sleep(hours)})
 
 
-# ── Gym ────────────────────────────────────────────────────────────────────────
-
-@app.route("/api/gym/workout", methods=["POST"])
-def api_log_workout():
-    d = request.get_json(force=True)
-    is_pb = db.log_workout(
-        _today(), d["exercise"].strip().title(), float(d.get("weight_kg") or 0),
-        int(d.get("reps") or 0), int(d.get("sets") or 1),
-        d.get("muscle_group") or _guess_muscle(d["exercise"]), d.get("notes", ""))
-    return jsonify({"ok": True, "is_pb": bool(is_pb)})
-
+# ── Body / gym (PBs + body weight only — workout logging removed) ──────────────
 
 @app.route("/api/gym")
 def api_gym():
-    workouts = db.get_workouts(7)
-    balance = {}
-    last_trained = {}
-    for w in db.get_workouts(30):
-        g = w.get("muscle_group") or "other"
-        if w["date"] >= (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d"):
-            balance[g] = balance.get(g, 0) + 1
-        last_trained[g] = max(last_trained.get(g, w["date"]), w["date"])
-    cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-    neglected = [g for g, d in last_trained.items() if d < cutoff]
     return jsonify({
-        "workouts": workouts,
         "pbs": db.get_pbs(),
-        "balance": balance,
-        "neglected": neglected,
         "body_weight": db.get_body_weight(30),
     })
 
@@ -433,11 +388,6 @@ def api_photo_confirm():
     if kind == "receipt" and d.get("amount"):
         db.log_spend(_today(), float(d["amount"]), d.get("category", "other"), d.get("note", "from photo"))
         return jsonify({"ok": True, "message": f"Logged £{float(d['amount']):.2f} spend."})
-    if kind == "workout" and d.get("exercise"):
-        is_pb = db.log_workout(_today(), d["exercise"].title(), float(d.get("weight_kg") or 0),
-                               int(d.get("reps") or 0), int(d.get("sets") or 1),
-                               d.get("muscle_group") or _guess_muscle(d["exercise"]))
-        return jsonify({"ok": True, "is_pb": bool(is_pb), "message": "Workout logged."})
     if kind == "meal":
         db.save_voice_note(f"Meal photo: {d.get('note', '')}")
         return jsonify({"ok": True, "message": "Meal noted."})

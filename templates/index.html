@@ -12,7 +12,13 @@
 </head>
 <body>
 
-<div class="bg-glow"></div>
+<!-- ── Aurora background ──────────────────────────────────────────────── -->
+<div class="aurora" aria-hidden="true">
+  <div class="aurora-orb a1"></div>
+  <div class="aurora-orb a2"></div>
+  <div class="aurora-orb a3"></div>
+  <div class="aurora-orb a4"></div>
+</div>
 <div id="particles"></div>
 
 <!-- ── Header ─────────────────────────────────────────────────────────── -->
@@ -21,12 +27,14 @@
     <div class="logo">A<span>SFA</span></div>
     <div class="status-dot" title="Online"></div>
   </div>
+
   <div id="orb" class="orb orb-idle" title="Tap to speak">
     <div class="orb-core"></div>
     <div class="orb-ring r1"></div>
     <div class="orb-ring r2"></div>
     <div class="orb-ring r3"></div>
   </div>
+
   <div class="header-right">
     <div class="weather-chip" id="weather-chip">—</div>
     <div class="clock mono" id="clock">00:00:00</div>
@@ -34,29 +42,30 @@
       🔔<span class="badge hidden" id="bell-badge">0</span>
     </button>
     {% if google_connected %}
-      <span class="chip chip-ok">Google ✓</span>
+      <span class="chip chip-ok"><span class="google-dot"></span>Google ✓</span>
     {% else %}
       <a class="chip chip-action" href="/auth/google">Connect Google</a>
     {% endif %}
   </div>
 </header>
 
+<div class="orb-hint" id="orb-hint">tap the orb &amp; speak — "log 500ml water", "how's my day?"</div>
+
+<!-- ── Notifications panel ────────────────────────────────────────────── -->
 <div class="notif-panel hidden" id="notif-panel">
   <div class="notif-head">Notifications <button id="notif-clear" class="text-btn">mark read</button></div>
   <div id="notif-list" class="notif-list"><div class="muted">No notifications yet</div></div>
 </div>
 
-<div class="orb-hint" id="orb-hint">tap the orb &amp; speak — “log 500ml water”, “how's my day?”</div>
-
-<!-- ── Main grid ──────────────────────────────────────────────────────── -->
+<!-- ── Main bento grid ────────────────────────────────────────────────── -->
 <main class="grid" id="main-grid">
 
-  <!-- HOME -->
-  <section class="card card-wide" data-tabs="home" id="briefing-card">
+  <!-- ROW 1: Morning Briefing — full width hero -->
+  <section class="card card-featured" id="briefing-card" data-tabs="home">
     <div class="card-head">
       <h2>☀️ Morning Briefing</h2>
       <div class="card-actions">
-        <button class="btn btn-ghost" id="briefing-refresh">↻</button>
+        <button class="btn btn-ghost" id="briefing-refresh" title="Refresh">↻</button>
         <button class="btn btn-grad" id="briefing-play">▶ Play Briefing</button>
       </div>
     </div>
@@ -64,24 +73,43 @@
     <div class="briefing-body" id="briefing-body"><span class="muted">Generating…</span></div>
   </section>
 
-  <section class="card" data-tabs="home habits">
+  <!-- ROW 2: Score (1/3) + Bots (2/3) -->
+  <section class="card card-featured" id="score-card" data-tabs="home">
     <div class="card-head"><h2>⚡ Daily Score</h2></div>
     <div class="score-wrap">
-      <svg class="score-ring" viewBox="0 0 120 120">
-        <circle class="ring-bg" cx="60" cy="60" r="52"/>
-        <circle class="ring-fg" id="score-arc" cx="60" cy="60" r="52"/>
+      <svg class="score-ring" viewBox="0 0 160 160">
+        <circle class="ring-bg" cx="80" cy="80" r="68"/>
+        <circle class="ring-fg" id="score-arc" cx="80" cy="80" r="68"/>
       </svg>
       <div class="score-num glow mono" id="score-num">0</div>
     </div>
-    <canvas id="score-chart" height="70"></canvas>
+    <div class="score-contributions">
+      <div class="contrib-row">
+        <span class="contrib-label">💧 Water</span>
+        <div class="contrib-track"><div class="contrib-fill" id="contrib-water"></div></div>
+      </div>
+      <div class="contrib-row">
+        <span class="contrib-label">😴 Sleep</span>
+        <div class="contrib-track"><div class="contrib-fill" id="contrib-sleep"></div></div>
+      </div>
+      <div class="contrib-row">
+        <span class="contrib-label">🎯 Goals</span>
+        <div class="contrib-track"><div class="contrib-fill" id="contrib-goals"></div></div>
+      </div>
+    </div>
+    <canvas id="score-chart" height="60" style="margin-top:14px"></canvas>
   </section>
 
-  <section class="card" data-tabs="home">
-    <div class="card-head"><h2>🤖 Trading Bots</h2><button class="btn btn-ghost" id="bots-refresh">↻</button></div>
+  <section class="card" id="bots-card" data-tabs="home">
+    <div class="card-head">
+      <h2>🤖 Trading Bots</h2>
+      <button class="btn btn-ghost" id="bots-refresh">↻</button>
+    </div>
     <div id="bots-body" class="bots-body"><span class="muted">Connecting…</span></div>
   </section>
 
-  <section class="card" data-tabs="home">
+  <!-- ROW 3: Calendar + Inbox -->
+  <section class="card" id="calendar-card" data-tabs="home">
     <div class="card-head"><h2>📅 Calendar</h2></div>
     <div id="calendar-body"><span class="muted">—</span></div>
     <form id="event-form" class="inline-form">
@@ -91,30 +119,27 @@
     </form>
   </section>
 
-  <section class="card" data-tabs="home">
+  <section class="card" id="inbox-card" data-tabs="home">
     <div class="card-head"><h2>📧 Inbox Summary</h2></div>
     <div id="inbox-body"><span class="muted">—</span></div>
     <div id="suggested-events"></div>
   </section>
 
-  <section class="card" data-tabs="home">
+  <!-- ROW 4: News — full width with ticker -->
+  <section class="card" id="news-card" data-tabs="home">
     <div class="card-head"><h2>📰 News</h2></div>
-    <div id="news-body"><span class="muted">—</span></div>
+    <div class="news-headlines" id="news-headlines"></div>
+    <div class="news-ticker-wrap">
+      <div class="ticker-fade-left"></div>
+      <div class="ticker-inner">
+        <div class="ticker-track" id="ticker-track"><span class="muted">Loading headlines…</span></div>
+      </div>
+      <div class="ticker-fade-right"></div>
+    </div>
   </section>
 
-  <section class="card" data-tabs="home">
-    <div class="card-head"><h2>🎯 Monthly Goals</h2></div>
-    <div id="goals-body"><span class="muted">No goals yet</span></div>
-    <form id="goal-form" class="inline-form">
-      <input type="text" id="goal-title" placeholder="New goal…" required>
-      <button class="btn btn-grad" type="submit">＋</button>
-    </form>
-    <button class="btn btn-ghost full" id="review-btn">📊 Weekly Review</button>
-    <div id="review-body" class="review-body hidden"></div>
-  </section>
-
-  <!-- HABITS -->
-  <section class="card" data-tabs="habits home">
+  <!-- ROW 5: Water | Sleep | Body Weight -->
+  <section class="card" id="water-card" data-tabs="home habits">
     <div class="card-head"><h2>💧 Water</h2><span class="streak" id="water-streak"></span></div>
     <div class="big-num"><span class="glow mono" id="water-num">0</span><span class="unit">/ 2000ml</span></div>
     <div class="progress"><div class="progress-fill" id="water-bar"></div></div>
@@ -125,7 +150,7 @@
     </div>
   </section>
 
-  <section class="card" data-tabs="habits">
+  <section class="card" id="sleep-card" data-tabs="habits">
     <div class="card-head"><h2>😴 Sleep</h2></div>
     <form id="sleep-form" class="inline-form">
       <input type="number" id="sleep-hours" step="0.5" min="0" max="24" placeholder="Hours last night">
@@ -134,50 +159,8 @@
     <canvas id="sleep-chart" height="110"></canvas>
   </section>
 
-  <section class="card" data-tabs="habits">
-    <div class="card-head"><h2>📝 Reflection</h2></div>
-    <p class="muted small">How was today, 1–10, and why?</p>
-    <form id="reflection-form">
-      <input type="range" id="refl-score" min="1" max="10" value="7">
-      <div class="refl-score-label mono" id="refl-score-label">7</div>
-      <textarea id="refl-text" placeholder="Why?"></textarea>
-      <button class="btn btn-grad full" type="submit">Save Reflection</button>
-    </form>
-    <div id="refl-recent" class="small muted"></div>
-  </section>
-
-  <!-- GYM -->
-  <section class="card" data-tabs="gym">
-    <div class="card-head"><h2>🏋️ Log Workout</h2></div>
-    <form id="workout-form" class="stack-form">
-      <input type="text" id="wo-exercise" placeholder="Exercise (e.g. Bench Press)" required>
-      <div class="row2">
-        <input type="number" id="wo-weight" step="0.5" placeholder="kg">
-        <input type="number" id="wo-reps" placeholder="reps">
-      </div>
-      <select id="wo-muscle">
-        <option value="">muscle group (auto)</option>
-        <option>chest</option><option>back</option><option>legs</option>
-        <option>shoulders</option><option>arms</option><option>core</option>
-      </select>
-      <button class="btn btn-grad full" type="submit">Log Set</button>
-    </form>
-    <div id="pb-celebrate" class="pb-celebrate hidden">🏆 NEW PB!</div>
-  </section>
-
-  <section class="card" data-tabs="gym">
-    <div class="card-head"><h2>🏆 Personal Bests</h2></div>
-    <div id="pbs-body"><span class="muted">No PBs yet</span></div>
-  </section>
-
-  <section class="card" data-tabs="gym">
-    <div class="card-head"><h2>⚖️ Muscle Balance</h2></div>
-    <div id="neglected-warn" class="warn hidden"></div>
-    <canvas id="balance-chart" height="180"></canvas>
-  </section>
-
-  <section class="card" data-tabs="gym">
-    <div class="card-head"><h2>📉 Body Weight</h2></div>
+  <section class="card" id="bodyweight-card" data-tabs="body">
+    <div class="card-head"><h2>⚖️ Body Weight</h2></div>
     <form id="weight-form" class="inline-form">
       <input type="number" id="bw-kg" step="0.1" placeholder="kg today">
       <button class="btn btn-grad" type="submit">Log</button>
@@ -185,8 +168,8 @@
     <canvas id="weight-chart" height="110"></canvas>
   </section>
 
-  <!-- MONEY -->
-  <section class="card" data-tabs="money home">
+  <!-- ROW 6: Money | Personal Bests | Reflection -->
+  <section class="card" id="money-card" data-tabs="home money">
     <div class="card-head"><h2>💸 Money</h2></div>
     <div class="money-totals">
       <div><div class="label">This week</div><div class="glow mono" id="money-week">£0</div></div>
@@ -203,16 +186,41 @@
       <input type="text" id="sp-note" placeholder="note (optional)">
       <button class="btn btn-grad full" type="submit">Log Spend</button>
     </form>
+    <canvas id="money-chart" height="140" style="margin-top:14px"></canvas>
+    <div id="spend-recent" class="small" style="margin-top:10px"></div>
   </section>
 
-  <section class="card" data-tabs="money">
-    <div class="card-head"><h2>📊 By Category</h2></div>
-    <canvas id="money-chart" height="190"></canvas>
-    <div id="spend-recent" class="small"></div>
+  <section class="card" id="pbs-card" data-tabs="body">
+    <div class="card-head"><h2>🏆 Personal Bests</h2></div>
+    <div id="pbs-body"><span class="muted">No PBs yet</span></div>
   </section>
 
-  <!-- CHAT -->
-  <section class="card card-wide chat-card" data-tabs="chat">
+  <section class="card" id="reflection-card" data-tabs="habits">
+    <div class="card-head"><h2>📝 Reflection</h2></div>
+    <p class="muted small">How was today, 1–10, and why?</p>
+    <form id="reflection-form">
+      <input type="range" id="refl-score" min="1" max="10" value="7">
+      <div class="refl-score-label mono" id="refl-score-label">7</div>
+      <textarea id="refl-text" placeholder="Why?"></textarea>
+      <button class="btn btn-grad full" type="submit">Save Reflection</button>
+    </form>
+    <div id="refl-recent" class="small muted"></div>
+  </section>
+
+  <!-- ROW 7: Goals — full width -->
+  <section class="card" id="goals-card" data-tabs="home">
+    <div class="card-head"><h2>🎯 Monthly Goals</h2></div>
+    <div id="goals-body"><span class="muted">No goals yet</span></div>
+    <form id="goal-form" class="inline-form">
+      <input type="text" id="goal-title" placeholder="New goal…" required>
+      <button class="btn btn-grad" type="submit">＋</button>
+    </form>
+    <button class="btn btn-ghost full" id="review-btn">📊 Weekly Review</button>
+    <div id="review-body" class="review-body hidden"></div>
+  </section>
+
+  <!-- ROW 8: Chat + Ideas -->
+  <section class="card chat-card" id="chat-card" data-tabs="chat">
     <div class="card-head"><h2>💬 Talk to ASFA</h2>
       <label class="btn btn-ghost" for="photo-input">📷</label>
       <input type="file" id="photo-input" accept="image/*" hidden>
@@ -224,7 +232,7 @@
     </form>
   </section>
 
-  <section class="card" data-tabs="chat">
+  <section class="card" id="ideas-card" data-tabs="chat">
     <div class="card-head"><h2>💡 Ideas &amp; Notes</h2></div>
     <form id="idea-form" class="inline-form">
       <input type="text" id="idea-text" placeholder="Quick capture…" required>
@@ -237,10 +245,11 @@
 
 <!-- ── Bottom nav (mobile) ────────────────────────────────────────────── -->
 <nav class="bottom-nav">
+  <div class="nav-pill" id="nav-pill"></div>
   <button class="nav-btn active" data-tab="home">🏠<span>Home</span></button>
   <button class="nav-btn" data-tab="habits">💧<span>Habits</span></button>
-  <button class="nav-btn" data-tab="gym">🏋️<span>Gym</span></button>
-  <button class="nav-btn" data-tab="money">💸<span>Money</span></button>
+  <button class="nav-btn" data-tab="body">⚖️<span>Body</span></button>
+  <button class="nav-btn" data-tab="money">💰<span>Money</span></button>
   <button class="nav-btn" data-tab="chat">💬<span>Chat</span></button>
 </nav>
 
