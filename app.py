@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 import database as db
@@ -312,13 +314,16 @@ def api_add_event():
     return jsonify(result), status
 
 
+_REDIRECT_URI = os.environ.get(
+    "GOOGLE_REDIRECT_URI",
+    "https://asfa-production.up.railway.app/oauth/callback",
+)
+
+
 @app.route("/auth/google")
 def auth_google():
-    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI") or url_for("oauth_callback", _external=True)
-    print("EXACT REDIRECT URI:", redirect_uri, flush=True)
-    if redirect_uri.startswith("http://"):
-        os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"  # local dev only
-    flow = get_flow(redirect_uri)
+    print("EXACT REDIRECT URI:", _REDIRECT_URI, flush=True)
+    flow = get_flow(_REDIRECT_URI)
     auth_url, state = flow.authorization_url(
         access_type="offline", prompt="consent", include_granted_scopes="true")
     session["oauth_state"] = state
@@ -327,7 +332,7 @@ def auth_google():
 
 @app.route("/oauth/callback")
 def oauth_callback():
-    flow = get_flow(url_for("oauth_callback", _external=True))
+    flow = get_flow(_REDIRECT_URI)
     try:
         flow.fetch_token(authorization_response=request.url)
         save_credentials(flow.credentials)
