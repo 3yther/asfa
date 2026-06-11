@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#050507">
+<title>ASFA — Command Centre</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<div class="bg-glow"></div>
+<div id="particles"></div>
+
+<!-- ── Header ─────────────────────────────────────────────────────────── -->
+<header class="header">
+  <div class="header-left">
+    <div class="logo">A<span>SFA</span></div>
+    <div class="status-dot" title="Online"></div>
+  </div>
+  <div id="orb" class="orb orb-idle" title="Tap to speak">
+    <div class="orb-core"></div>
+    <div class="orb-ring r1"></div>
+    <div class="orb-ring r2"></div>
+    <div class="orb-ring r3"></div>
+  </div>
+  <div class="header-right">
+    <div class="weather-chip" id="weather-chip">—</div>
+    <div class="clock mono" id="clock">00:00:00</div>
+    <button class="icon-btn" id="bell-btn" title="Notifications">
+      🔔<span class="badge hidden" id="bell-badge">0</span>
+    </button>
+    {% if google_connected %}
+      <span class="chip chip-ok">Google ✓</span>
+    {% else %}
+      <a class="chip chip-action" href="/auth/google">Connect Google</a>
+    {% endif %}
+  </div>
+</header>
+
+<div class="notif-panel hidden" id="notif-panel">
+  <div class="notif-head">Notifications <button id="notif-clear" class="text-btn">mark read</button></div>
+  <div id="notif-list" class="notif-list"><div class="muted">No notifications yet</div></div>
+</div>
+
+<div class="orb-hint" id="orb-hint">tap the orb &amp; speak — “log 500ml water”, “how's my day?”</div>
+
+<!-- ── Main grid ──────────────────────────────────────────────────────── -->
+<main class="grid" id="main-grid">
+
+  <!-- HOME -->
+  <section class="card card-wide" data-tabs="home" id="briefing-card">
+    <div class="card-head">
+      <h2>☀️ Morning Briefing</h2>
+      <div class="card-actions">
+        <button class="btn btn-ghost" id="briefing-refresh">↻</button>
+        <button class="btn btn-grad" id="briefing-play">▶ Play Briefing</button>
+      </div>
+    </div>
+    <div class="scanline hidden" id="briefing-scan"></div>
+    <div class="briefing-body" id="briefing-body"><span class="muted">Generating…</span></div>
+  </section>
+
+  <section class="card" data-tabs="home habits">
+    <div class="card-head"><h2>⚡ Daily Score</h2></div>
+    <div class="score-wrap">
+      <svg class="score-ring" viewBox="0 0 120 120">
+        <circle class="ring-bg" cx="60" cy="60" r="52"/>
+        <circle class="ring-fg" id="score-arc" cx="60" cy="60" r="52"/>
+      </svg>
+      <div class="score-num glow mono" id="score-num">0</div>
+    </div>
+    <canvas id="score-chart" height="70"></canvas>
+  </section>
+
+  <section class="card" data-tabs="home">
+    <div class="card-head"><h2>🤖 Trading Bots</h2><button class="btn btn-ghost" id="bots-refresh">↻</button></div>
+    <div id="bots-body" class="bots-body"><span class="muted">Connecting…</span></div>
+  </section>
+
+  <section class="card" data-tabs="home">
+    <div class="card-head"><h2>📅 Calendar</h2></div>
+    <div id="calendar-body"><span class="muted">—</span></div>
+    <form id="event-form" class="inline-form">
+      <input type="text" id="ev-title" placeholder="Quick add event…" required>
+      <input type="datetime-local" id="ev-start" required>
+      <button class="btn btn-grad" type="submit">＋</button>
+    </form>
+  </section>
+
+  <section class="card" data-tabs="home">
+    <div class="card-head"><h2>📧 Inbox Summary</h2></div>
+    <div id="inbox-body"><span class="muted">—</span></div>
+    <div id="suggested-events"></div>
+  </section>
+
+  <section class="card" data-tabs="home">
+    <div class="card-head"><h2>📰 News</h2></div>
+    <div id="news-body"><span class="muted">—</span></div>
+  </section>
+
+  <section class="card" data-tabs="home">
+    <div class="card-head"><h2>🎯 Monthly Goals</h2></div>
+    <div id="goals-body"><span class="muted">No goals yet</span></div>
+    <form id="goal-form" class="inline-form">
+      <input type="text" id="goal-title" placeholder="New goal…" required>
+      <button class="btn btn-grad" type="submit">＋</button>
+    </form>
+    <button class="btn btn-ghost full" id="review-btn">📊 Weekly Review</button>
+    <div id="review-body" class="review-body hidden"></div>
+  </section>
+
+  <!-- HABITS -->
+  <section class="card" data-tabs="habits home">
+    <div class="card-head"><h2>💧 Water</h2><span class="streak" id="water-streak"></span></div>
+    <div class="big-num"><span class="glow mono" id="water-num">0</span><span class="unit">/ 2000ml</span></div>
+    <div class="progress"><div class="progress-fill" id="water-bar"></div></div>
+    <div class="quick-row">
+      <button class="btn btn-ghost water-add" data-ml="250">+250</button>
+      <button class="btn btn-ghost water-add" data-ml="500">+500</button>
+      <button class="btn btn-ghost water-add" data-ml="750">+750</button>
+    </div>
+  </section>
+
+  <section class="card" data-tabs="habits">
+    <div class="card-head"><h2>😴 Sleep</h2></div>
+    <form id="sleep-form" class="inline-form">
+      <input type="number" id="sleep-hours" step="0.5" min="0" max="24" placeholder="Hours last night">
+      <button class="btn btn-grad" type="submit">Log</button>
+    </form>
+    <canvas id="sleep-chart" height="110"></canvas>
+  </section>
+
+  <section class="card" data-tabs="habits">
+    <div class="card-head"><h2>📝 Reflection</h2></div>
+    <p class="muted small">How was today, 1–10, and why?</p>
+    <form id="reflection-form">
+      <input type="range" id="refl-score" min="1" max="10" value="7">
+      <div class="refl-score-label mono" id="refl-score-label">7</div>
+      <textarea id="refl-text" placeholder="Why?"></textarea>
+      <button class="btn btn-grad full" type="submit">Save Reflection</button>
+    </form>
+    <div id="refl-recent" class="small muted"></div>
+  </section>
+
+  <!-- GYM -->
+  <section class="card" data-tabs="gym">
+    <div class="card-head"><h2>🏋️ Log Workout</h2></div>
+    <form id="workout-form" class="stack-form">
+      <input type="text" id="wo-exercise" placeholder="Exercise (e.g. Bench Press)" required>
+      <div class="row2">
+        <input type="number" id="wo-weight" step="0.5" placeholder="kg">
+        <input type="number" id="wo-reps" placeholder="reps">
+      </div>
+      <select id="wo-muscle">
+        <option value="">muscle group (auto)</option>
+        <option>chest</option><option>back</option><option>legs</option>
+        <option>shoulders</option><option>arms</option><option>core</option>
+      </select>
+      <button class="btn btn-grad full" type="submit">Log Set</button>
+    </form>
+    <div id="pb-celebrate" class="pb-celebrate hidden">🏆 NEW PB!</div>
+  </section>
+
+  <section class="card" data-tabs="gym">
+    <div class="card-head"><h2>🏆 Personal Bests</h2></div>
+    <div id="pbs-body"><span class="muted">No PBs yet</span></div>
+  </section>
+
+  <section class="card" data-tabs="gym">
+    <div class="card-head"><h2>⚖️ Muscle Balance</h2></div>
+    <div id="neglected-warn" class="warn hidden"></div>
+    <canvas id="balance-chart" height="180"></canvas>
+  </section>
+
+  <section class="card" data-tabs="gym">
+    <div class="card-head"><h2>📉 Body Weight</h2></div>
+    <form id="weight-form" class="inline-form">
+      <input type="number" id="bw-kg" step="0.1" placeholder="kg today">
+      <button class="btn btn-grad" type="submit">Log</button>
+    </form>
+    <canvas id="weight-chart" height="110"></canvas>
+  </section>
+
+  <!-- MONEY -->
+  <section class="card" data-tabs="money home">
+    <div class="card-head"><h2>💸 Money</h2></div>
+    <div class="money-totals">
+      <div><div class="label">This week</div><div class="glow mono" id="money-week">£0</div></div>
+      <div><div class="label">This month</div><div class="glow mono" id="money-month">£0</div></div>
+    </div>
+    <form id="spend-form" class="stack-form">
+      <div class="row2">
+        <input type="number" id="sp-amount" step="0.01" placeholder="£ amount" required>
+        <select id="sp-category">
+          <option>food</option><option>transport</option><option>shopping</option>
+          <option>bills</option><option>fun</option><option>other</option>
+        </select>
+      </div>
+      <input type="text" id="sp-note" placeholder="note (optional)">
+      <button class="btn btn-grad full" type="submit">Log Spend</button>
+    </form>
+  </section>
+
+  <section class="card" data-tabs="money">
+    <div class="card-head"><h2>📊 By Category</h2></div>
+    <canvas id="money-chart" height="190"></canvas>
+    <div id="spend-recent" class="small"></div>
+  </section>
+
+  <!-- CHAT -->
+  <section class="card card-wide chat-card" data-tabs="chat">
+    <div class="card-head"><h2>💬 Talk to ASFA</h2>
+      <label class="btn btn-ghost" for="photo-input">📷</label>
+      <input type="file" id="photo-input" accept="image/*" hidden>
+    </div>
+    <div class="chat-log" id="chat-log"></div>
+    <form id="chat-form" class="inline-form">
+      <input type="text" id="chat-input" placeholder="Ask anything, or log by voice…" autocomplete="off">
+      <button class="btn btn-grad" type="submit">➤</button>
+    </form>
+  </section>
+
+  <section class="card" data-tabs="chat">
+    <div class="card-head"><h2>💡 Ideas &amp; Notes</h2></div>
+    <form id="idea-form" class="inline-form">
+      <input type="text" id="idea-text" placeholder="Quick capture…" required>
+      <button class="btn btn-grad" type="submit">＋</button>
+    </form>
+    <div id="ideas-body" class="small"></div>
+  </section>
+
+</main>
+
+<!-- ── Bottom nav (mobile) ────────────────────────────────────────────── -->
+<nav class="bottom-nav">
+  <button class="nav-btn active" data-tab="home">🏠<span>Home</span></button>
+  <button class="nav-btn" data-tab="habits">💧<span>Habits</span></button>
+  <button class="nav-btn" data-tab="gym">🏋️<span>Gym</span></button>
+  <button class="nav-btn" data-tab="money">💸<span>Money</span></button>
+  <button class="nav-btn" data-tab="chat">💬<span>Chat</span></button>
+</nav>
+
+<div class="toast hidden" id="toast"></div>
+
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

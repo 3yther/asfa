@@ -1,0 +1,147 @@
+"""Background scheduler — smart notifications, Telegram pushes, trade alerts.
+
+All jobs degrade gracefully: Telegram skipped if not configured, in-app
+notifications always stored so the dashboard bell still works.
+"""
+import json
+import logging
+from datetime import datetime
+
+from apscheduler.schedulers.background import BackgroundScheduler
+
+import database as db
+from services import telegram_bot
+from services.bots import get_bots_status
+
+logger = logging.getLogger(__name__)
+_scheduler = None
+
+
+def _notify(message: str, kind: str = "info", telegram: bool = True):
+    try:
+        db.add_notification(message, kind)
+    except Exception as e:
+        logger.error(f"notification store failed: {e}")
+    if telegram:
+        telegram_bot.send_message(message)
+
+
+# ── Jobs ───────────────────────────────────────────────────────────────────────
+
+def morning_briefing():
+    from services.briefing import build_briefing
+    try:
+        b = build_briefing(force=True)
+        _notify(f"☀️ Morning briefing ready.\n\n{b['text'][:3500]}", "briefing")
+    except Exception as e:
+        logger.error(f"morning briefing failed: {e}")
+
+
+def bedtime_reminder():
+    _notify("🌙 Bedtime. Wind down — 7h+ sleep keeps the streak (and tomorrow's score) alive.", "bedtime")
+
+
+def market_open_reminder():
+    _notify("📈 US market opens in 30 minutes. Check your bots.", "market")
+
+
+def reflection_prompt():
+    _notify("📝 End-of-day reflection: how was today, 1-10, and why? Log it in ASFA.", "reflection")
+
+
+def water_check():
+    """Daytime nudge if no water logged for 3+ hours."""
+    now = datetime.now()
+    if not (9 <= now.hour <= 21):
+        return
+    last = db.kv_get("last_water_ts")
+    last_nudge = db.kv_get("last_water_nudge_ts")
+    try:
+        last_dt = datetime.fromisoformat(last) if last else None
+        nudge_dt = datetime.fromisoformat(last_nudge) if last_nudge else None
+    except ValueError:
+        last_dt = nudge_dt = None
+    hours_since = (now - last_dt).total_seconds() / 3600 if last_dt else 99
+    nudge_gap = (now - nudge_dt).total_seconds() / 3600 if nudge_dt else 99
+    if hours_since >= 3 and nudge_gap >= 3:
+        db.kv_set("last_water_nudge_ts", now.isoformat())
+        _notify("💧 No water logged in 3+ hours. Hydrate!", "water")
+
+
+def poll_bot_trades():
+    """Every 5 min: diff bot positions vs last snapshot → trade alerts."""
+    try:
+        status = get_bots_status()
+    except Exception as e:
+        logger.error(f"bot poll failed: {e}")
+        return
+    snapshot = {}
+    for key, b in status.items():
+        if not b.get("online"):
+            continue
+        positions = b.get("positions") or b.get("open_positions") or []
+        if isinstance(positions, list):
+            snapshot[key] = sorted(
+                p.get("symbol", str(p)) if isinstance(p, dict) else str(p) for p in positions
+            )
+        else:
+            snapshot[key] = positions
+    if not snapshot:
+        return
+    prev_raw = db.kv_get("bot_positions_snapshot")
+    db.kv_set("bot_positions_snapshot", json.dumps(snapshot))
+    if prev_raw is None:
+        return
+    try:
+        prev = json.loads(prev_raw)
+    except (TypeError, ValueError):
+        return
+    for key, current in snapshot.items():
+        before = prev.get(key)
+        if before is None or before == current:
+            continue
+        name = status[key].get("bot_name", key)
+        if isinstance(current, list) and isinstance(before, list):
+            opened = set(current) - set(before)
+            closed = set(before) - set(current)
+            parts = []
+            if opened:
+                parts.append(f"opened {', '.join(sorted(opened))}")
+            if closed:
+                parts.append(f"closed {', '.join(sorted(closed))}")
+            if parts:
+                _notify(f"🤖 {name} {' / '.join(parts)}", "trade")
+        else:
+            _notify(f"🤖 {name} positions changed: {before} → {current}", "trade")
+
+
+def weekly_review():
+    from services.ai import generate_weekly_review
+    try:
+        review = generate_weekly_review()
+        db.kv_set("weekly_review", json.dumps(
+            {"date": datetime.now().strftime("%Y-%m-%d"), "content": review}))
+        _notify(f"📊 Weekly review:\n\n{review[:3500]}", "review")
+    except Exception as e:
+        logger.error(f"weekly review failed: {e}")
+
+
+# ── Startup ────────────────────────────────────────────────────────────────────
+
+def start_scheduler():
+    global _scheduler
+    if _scheduler is not None:
+        return _scheduler
+    sched = BackgroundScheduler(timezone="Europe/London", daemon=True)
+    sched.add_job(morning_briefing, "cron", hour=6, minute=30)
+    sched.add_job(bedtime_reminder, "cron", day_of_week="mon-fri", hour=22, minute=30)
+    sched.add_job(bedtime_reminder, "cron", day_of_week="sun,sat", hour=0, minute=0)
+    sched.add_job(market_open_reminder, "cron", day_of_week="mon-fri", hour=14, minute=0)
+    sched.add_job(reflection_prompt, "cron", hour=22, minute=0)
+    sched.add_job(water_check, "interval", minutes=30)
+    sched.add_job(poll_bot_trades, "interval", minutes=5)
+    sched.add_job(weekly_review, "cron", day_of_week="sun", hour=18, minute=0)
+    sched.start()
+    _scheduler = sched
+    logger.info("Scheduler started with %d jobs", len(sched.get_jobs()))
+    return sched

@@ -1,0 +1,15 @@
+.env
+*.db
+*.sqlite
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+.env.local
+*.log
+.DS_Store
+token.json
+credentials.json
+google_token.json
