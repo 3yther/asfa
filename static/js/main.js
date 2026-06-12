@@ -1,690 +1,820 @@
-/* ASFA command centre — frontend brain */
+/* ASFA — JARVIS HUD main.js */
 "use strict";
 
-const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => document.querySelectorAll(sel);
+// ── State ──────────────────────────────────────────────────────────────────────
+let ORB_STATE = "idle"; // idle | listening | speaking
+const SCORE_CIRCUMFERENCE = 2 * Math.PI * 72; // r=72
 
-async function api(path, opts = {}) {
-  if (opts.body && typeof opts.body !== "string" && !(opts.body instanceof FormData)) {
-    opts.body = JSON.stringify(opts.body);
-    opts.headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+// ── Init ───────────────────────────────────────────────────────────────────────
+document.addEventListener("DOMContentLoaded", () => {
+  initClock();
+  initOrbCanvas();
+  initOrbClick();
+  buildScoreTicks();
+  initNav();
+  loadAll();
+  spawnParticles();
+  setStatusDate();
+});
+
+// ── Clock ──────────────────────────────────────────────────────────────────────
+function initClock() {
+  function tick() {
+    const now = new Date();
+    const h  = String(now.getHours()).padStart(2, "0");
+    const m  = String(now.getMinutes()).padStart(2, "0");
+    const s  = String(now.getSeconds()).padStart(2, "0");
+    const ms = String(now.getMilliseconds()).padStart(3, "0");
+    const el = document.getElementById("clock");
+    if (el) el.textContent = `${h}:${m}:${s}.${ms}`;
   }
-  const r = await fetch(path, opts);
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
-  return r.json();
+  tick();
+  setInterval(tick, 50);
 }
 
-function toast(msg) {
-  const t = $("#toast");
-  t.textContent = msg;
-  t.classList.remove("hidden");
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.add("hidden"), 2600);
+function setStatusDate() {
+  const el = document.getElementById("status-date");
+  if (!el) return;
+  const d = new Date();
+  el.textContent = d.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
 }
 
-function countUp(el, target, { prefix = "", decimals = 0, ms = 1100 } = {}) {
-  const start = performance.now();
-  function tick(now) {
-    const p = Math.min(1, (now - start) / ms);
-    const eased = 1 - Math.pow(1 - p, 3);
-    el.textContent = prefix + (target * eased).toFixed(decimals);
-    if (p < 1) requestAnimationFrame(tick);
+// ── Orb canvas particle field ──────────────────────────────────────────────────
+function initOrbCanvas() {
+  const canvas = document.getElementById("orb-canvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width;
+  const H = canvas.height;
+  const CX = W / 2, CY = H / 2, R = W / 2;
+
+  const NODES = 24;
+  const nodes = Array.from({ length: NODES }, () => randomNode(CX, CY, R));
+  const edges = buildEdges(nodes, R * 0.7);
+
+  let frame = 0;
+
+  function randomNode(cx, cy, r) {
+    const a = Math.random() * Math.PI * 2;
+    const d = Math.random() * r * 0.75;
+    return {
+      x: cx + Math.cos(a) * d,
+      y: cy + Math.sin(a) * d,
+      vx: (Math.random() - 0.5) * 0.18,
+      vy: (Math.random() - 0.5) * 0.18,
+    };
   }
-  requestAnimationFrame(tick);
+
+  function buildEdges(ns, maxDist) {
+    const es = [];
+    for (let i = 0; i < ns.length; i++)
+      for (let j = i + 1; j < ns.length; j++)
+        if (dist(ns[i], ns[j]) < maxDist) es.push([i, j]);
+    return es;
+  }
+
+  function dist(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    // Orb background
+    const grad = ctx.createRadialGradient(CX, CY, 0, CX, CY, R);
+    grad.addColorStop(0,   "rgba(124,58,237,0.35)");
+    grad.addColorStop(0.5, "rgba(79,70,229,0.20)");
+    grad.addColorStop(1,   "rgba(6,182,212,0.08)");
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(CX, CY, R, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.restore();
+
+    // Move nodes
+    for (const n of nodes) {
+      n.x += n.vx;
+      n.y += n.vy;
+      const dx = n.x - CX, dy = n.y - CY;
+      if (dx * dx + dy * dy > (R * 0.72) * (R * 0.72)) {
+        n.vx = -n.vx * 0.8;
+        n.vy = -n.vy * 0.8;
+      }
+    }
+
+    // Edges
+    for (const [i, j] of edges) {
+      const a = nodes[i], b = nodes[j];
+      const d = dist(a, b);
+      if (d > R * 0.75) continue;
+      const alpha = 0.12 * (1 - d / (R * 0.75));
+      const pulse = 0.5 + 0.5 * Math.sin(frame * 0.03 + i);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = `rgba(6,182,212,${alpha * pulse})`;
+      ctx.lineWidth = 0.6;
+      ctx.stroke();
+    }
+
+    // Nodes
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const pulse = 0.5 + 0.5 * Math.sin(frame * 0.04 + i * 0.7);
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, 1.2 + pulse * 0.6, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(124,58,237,${0.6 + pulse * 0.4})`;
+      ctx.fill();
+    }
+
+    // Listening ripple
+    if (ORB_STATE === "listening") {
+      const rippleR = 30 + 50 * ((frame * 0.8 % 60) / 60);
+      const rippleA = 0.35 * (1 - rippleR / 80);
+      ctx.beginPath();
+      ctx.arc(CX, CY, rippleR, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(124,58,237,${rippleA})`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    frame++;
+    requestAnimationFrame(draw);
+  }
+
+  draw();
 }
 
-function typewriter(el, text, speed = 12) {
-  el.textContent = "";
-  const caret = document.createElement("span");
-  caret.className = "typing-caret";
-  caret.innerHTML = "&nbsp;";
-  el.appendChild(caret);
-  let i = 0;
-  return new Promise((resolve) => {
-    (function step() {
-      const chunk = text.slice(i, i + 2);
-      i += 2;
-      caret.before(document.createTextNode(chunk));
-      el.closest(".chat-log")?.scrollTo(0, 1e6);
-      if (i < text.length) setTimeout(step, speed);
-      else { caret.remove(); resolve(); }
-    })();
+// ── Orb click → voice ─────────────────────────────────────────────────────────
+function initOrbClick() {
+  const orb = document.getElementById("orb");
+  if (!orb) return;
+
+  let mediaRec = null, chunks = [];
+
+  orb.addEventListener("click", async () => {
+    if (ORB_STATE === "idle") {
+      setOrbState("listening");
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRec = new MediaRecorder(stream);
+        chunks = [];
+        mediaRec.ondataavailable = e => chunks.push(e.data);
+        mediaRec.onstop = async () => {
+          const blob = new Blob(chunks, { type: "audio/webm" });
+          const text = await transcribeBlob(blob);
+          if (text) await sendChat(text);
+          setOrbState("idle");
+        };
+        mediaRec.start();
+      } catch {
+        toast("Microphone access denied");
+        setOrbState("idle");
+      }
+    } else if (ORB_STATE === "listening") {
+      if (mediaRec && mediaRec.state === "recording") {
+        mediaRec.stop();
+        mediaRec.stream.getTracks().forEach(t => t.stop());
+        setOrbState("speaking");
+      }
+    }
   });
 }
 
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function setOrbState(state) {
+  ORB_STATE = state;
+  const orb = document.getElementById("orb");
+  if (!orb) return;
+  orb.className = `orb orb-${state}`;
+}
 
-/* ── Clock ─────────────────────────────────────────────────────────────── */
-setInterval(() => { $("#clock").textContent = new Date().toLocaleTimeString("en-GB"); }, 1000);
+async function transcribeBlob(blob) {
+  const fd = new FormData();
+  fd.append("audio", blob, "voice.webm");
+  try {
+    const r = await fetch("/api/transcribe", { method: "POST", body: fd });
+    if (!r.ok) return null;
+    return (await r.json()).text || null;
+  } catch { return null; }
+}
 
-/* ── Particles ─────────────────────────────────────────────────────────── */
-(function spawnParticles() {
-  const box = $("#particles");
-  for (let i = 0; i < 20; i++) {
+// ── Score ring tick marks (injected by JS) ─────────────────────────────────────
+function buildScoreTicks() {
+  const svg = document.getElementById("score-ring-svg");
+  if (!svg) return;
+  const NS = "http://www.w3.org/2000/svg";
+  const cx = 90, cy = 90, outerR = 88;
+  for (let i = 0; i < 60; i++) {
+    const angle = (i / 60) * Math.PI * 2 - Math.PI / 2;
+    const isMajor = i % 5 === 0;
+    const r1 = isMajor ? outerR - 5 : outerR - 2;
+    const x1 = cx + Math.cos(angle) * r1;
+    const y1 = cy + Math.sin(angle) * r1;
+    const x2 = cx + Math.cos(angle) * outerR;
+    const y2 = cy + Math.sin(angle) * outerR;
+    const line = document.createElementNS(NS, "line");
+    line.setAttribute("x1", x1); line.setAttribute("y1", y1);
+    line.setAttribute("x2", x2); line.setAttribute("y2", y2);
+    line.setAttribute("stroke", isMajor ? "rgba(6,182,212,0.45)" : "rgba(6,182,212,0.18)");
+    line.setAttribute("stroke-width", isMajor ? "1.2" : "0.7");
+    svg.appendChild(line);
+  }
+}
+
+// ── Water arc gauge ────────────────────────────────────────────────────────────
+function updateWaterArc(ml, targetMl) {
+  const arc = document.getElementById("water-arc");
+  if (!arc) return;
+  const r = 44;
+  const circumference = 2 * Math.PI * r * (270 / 360); // 270° arc
+  const pct = Math.min(ml / targetMl, 1);
+  const offset = circumference * (1 - pct);
+  arc.style.strokeDasharray = circumference;
+  arc.style.strokeDashoffset = offset;
+
+  let colour;
+  if (pct < 0.5) colour = "rgba(124,58,237,0.9)";
+  else if (pct < 1) colour = "rgba(6,182,212,0.9)";
+  else colour = "rgba(63,185,80,0.9)";
+  arc.style.stroke = colour;
+}
+
+// ── Nav ────────────────────────────────────────────────────────────────────────
+function initNav() {
+  const btns = document.querySelectorAll(".nav-btn");
+  const pill = document.querySelector(".nav-pill");
+  const nav  = document.querySelector(".bottom-nav");
+  if (!btns.length) return;
+
+  function movePill(btn) {
+    if (!pill || !nav) return;
+    const navRect = nav.getBoundingClientRect();
+    const btnRect = btn.getBoundingClientRect();
+    pill.style.left  = (btnRect.left - navRect.left) + "px";
+    pill.style.width = btnRect.width + "px";
+  }
+
+  btns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      btns.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      movePill(btn);
+      document.body.setAttribute("data-tab", btn.dataset.tab);
+    });
+  });
+
+  const active = document.querySelector(".nav-btn.active") || btns[0];
+  active.classList.add("active");
+  document.body.setAttribute("data-tab", active.dataset.tab || "home");
+  setTimeout(() => movePill(active), 50);
+}
+
+// ── Ambient particles ──────────────────────────────────────────────────────────
+function spawnParticles() {
+  const container = document.getElementById("particles");
+  if (!container) return;
+  for (let i = 0; i < 30; i++) {
     const p = document.createElement("div");
     p.className = "particle";
     p.style.left = Math.random() * 100 + "vw";
-    p.style.animationDuration = 16 + Math.random() * 18 + "s";
-    p.style.animationDelay = -Math.random() * 24 + "s";
-    p.style.background = Math.random() > 0.5 ? "#06B6D4" : "#7C3AED";
-    box.appendChild(p);
+    p.style.animationDuration = (12 + Math.random() * 20) + "s";
+    p.style.animationDelay = (-Math.random() * 20) + "s";
+    p.style.opacity = 0;
+    container.appendChild(p);
   }
-})();
-
-/* ── Stagger card entrance ─────────────────────────────────────────────── */
-$$(".card").forEach((c, i) => (c.style.animationDelay = i * 80 + "ms"));
-
-/* ── Chart defaults ────────────────────────────────────────────────────── */
-Chart.defaults.color = "#8B949E";
-Chart.defaults.font.family = "'JetBrains Mono', monospace";
-Chart.defaults.font.size = 10;
-Chart.defaults.borderColor = "rgba(139,148,158,.1)";
-Chart.defaults.animation.duration = 1300;
-const charts = {};
-function makeChart(id, config) {
-  if (charts[id]) charts[id].destroy();
-  const el = $("#" + id);
-  if (!el) return;
-  charts[id] = new Chart(el, config);
 }
 
-/* ── Bottom nav — sliding pill ─────────────────────────────────────────── */
-document.body.dataset.tab = "home";
-const navBtns = $$(".nav-btn");
-const navPill = $("#nav-pill");
-
-function moveNavPill(btn) {
-  if (!navPill || !btn) return;
-  const navRect = btn.closest(".bottom-nav").getBoundingClientRect();
-  const btnRect = btn.getBoundingClientRect();
-  navPill.style.left = (btnRect.left - navRect.left + btn.closest(".bottom-nav").scrollLeft) + "px";
-  navPill.style.width = btnRect.width + "px";
+// ── Load all data ──────────────────────────────────────────────────────────────
+function loadAll() {
+  fetchBriefing();
+  fetchScore();
+  fetchBots();
+  fetchHabits();
+  fetchCalendar();
+  fetchEmails();
+  fetchNews();
+  fetchMoney();
+  fetchGym();
+  fetchReflection();
+  fetchGoals();
+  fetchIdeas();
+  initChat();
+  fetchNotifications();
 }
 
-navBtns.forEach((btn) => {
-  btn.addEventListener("click", () => {
-    navBtns.forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    document.body.dataset.tab = btn.dataset.tab;
-    moveNavPill(btn);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+// ── Briefing ───────────────────────────────────────────────────────────────────
+async function fetchBriefing() {
+  try {
+    const d = await apiGet("/api/briefing");
+    const el = document.getElementById("briefing-text");
+    if (el) el.textContent = d.plain_text || d.content || "— NO SIGNAL —";
+    const uv = document.getElementById("uptime-val");
+    if (uv) uv.textContent = uptime();
+    const ls = document.getElementById("last-sync");
+    if (ls) ls.textContent = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  } catch { /* silent */ }
+}
+
+function uptime() {
+  const sec = Math.floor(performance.now() / 1000);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+}
+
+// ── Score ──────────────────────────────────────────────────────────────────────
+async function fetchScore() {
+  try {
+    const d = await apiGet("/api/score");
+    renderScore(d);
+  } catch { /* silent */ }
+}
+
+function renderScore(d) {
+  const score = d.score || 0;
+  const ring = document.querySelector(".ring-fg");
+  const numEl = document.getElementById("score-num");
+  const colourEl = document.querySelector(".score-num");
+
+  if (ring) {
+    ring.style.strokeDashoffset = SCORE_CIRCUMFERENCE * (1 - score / 100);
+    ring.style.stroke = scoreColour(score);
+  }
+  if (numEl) numEl.textContent = String(score).padStart(3, "0");
+  if (colourEl) colourEl.style.color = scoreColour(score);
+
+  const bd = d.breakdown || {};
+  [
+    { label: "HYDRATION",  key: "water" },
+    { label: "SLEEP",      key: "sleep" },
+    { label: "NUTRITION",  key: "nutrition" },
+    { label: "MOVEMENT",   key: "movement" },
+    { label: "REFLECTION", key: "reflection" },
+  ].forEach(({ key }) => {
+    const row = document.querySelector(`[data-contrib="${key}"]`);
+    if (!row) return;
+    const pct = bd[key] || 0;
+    const fill = row.querySelector(".contrib-fill");
+    const pctEl = row.querySelector(".contrib-pct");
+    if (fill) fill.style.width = pct + "%";
+    if (pctEl) pctEl.textContent = pct + "%";
   });
-});
-// Init pill position
-requestAnimationFrame(() => moveNavPill($(".nav-btn.active")));
+}
 
-/* ── Briefing ──────────────────────────────────────────────────────────── */
-let briefingText = "";
-async function loadBriefing(refresh = false) {
-  const scan = $("#briefing-scan");
-  const body = $("#briefing-body");
-  const refreshBtn = $("#briefing-refresh");
-  scan.classList.remove("hidden");
-  body.innerHTML = '<span class="muted">Generating briefing…</span>';
-  refreshBtn.classList.add("btn-spinning");
+function scoreColour(s) {
+  if (s >= 80) return "var(--green)";
+  if (s >= 50) return "var(--gold)";
+  return "var(--red)";
+}
+
+// ── Bots ───────────────────────────────────────────────────────────────────────
+async function fetchBots() {
+  const body = document.getElementById("bots-body");
+  if (!body) return;
   try {
-    const b = await api("/api/briefing" + (refresh ? "?refresh=1" : ""));
-    briefingText = b.text || b.content || "";
-    body.textContent = "";
-    await typewriter(body, briefingText, 8);
-  } catch (e) {
-    body.innerHTML = `<span class="muted">Briefing unavailable: ${esc(e.message)}</span>`;
-  } finally {
-    scan.classList.add("hidden");
-    refreshBtn.classList.remove("btn-spinning");
+    const d = await apiGet("/api/bots");
+    body.innerHTML = botRow("STOCK-SCANNER // SIGNAL PROC.", d.scanner);
+  } catch {
+    body.innerHTML = `<div class="t-offline">> CONNECTION FAILED</div>`;
   }
 }
-$("#briefing-refresh").addEventListener("click", () => loadBriefing(true));
-$("#briefing-play").addEventListener("click", () => speak(briefingText || "No briefing available yet."));
 
-/* ── Score ring ────────────────────────────────────────────────────────── */
-let _currentWater = 0, _currentSleep = 0;
+function botRow(name, b) {
+  const online = b && b.online;
 
-function setOrbColor(score) {
-  let color;
-  if      (score < 40) color = "rgba(248, 81, 73, 0.7)";
-  else if (score <= 70) color = "rgba(245, 197, 66, 0.7)";
-  else                  color = "rgba(63, 185, 80, 0.7)";
-  document.documentElement.style.setProperty("--orb-glow-color", color);
-}
-
-function updateContribBars(waterMl, sleepHrs, goalsPct) {
-  const w = Math.min(100, (waterMl / 2000) * 100);
-  const s = Math.min(100, (sleepHrs / 8) * 100);
-  const g = Math.min(100, goalsPct);
-  const set = (id, pct) => {
-    const el = $("#" + id);
-    if (el) setTimeout(() => el.style.width = pct + "%", 300);
-  };
-  set("contrib-water", w);
-  set("contrib-sleep", s);
-  set("contrib-goals", g);
-}
-
-async function loadScore() {
-  try {
-    const s = await api("/api/score");
-    const arc = $("#score-arc");
-    const C = 2 * Math.PI * 68;
-    arc.style.strokeDashoffset = C - (C * s.score) / 100;
-    const color = s.score < 40 ? "#F85149" : s.score <= 70 ? "#F5C542" : "#3FB950";
-    arc.style.stroke = color;
-    const num = $("#score-num");
-    num.style.color = color;
-    num.style.textShadow = `0 0 20px ${color}80`;
-    countUp(num, s.score);
-    setOrbColor(s.score);
-    const hist = s.history || [];
-    makeChart("score-chart", {
-      type: "line",
-      data: {
-        labels: hist.map((h) => h.date.slice(5)),
-        datasets: [{ data: hist.map((h) => h.score), borderColor: "#06B6D4",
-          backgroundColor: "rgba(6,182,212,.1)", fill: true, tension: 0.4, pointRadius: 2 }],
-      },
-      options: { plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100 } } },
-    });
-  } catch (e) { console.warn("score", e); }
-}
-
-/* ── Habits ────────────────────────────────────────────────────────────── */
-async function loadHabits() {
-  try {
-    const h = await api("/api/habits");
-    _currentWater = h.today.water_ml || 0;
-    _currentSleep = h.today.sleep_hours || 0;
-    countUp($("#water-num"), _currentWater);
-    $("#water-bar").style.width = Math.min(100, (_currentWater / 2000) * 100) + "%";
-    const s = h.water_streak;
-    const fireSize = Math.min(2, 1 + s * 0.08);
-    $("#water-streak").innerHTML = s > 0
-      ? `<span style="font-size:${fireSize}em">🔥</span> <span class="mono">${s}d</span>` : "";
-    const days = [...h.history].reverse();
-    makeChart("sleep-chart", {
-      type: "bar",
-      data: {
-        labels: days.map((d) => d.date.slice(5)),
-        datasets: [{ data: days.map((d) => d.sleep_hours || 0),
-          backgroundColor: days.map((d) => d.sleep_hours >= 7 ? "rgba(63,185,80,.7)" : "rgba(124,58,237,.6)"),
-          borderRadius: 6 }],
-      },
-      options: { plugins: { legend: { display: false } }, scales: { y: { suggestedMax: 9 } } },
-    });
-    _refreshContribBars();
-  } catch (e) { console.warn("habits", e); }
-}
-
-function _refreshContribBars() {
-  const avgGoals = _lastGoalsPct;
-  updateContribBars(_currentWater, _currentSleep, avgGoals);
-}
-
-let _lastGoalsPct = 0;
-
-$$(".water-add").forEach((b) =>
-  b.addEventListener("click", async () => {
-    await api("/api/habits/water", { method: "POST", body: { ml: +b.dataset.ml } });
-    toast(`💧 +${b.dataset.ml}ml logged`);
-    loadHabits(); loadScore();
-  })
-);
-
-$("#sleep-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const hours = parseFloat($("#sleep-hours").value);
-  if (!hours) return;
-  await api("/api/habits/sleep", { method: "POST", body: { hours } });
-  toast(`😴 ${hours}h sleep logged`);
-  e.target.reset(); loadHabits(); loadScore();
-});
-
-/* ── Body weight ───────────────────────────────────────────────────────── */
-async function loadBodyWeight() {
-  try {
-    const g = await api("/api/gym");
-    makeChart("weight-chart", {
-      type: "line",
-      data: {
-        labels: g.body_weight.map((w) => w.date.slice(5)),
-        datasets: [{ data: g.body_weight.map((w) => w.weight_kg), borderColor: "#3FB950",
-          backgroundColor: "rgba(63,185,80,.1)", fill: true, tension: 0.35, pointRadius: 2 }],
-      },
-      options: { plugins: { legend: { display: false } } },
-    });
-  } catch (e) { console.warn("bodyweight", e); }
-}
-
-async function loadPBs() {
-  try {
-    const g = await api("/api/gym");
-    $("#pbs-body").innerHTML = g.pbs.length
-      ? g.pbs.map((p) => `<div class="list-item">
-          <span>${esc(p.exercise)}</span>
-          <span class="mono glow" style="margin-left:auto">${p.best_weight}kg × ${p.best_reps}</span>
-        </div>`).join("")
-      : '<span class="muted">No PBs yet</span>';
-  } catch (e) { console.warn("pbs", e); }
-}
-
-$("#weight-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const kg = parseFloat($("#bw-kg").value);
-  if (!kg) return;
-  await api("/api/gym/weight", { method: "POST", body: { weight_kg: kg } });
-  toast(`⚖️ ${kg}kg logged`);
-  e.target.reset(); loadBodyWeight();
-});
-
-/* ── Money ─────────────────────────────────────────────────────────────── */
-async function loadMoney() {
-  try {
-    const m = await api("/api/money");
-    countUp($("#money-week"), m.total, { prefix: "£", decimals: 2 });
-    countUp($("#money-month"), m.monthly_total, { prefix: "£", decimals: 2 });
-    const cats = Object.keys(m.by_category);
-    makeChart("money-chart", {
-      type: "doughnut",
-      data: { labels: cats,
-        datasets: [{ data: cats.map((c) => m.by_category[c]),
-          backgroundColor: ["#7C3AED","#06B6D4","#3FB950","#F5C542","#F85149","#8B949E"],
-          borderColor: "#050507", borderWidth: 3 }] },
-      options: { plugins: { legend: { position: "right" } }, cutout: "68%" },
-    });
-    $("#spend-recent").innerHTML = m.spending.slice(0, 5).map((s) =>
-      `<div class="list-item"><span class="time">${s.date.slice(5)}</span>
-       <span>${esc(s.note || s.category)}</span>
-       <span class="mono" style="margin-left:auto">£${s.amount.toFixed(2)}</span></div>`).join("");
-  } catch (e) { console.warn("money", e); }
-}
-
-$("#spend-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  await api("/api/money", { method: "POST", body: {
-    amount: $("#sp-amount").value, category: $("#sp-category").value, note: $("#sp-note").value } });
-  toast("💸 Spend logged");
-  e.target.reset(); loadMoney(); loadScore();
-});
-
-/* ── Bots ──────────────────────────────────────────────────────────────── */
-function botRow(b) {
-  if (!b || !b.online) return `<div class="bot-row">
-    <div class="bot-name">${esc(b?.bot_name || "Stock Scanner")}</div>
-    <div class="offline">⚪ offline — ${esc(b?.error || "unreachable")}</div></div>`;
-  const equity  = b.equity ?? b.portfolio_value ?? "—";
-  const pnl     = b.pnl ?? b.daily_pnl ?? b.total_pnl ?? 0;
-  const pnlNum  = parseFloat(pnl) || 0;
-  const pnlPct  = b.total_pnl_pct != null ? ` (${pnlNum >= 0 ? "+" : ""}${parseFloat(b.total_pnl_pct).toFixed(2)}%)` : "";
-  const positions = b.positions ?? b.open_positions ?? [];
-  const posCount  = Array.isArray(positions) ? positions.length : positions;
-  const regime    = b.regime || "";
-  const regimePill = regime
-    ? `<span style="font-size:.65rem;padding:2px 8px;border-radius:999px;margin-left:8px;
-        background:${regime==="BULLISH"?"rgba(63,185,80,.15)":regime==="BEARISH"?"rgba(248,81,73,.15)":"rgba(139,148,158,.12)"};
-        color:${regime==="BULLISH"?"#3FB950":regime==="BEARISH"?"#F85149":"#8B949E"}">${regime}</span>`
-    : "";
-  return `<div class="bot-row">
-    <div class="bot-name">🟢 ${esc(b.bot_name)}${regimePill}</div>
-    <div class="bot-stats">
-      <div class="bot-stat">
-        <div class="label">Equity</div>
-        <div class="val pos">$${esc(String(equity))}</div>
+  if (!online) {
+    return `
+    <div class="terminal">
+      <div class="terminal-titlebar">
+        <div class="terminal-dots"><span></span><span></span><span></span></div>
+        <span class="terminal-name">${name}</span>
+        <span class="live-badge neg">&bull; OFFLINE</span>
       </div>
-      <div class="bot-stat">
-        <div class="label">P&amp;L</div>
-        <div class="val ${pnlNum >= 0 ? "pos" : "neg"}">${pnlNum >= 0 ? "+" : ""}${esc(String(pnl))}${esc(pnlPct)}</div>
+      <div class="terminal-body">
+        <div class="t-offline">> SIGNAL LOST — ${esc((b && b.error) || "NO RESPONSE")}</div>
       </div>
-      <div class="bot-stat">
-        <div class="label">Positions</div>
-        <div class="val mono">${esc(String(posCount))}</div>
-      </div>
+    </div>`;
+  }
+
+  const equity    = b.equity    || b.portfolio_value || "—";
+  const pnl       = b.pnl      || b.daily_pnl       || b.total_pnl || "—";
+  const positions = b.positions || b.open_positions  || 0;
+  const pnlNum    = parseFloat(pnl);
+  const pnlClass  = isNaN(pnlNum) ? "" : (pnlNum >= 0 ? "pos" : "neg");
+
+  return `
+  <div class="terminal">
+    <div class="terminal-titlebar">
+      <div class="terminal-dots"><span></span><span></span><span></span></div>
+      <span class="terminal-name">${name}</span>
+      <span class="live-badge"><div class="pulse-dot"></div> LIVE</span>
+    </div>
+    <div class="terminal-body">
+      <div class="t-row"><span class="t-label">EQUITY         :</span><span class="t-val glow">${esc(equity)}</span></div>
+      <div class="t-row"><span class="t-label">DAILY P&amp;L    :</span><span class="t-val ${pnlClass}">${esc(pnl)}</span></div>
+      <div class="t-row"><span class="t-label">OPEN POSITIONS :</span><span class="t-val">${positions}</span></div>
     </div>
   </div>`;
 }
 
-async function loadBots() {
+// ── Habits (water + sleep) ─────────────────────────────────────────────────────
+async function fetchHabits() {
   try {
-    const b = await api("/api/bots");
-    $("#bots-body").innerHTML = botRow(b.scanner);
-  } catch (e) {
-    $("#bots-body").innerHTML = '<span class="muted">Bots unreachable</span>';
+    const d = await apiGet("/api/habits");
+    const today = d.today || {};
+    renderWater(today.water_ml || 0, 2500, d.water_streak || 0);
+    renderSleep(today.sleep_hours || 0);
+  } catch { /* silent */ }
+}
+
+function renderWater(ml, target, streak) {
+  updateWaterArc(ml, target);
+  const valEl = document.getElementById("water-val");
+  if (valEl) valEl.textContent = `${ml}ml`;
+  const strkEl = document.getElementById("water-streak");
+  if (strkEl) strkEl.textContent = streak;
+}
+
+function renderSleep(hours) {
+  const el = document.getElementById("sleep-val");
+  if (el) el.textContent = hours ? `${hours}h` : "—";
+  const bar = document.getElementById("sleep-bar");
+  if (!bar) return;
+  bar.style.width = Math.min((hours / 9) * 100, 100) + "%";
+  bar.style.background = hours >= 7 ? "var(--green)" : hours >= 5 ? "var(--gold)" : "var(--red)";
+}
+
+// ── Calendar ───────────────────────────────────────────────────────────────────
+async function fetchCalendar() {
+  const el = document.getElementById("calendar-list");
+  if (!el) return;
+  try {
+    const d = await apiGet("/api/calendar");
+    if (!d.connected) { el.innerHTML = `<div class="list-item muted mono">// GOOGLE NOT LINKED</div>`; return; }
+    const events = [...(d.today || []), ...(d.tomorrow || [])];
+    el.innerHTML = events.length
+      ? events.map(e => `<div class="list-item"><span class="time">${fmtTime(e.start)}</span><span>${esc(e.summary)}</span></div>`).join("")
+      : `<div class="list-item muted mono">// SCHEDULE CLEAR</div>`;
+  } catch { el.innerHTML = `<div class="list-item muted">—</div>`; }
+}
+
+// ── Inbox ──────────────────────────────────────────────────────────────────────
+async function fetchEmails() {
+  const el = document.getElementById("inbox-list");
+  if (!el) return;
+  try {
+    const d = await apiGet("/api/emails");
+    if (!d.connected) { el.innerHTML = `<div class="list-item muted mono">// COMMS NOT LINKED</div>`; return; }
+    const emails = d.emails || [];
+    el.innerHTML = emails.slice(0, 5).map(e =>
+      `<div class="list-item"><span class="time">${esc((e.from || "").split("@")[0])}</span><a href="#">${esc(e.subject || "—")}</a></div>`
+    ).join("") || `<div class="list-item muted mono">// INBOX CLEAR</div>`;
+    if (d.suggested_events && d.suggested_events.length) {
+      const ev = d.suggested_events[0];
+      el.innerHTML += `<div class="suggest-row"><span>${esc(ev.title)}</span><button class="btn btn-ghost" style="font-size:.55rem;padding:4px 8px;" onclick="addSuggested(this)">ADD EVENT</button></div>`;
+      el.querySelector(".suggest-row button").__ev = ev;
+    }
+  } catch { el.innerHTML = `<div class="list-item muted">—</div>`; }
+}
+
+async function addSuggested(btn) {
+  const ev = btn.__ev;
+  if (!ev) return;
+  await apiPost("/api/calendar", ev);
+  toast("EVENT ADDED");
+  fetchCalendar();
+}
+
+// ── News ───────────────────────────────────────────────────────────────────────
+async function fetchNews() {
+  const grid   = document.getElementById("news-headlines");
+  const ticker = document.getElementById("ticker-content");
+  if (!grid && !ticker) return;
+  try {
+    const d = await apiGet("/api/news");
+    const articles = [...(d.top || []), ...(d.finance || [])].slice(0, 6);
+    if (grid) {
+      grid.innerHTML = articles.slice(0, 3).map(a =>
+        `<a class="intel-article" href="${esc(a.url || "#")}" target="_blank" rel="noopener">
+          <span class="intel-ts">${fmtTs(a.published_at || a.publishedAt || "")}</span>
+          <h3>${esc(a.title || "")}</h3>
+        </a>`
+      ).join("");
+    }
+    if (ticker && articles.length) {
+      const txt = articles.map(a => esc(a.title || "")).join('<span class="ticker-sep">///</span>');
+      ticker.innerHTML = txt + '<span class="ticker-sep">///</span>' + txt;
+    }
+  } catch { /* silent */ }
+}
+
+// ── Money ──────────────────────────────────────────────────────────────────────
+async function fetchMoney() {
+  try {
+    const d = await apiGet("/api/money");
+    const weekEl  = document.getElementById("money-week");
+    const monthEl = document.getElementById("money-month");
+    if (weekEl)  weekEl.textContent  = `£${(d.total || 0).toFixed(2)}`;
+    if (monthEl) monthEl.textContent = `£${(d.monthly_total || 0).toFixed(2)}`;
+    const listEl = document.getElementById("money-list");
+    if (listEl) {
+      const cats = Object.entries(d.by_category || {}).slice(0, 5);
+      listEl.innerHTML = cats.map(([cat, amt]) =>
+        `<div class="list-item"><span class="time">${esc(cat.toUpperCase())}</span><span class="mono">£${amt.toFixed(2)}</span></div>`
+      ).join("") || `<div class="list-item muted mono">// NO DATA</div>`;
+    }
+  } catch { /* silent */ }
+}
+
+// ── Gym / PBs ──────────────────────────────────────────────────────────────────
+async function fetchGym() {
+  try {
+    const d = await apiGet("/api/gym");
+    const pbsList = document.getElementById("pbs-list");
+    if (pbsList) {
+      const pbs = d.pbs || [];
+      pbsList.innerHTML = pbs.slice(0, 6).map(p =>
+        `<div class="list-item"><span class="time">${esc((p.exercise || "").toUpperCase())}</span><span class="mono green-text">${p.best_weight || "—"}kg × ${p.best_reps || "—"}</span></div>`
+      ).join("") || `<div class="list-item muted mono">// NO RECORDS</div>`;
+    }
+    const bwEl = document.getElementById("bodyweight-val");
+    if (bwEl && d.body_weight && d.body_weight.length) {
+      bwEl.textContent = d.body_weight[d.body_weight.length - 1].weight_kg + " KG";
+    }
+  } catch { /* silent */ }
+}
+
+// ── Reflection ─────────────────────────────────────────────────────────────────
+async function fetchReflection() {
+  try {
+    const d = await apiGet("/api/reflection");
+    const list = Array.isArray(d) ? d : [];
+    const latest = list[0];
+    const scoreEl = document.getElementById("refl-score");
+    if (scoreEl) scoreEl.textContent = latest ? `${latest.score}/10` : "—";
+    const textEl = document.getElementById("refl-text");
+    if (textEl) textEl.textContent = latest ? latest.content : "// NO ENTRY TODAY";
+  } catch { /* silent */ }
+}
+
+// ── Goals ──────────────────────────────────────────────────────────────────────
+async function fetchGoals() {
+  const el = document.getElementById("goals-list");
+  if (!el) return;
+  try {
+    const d = await apiGet("/api/goals");
+    const goals = Array.isArray(d) ? d : [];
+    el.innerHTML = goals.map(g => `
+      <div class="goal-row">
+        <div class="goal-top">
+          <span>${esc(g.title)}</span>
+          <span class="mono" style="color:var(--cyan)">${g.progress || 0}%</span>
+        </div>
+        <div class="progress"><div class="progress-fill" style="width:${g.progress || 0}%"></div></div>
+      </div>`
+    ).join("") || `<div class="muted mono">// NO ACTIVE OBJECTIVES</div>`;
+  } catch { el.innerHTML = `<div class="muted">—</div>`; }
+}
+
+// ── Ideas ──────────────────────────────────────────────────────────────────────
+async function fetchIdeas() {
+  const el = document.getElementById("ideas-list");
+  if (!el) return;
+  try {
+    const d = await apiGet("/api/ideas");
+    const ideas = Array.isArray(d) ? d : [];
+    el.innerHTML = ideas.slice(0, 8).map(i =>
+      `<div class="list-item"><span class="time">${fmtTs(i.created_at)}</span><span>${esc(i.content)}</span></div>`
+    ).join("") || `<div class="list-item muted mono">// NO IDEAS LOGGED</div>`;
+  } catch { /* silent */ }
+}
+
+// ── Notifications ──────────────────────────────────────────────────────────────
+async function fetchNotifications() {
+  try {
+    const d = await apiGet("/api/notifications");
+    const badge = document.getElementById("notif-badge");
+    if (badge) {
+      badge.textContent = d.unread || "";
+      badge.style.display = d.unread ? "inline-flex" : "none";
+    }
+    const list = document.getElementById("notif-list");
+    if (list) {
+      list.innerHTML = (d.notifications || []).slice(0, 10).map(n =>
+        `<div class="notif-item${n.is_read ? "" : " unread"}">${esc(n.message)}<span class="time">${fmtTs(n.created_at)}</span></div>`
+      ).join("") || `<div class="notif-item muted">// ALL CLEAR</div>`;
+    }
+  } catch { /* silent */ }
+}
+
+function toggleNotif() {
+  const panel = document.getElementById("notif-panel");
+  if (!panel) return;
+  panel.classList.toggle("hidden");
+  if (!panel.classList.contains("hidden")) {
+    markRead();
+    fetchNotifications();
   }
 }
-$("#bots-refresh").addEventListener("click", loadBots);
 
-/* ── Weather ────────────────────────────────────────────────────────────── */
-async function loadWeather() {
-  try {
-    const w = await api("/api/weather");
-    $("#weather-chip").textContent = `${w.current.temp}°C · ${w.current.description} · London`;
-  } catch { /* stays dash */ }
+async function markRead() {
+  try { await apiPost("/api/notifications/read", {}); } catch { /* silent */ }
 }
 
-/* ── News — ticker + top 3 cards ─────────────────────────────────────── */
-async function loadNews() {
-  try {
-    const n = await api("/api/news");
-    const top     = n.top.slice(0, 3);
-    const finance = n.finance.slice(0, 4);
-    const all     = [...n.top.slice(0, 5), ...n.finance.slice(0, 4)];
+// ── Chat ───────────────────────────────────────────────────────────────────────
+function initChat() {
+  const input = document.getElementById("chat-input");
+  const btn   = document.getElementById("chat-send");
+  if (!input || !btn) return;
 
-    // Top-3 headline cards
-    const badges = { top: "", finance: "finance" };
-    $("#news-headlines").innerHTML = top.length
-      ? top.map((a) => `<a class="news-article" href="${esc(a.url)}" target="_blank" rel="noopener">
-          <div class="news-badge">BBC</div>
-          <h3>${esc(a.title)}</h3></a>`).join("")
-      : '<span class="muted small">Set NEWS_API_KEY for headlines</span>';
-
-    // Ticker — duplicate for seamless loop
-    if (all.length) {
-      const items = all.map((a) =>
-        `<a href="${esc(a.url)}" target="_blank" rel="noopener"
-            style="color:inherit;text-decoration:none">${esc(a.title)}</a>
-         <span class="ticker-sep">◆</span>`).join("");
-      $("#ticker-track").innerHTML = items + items; // double for infinite loop
+  async function send() {
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = "";
+    appendMsg("user", msg);
+    const thinking = appendMsg("ai", "▋");
+    try {
+      const d = await apiPost("/api/chat", { message: msg });
+      thinking.textContent = d.reply || "...";
+      if (d.actions && d.actions.length) {
+        appendMsg("action", "ACTION: " + d.actions.join(" / "));
+        loadAll();
+      }
+    } catch {
+      thinking.textContent = "// ERROR — NO RESPONSE";
     }
-  } catch { /* leave placeholder */ }
+    scrollChat();
+  }
+
+  btn.addEventListener("click", send);
+  input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+
+  fetchHistory();
 }
 
-/* ── Calendar & inbox ───────────────────────────────────────────────────── */
-const fmtTime = (iso) => iso?.includes("T")
-  ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
-  : "all day";
-
-async function loadCalendar() {
+async function fetchHistory() {
   try {
-    const c = await api("/api/calendar");
-    if (!c.connected) {
-      $("#calendar-body").innerHTML = '<span class="muted">Connect Google to see events</span>';
-      return;
-    }
-    const block = (label, evs) => {
-      const filtered = evs.filter((e) => !e.error);
-      return `<div class="label" style="margin:6px 0 4px">${label}</div>`
-        + (filtered.length
-          ? filtered.map((e) => `<div class="list-item"><span class="time">${fmtTime(e.start)}</span><span>${esc(e.title)}</span></div>`).join("")
-          : `<div class="muted small">Nothing scheduled</div>`);
-    };
-    $("#calendar-body").innerHTML = block("Today", c.today) + block("Tomorrow", c.tomorrow);
-  } catch (e) { console.warn("calendar", e); }
+    const msgs = await apiGet("/api/conversation");
+    if (!Array.isArray(msgs)) return;
+    const log = document.getElementById("chat-log");
+    if (!log) return;
+    msgs.slice(-20).forEach(m => appendMsg(m.role === "user" ? "user" : "ai", m.content));
+    scrollChat();
+  } catch { /* silent */ }
 }
 
-$("#event-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const start = new Date($("#ev-start").value);
-  const end   = new Date(start.getTime() + 3600e3);
-  const isoLocal = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 19);
-  try {
-    await api("/api/calendar", { method: "POST", body: {
-      title: $("#ev-title").value, start: isoLocal(start), end: isoLocal(end) } });
-    toast("📅 Event added"); e.target.reset(); loadCalendar();
-  } catch (err) { toast("Calendar error: " + err.message); }
-});
-
-async function loadInbox() {
-  try {
-    const m = await api("/api/emails");
-    if (!m.connected) {
-      $("#inbox-body").innerHTML = '<span class="muted">Connect Google to see emails</span>';
-      return;
-    }
-    const emails = m.emails.filter((e) => !e.error);
-    $("#inbox-body").innerHTML = emails.length
-      ? emails.slice(0, 6).map((e) =>
-        `<div class="list-item"><div>
-           <strong class="small">${esc((e.from || "").replace(/<.*>/, "").trim())}</strong><br>
-           <span class="small muted">${esc(e.summary || e.subject)}</span>
-         </div></div>`).join("")
-      : '<span class="muted">Inbox zero 🎉</span>';
-    $("#suggested-events").innerHTML = (m.suggested_events || []).map((s) =>
-      `<div class="suggest-row">
-         <span>📅 ${esc(s.title)} — ${esc(s.start).replace("T"," ").slice(0,16)}</span>
-         <button class="btn btn-grad btn-suggest" data-ev='${esc(JSON.stringify(s))}'>Add</button>
-       </div>`).join("");
-    $$(".btn-suggest").forEach((b) => b.addEventListener("click", async () => {
-      const s = JSON.parse(b.dataset.ev);
-      try {
-        await api("/api/calendar", { method: "POST", body: { title: s.title, start: s.start, end: s.end } });
-        toast("📅 Added"); b.disabled = true; b.textContent = "✓"; loadCalendar();
-      } catch (err) { toast("Error: " + err.message); }
-    }));
-  } catch (e) { console.warn("inbox", e); }
-}
-
-/* ── Goals ──────────────────────────────────────────────────────────────── */
-async function loadGoals() {
-  try {
-    const goals = await api("/api/goals");
-    _lastGoalsPct = goals.length ? Math.round(goals.reduce((s, g) => s + g.progress, 0) / goals.length) : 0;
-    _refreshContribBars();
-    $("#goals-body").innerHTML = goals.length
-      ? goals.map((g) => `<div class="goal-row">
-          <div class="goal-top"><span>${esc(g.title)}</span><span class="mono">${g.progress}%</span></div>
-          <div class="progress"><div class="progress-fill" style="width:${g.progress}%"></div></div>
-          <input type="range" min="0" max="100" value="${g.progress}" data-id="${g.id}" class="goal-slider">
-        </div>`).join("")
-      : '<span class="muted">No goals yet</span>';
-    $$(".goal-slider").forEach((s) => s.addEventListener("change", async () => {
-      await api("/api/goals/" + s.dataset.id, { method: "PATCH", body: { progress: +s.value } });
-      loadGoals();
-    }));
-  } catch (e) { console.warn("goals", e); }
-}
-
-$("#goal-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  await api("/api/goals", { method: "POST", body: { title: $("#goal-title").value } });
-  e.target.reset(); loadGoals();
-});
-
-$("#review-btn").addEventListener("click", async () => {
-  const body = $("#review-body");
-  body.classList.remove("hidden");
-  body.textContent = "Generating weekly review…";
-  const r = await api("/api/review");
-  body.textContent = r.content;
-});
-
-/* ── Reflection ─────────────────────────────────────────────────────────── */
-$("#refl-score").addEventListener("input", (e) => ($("#refl-score-label").textContent = e.target.value));
-
-$("#reflection-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  await api("/api/reflection", { method: "POST", body: {
-    score: +$("#refl-score").value, content: $("#refl-text").value } });
-  toast("📝 Reflection saved");
-  $("#refl-text").value = "";
-  loadReflections();
-});
-
-async function loadReflections() {
-  try {
-    const rs = await api("/api/reflection");
-    $("#refl-recent").innerHTML = rs.slice(0, 3).map((r) =>
-      `<div class="list-item"><span class="time">${r.date.slice(5)}</span>
-       <span>${r.score}/10 — ${esc((r.content || "").slice(0, 60))}</span></div>`).join("");
-  } catch (e) { console.warn("refl", e); }
-}
-
-/* ── Ideas ──────────────────────────────────────────────────────────────── */
-async function loadIdeas() {
-  try {
-    const ideas = await api("/api/ideas");
-    $("#ideas-body").innerHTML = ideas.slice(0, 8).map((i) =>
-      `<div class="list-item">💡 ${esc(i.content)}</div>`).join("")
-      || '<span class="muted">Capture your first idea</span>';
-  } catch (e) { console.warn("ideas", e); }
-}
-$("#idea-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  await api("/api/ideas", { method: "POST", body: { content: $("#idea-text").value } });
-  e.target.reset(); loadIdeas();
-});
-
-/* ── Notifications ──────────────────────────────────────────────────────── */
-async function loadNotifications() {
-  try {
-    const n = await api("/api/notifications");
-    const badge = $("#bell-badge");
-    const prev  = parseInt(badge.textContent) || 0;
-    badge.textContent = n.unread;
-    badge.classList.toggle("hidden", n.unread === 0);
-    if (n.unread > prev) {
-      $("#bell-btn").classList.add("badge-bounce");
-      setTimeout(() => $("#bell-btn").classList.remove("badge-bounce"), 700);
-    }
-    $("#notif-list").innerHTML = n.notifications.length
-      ? n.notifications.map((x) =>
-        `<div class="notif-item ${x.is_read ? "" : "unread"}">${esc(x.message)}
-         <span class="time">${esc(x.created_at)}</span></div>`).join("")
-      : '<div class="muted">No notifications yet</div>';
-  } catch (e) { console.warn("notif", e); }
-}
-$("#bell-btn").addEventListener("click", () => $("#notif-panel").classList.toggle("hidden"));
-$("#notif-clear").addEventListener("click", async () => {
-  await api("/api/notifications/read", { method: "POST" });
-  loadNotifications();
-});
-
-/* ── Chat + voice ───────────────────────────────────────────────────────── */
-const orb     = $("#orb");
-const chatLog = $("#chat-log");
-
-function addMsg(text, who) {
+function appendMsg(type, text) {
+  const log = document.getElementById("chat-log");
+  if (!log) return null;
   const div = document.createElement("div");
-  div.className = "msg msg-" + who;
+  div.className = `msg msg-${type}`;
   div.textContent = text;
-  chatLog.appendChild(div);
-  chatLog.scrollTo(0, 1e6);
+  log.appendChild(div);
+  scrollChat();
   return div;
 }
 
-function speak(text) {
-  if (!("speechSynthesis" in window)) return;
-  speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text.replace(/[#*_]/g, ""));
-  u.lang = "en-GB"; u.rate = 1.04;
-  u.onstart = () => (orb.className = "orb orb-speaking");
-  u.onend   = () => (orb.className = "orb orb-idle");
-  speechSynthesis.speak(u);
+function scrollChat() {
+  const log = document.getElementById("chat-log");
+  if (log) log.scrollTop = log.scrollHeight;
 }
 
-async function sendChat(message, viaVoice = false) {
-  addMsg(message, "user");
-  const aiDiv = addMsg("…", "ai");
+async function sendChat(text) {
+  appendMsg("user", text);
+  setOrbState("speaking");
   try {
-    const r = await api("/api/chat", { method: "POST", body: { message } });
-    (r.actions || []).forEach((a) => {
-      const act = document.createElement("div");
-      act.className = "msg msg-action";
-      act.textContent = "✓ " + a;
-      aiDiv.before(act);
-    });
-    if (viaVoice) speak(r.reply);
-    await typewriter(aiDiv, r.reply);
-    loadHabits(); loadScore(); loadMoney();
-  } catch (e) {
-    aiDiv.textContent = "Error: " + e.message;
+    const d = await apiPost("/api/chat", { message: text });
+    appendMsg("ai", d.reply || "");
+    if (d.actions && d.actions.length) {
+      appendMsg("action", "ACTION: " + d.actions.join(" / "));
+      loadAll();
+    }
+  } catch { /* silent */ }
+  setOrbState("idle");
+}
+
+// ── Form helpers ───────────────────────────────────────────────────────────────
+async function logWater(ml) {
+  if (!ml) ml = parseInt(document.getElementById("water-ml")?.value || 0, 10);
+  if (!ml) return;
+  await apiPost("/api/habits/water", { ml });
+  toast(`+${ml}ML LOGGED`);
+  fetchHabits();
+}
+
+async function logSleep() {
+  const h = parseFloat(document.getElementById("sleep-hours")?.value || 0);
+  if (!h) return;
+  await apiPost("/api/habits/sleep", { hours: h });
+  toast(`${h}H SLEEP LOGGED`);
+  fetchHabits();
+}
+
+async function logWeight() {
+  const kg = parseFloat(document.getElementById("weight-kg")?.value || 0);
+  if (!kg) return;
+  await apiPost("/api/gym/weight", { weight_kg: kg });
+  toast(`${kg}KG LOGGED`);
+  fetchGym();
+}
+
+async function logSpend() {
+  const amount   = parseFloat(document.getElementById("spend-amount")?.value || 0);
+  const category = document.getElementById("spend-category")?.value || "other";
+  const note     = document.getElementById("spend-note")?.value || "";
+  if (!amount) return;
+  await apiPost("/api/money", { amount, category, note });
+  toast(`£${amount.toFixed(2)} LOGGED`);
+  fetchMoney();
+}
+
+async function saveReflection() {
+  const score   = parseInt(document.getElementById("refl-score-in")?.value || 5, 10);
+  const content = document.getElementById("refl-content")?.value || "";
+  await apiPost("/api/reflection", { score, content });
+  toast("REFLECTION SAVED");
+  fetchReflection();
+}
+
+async function addGoal() {
+  const titleIn  = document.getElementById("goal-title");
+  const targetIn = document.getElementById("goal-target");
+  const title = titleIn?.value?.trim();
+  if (!title) return;
+  await apiPost("/api/goals", { title, target: targetIn?.value?.trim() || "" });
+  if (titleIn) titleIn.value = "";
+  toast("OBJECTIVE ADDED");
+  fetchGoals();
+}
+
+async function addIdea() {
+  const input = document.getElementById("idea-input");
+  const content = input?.value?.trim();
+  if (!content) return;
+  await apiPost("/api/ideas", { content });
+  if (input) input.value = "";
+  toast("IDEA LOGGED");
+  fetchIdeas();
+}
+
+async function refreshBriefing() {
+  const btn = document.getElementById("briefing-refresh-btn");
+  if (btn) btn.classList.add("btn-spinning");
+  try {
+    const d = await apiGet("/api/briefing?refresh=1");
+    const el = document.getElementById("briefing-text");
+    if (el) el.textContent = d.plain_text || d.content || "—";
+  } finally {
+    if (btn) btn.classList.remove("btn-spinning");
   }
 }
 
-$("#chat-form").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const v = $("#chat-input").value.trim();
-  if (!v) return;
-  $("#chat-input").value = "";
-  sendChat(v);
-});
-
-/* Voice via orb */
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognizing = false;
-orb.addEventListener("click", () => {
-  if (!SR) { toast("Voice not supported in this browser"); return; }
-  if (recognizing) return;
-  const rec = new SR();
-  rec.lang = "en-GB"; rec.interimResults = false;
-  recognizing = true;
-  orb.className = "orb orb-listening";
-  $("#orb-hint").textContent = "listening…";
-  rec.onresult = (e) => {
-    const transcript = e.results[0][0].transcript;
-    document.body.dataset.tab = "chat";
-    navBtns.forEach((b) => {
-      const isChat = b.dataset.tab === "chat";
-      b.classList.toggle("active", isChat);
-      if (isChat) moveNavPill(b);
-    });
-    sendChat(transcript, true);
-  };
-  rec.onend = () => {
-    recognizing = false;
-    if (!orb.classList.contains("orb-speaking")) orb.className = "orb orb-idle";
-    $("#orb-hint").textContent = "tap the orb & speak — "log 500ml water", "how's my day?"";
-  };
-  rec.onerror = rec.onend;
-  rec.start();
-});
-
-/* ── Photo logging ──────────────────────────────────────────────────────── */
-$("#photo-input").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  addMsg("📷 (photo uploaded)", "user");
-  const aiDiv = addMsg("Analysing photo…", "ai");
-  const fd = new FormData();
-  fd.append("photo", file);
-  try {
-    const r = await api("/api/photo", { method: "POST", body: fd });
-    let data = null;
-    try {
-      const m = r.analysis.match(/\{[\s\S]*\}/);
-      if (m) data = JSON.parse(m[0]);
-    } catch { /* show raw */ }
-    await typewriter(aiDiv, r.analysis);
-    if (data && data.type && data.type !== "workout") {
-      const btn = document.createElement("button");
-      btn.className = "btn btn-grad";
-      btn.style.alignSelf = "center";
-      btn.textContent = "✓ Confirm & log " + data.type;
-      btn.onclick = async () => {
-        const res = await api("/api/photo/confirm", { method: "POST", body: {
-          type: data.type, amount: data.total ?? data.amount,
-          category: data.category, note: data.merchant || data.note || JSON.stringify(data).slice(0, 120) } });
-        toast(res.message || "Logged");
-        btn.remove(); loadMoney(); loadScore();
-      };
-      chatLog.appendChild(btn);
-    }
-  } catch (err) { aiDiv.textContent = "Photo error: " + err.message; }
-  e.target.value = "";
-});
-
-/* ── Conversation history ────────────────────────────────────────────────── */
-async function loadConversation() {
-  try {
-    const msgs = await api("/api/conversation");
-    msgs.slice(-10).forEach((m) => addMsg(m.content, m.role === "user" ? "user" : "ai"));
-  } catch (e) { console.warn("conv", e); }
+// ── HTTP helpers ───────────────────────────────────────────────────────────────
+async function apiGet(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
 }
 
-/* ── Boot ────────────────────────────────────────────────────────────────── */
-loadWeather();
-loadScore();
-loadHabits();
-loadBots();
-loadBodyWeight();
-loadPBs();
-loadMoney();
-loadNews();
-loadGoals();
-loadReflections();
-loadIdeas();
-loadNotifications();
-loadConversation();
-loadBriefing();
-loadCalendar();
-loadInbox();
+async function apiPost(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
 
-setInterval(loadBots, 120e3);
-setInterval(loadNotifications, 60e3);
+// ── Utility ────────────────────────────────────────────────────────────────────
+function toast(msg, ms = 2200) {
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), ms);
+}
+
+function esc(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function fmtTime(dt) {
+  if (!dt) return "—";
+  try { return new Date(dt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }); }
+  catch { return "—"; }
+}
+
+function fmtTs(dt) {
+  if (!dt) return "—";
+  try {
+    const d = new Date(dt);
+    const diffH = (Date.now() - d) / 3600000;
+    if (diffH < 1)  return `${Math.floor(diffH * 60)}m`;
+    if (diffH < 24) return `${Math.floor(diffH)}h`;
+    return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }).toUpperCase();
+  } catch { return "—"; }
+}
