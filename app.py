@@ -11,6 +11,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+# Google often returns scopes in a different order / adds `openid`, which makes
+# oauthlib raise "Scope has changed". Relaxing this is the standard fix and is
+# safe — we still only ever request the SCOPES we ask for.
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
@@ -338,15 +342,19 @@ def api_add_event():
     return jsonify(result), status
 
 
+# Canonical callback path is /auth/google/callback. This MUST match exactly
+# (scheme, host, path, no trailing slash) what's set in BOTH the Railway
+# GOOGLE_REDIRECT_URI env var AND the Google Cloud Console "Authorized redirect
+# URIs". The default below is the production URL.
 _REDIRECT_URI = os.environ.get(
     "GOOGLE_REDIRECT_URI",
-    "https://asfa-production.up.railway.app/oauth/callback",
+    "https://asfa-production.up.railway.app/auth/google/callback",
 )
 
 
 @app.route("/auth/google")
 def auth_google():
-    print("EXACT REDIRECT URI:", _REDIRECT_URI, flush=True)
+    logger.info("OAuth start — redirect_uri=%s", _REDIRECT_URI)
     flow = get_flow(_REDIRECT_URI)
     auth_url, state = flow.authorization_url(
         access_type="offline", prompt="consent", include_granted_scopes="true")
@@ -354,14 +362,24 @@ def auth_google():
     return redirect(auth_url)
 
 
+# Primary callback + backward-compatible alias for the old /oauth/callback path.
+@app.route("/auth/google/callback")
 @app.route("/oauth/callback")
 def oauth_callback():
+    # Use the SAME configured redirect_uri that auth_google sent to Google — it
+    # must match exactly at token exchange. (request.base_url can arrive as http
+    # behind Railway's TLS proxy and would mismatch the https URI.)
     flow = get_flow(_REDIRECT_URI)
+    # Behind the proxy the inbound URL may be http; force https so the `code`
+    # exchange's redirect_uri comparison lines up with what Google issued.
+    auth_response = request.url.replace("http://", "https://", 1)
     try:
-        flow.fetch_token(authorization_response=request.url)
+        flow.fetch_token(authorization_response=auth_response)
         save_credentials(flow.credentials)
     except Exception as e:
+        logger.error("OAuth callback failed (redirect_uri=%s): %s", _REDIRECT_URI, e)
         return f"OAuth error: {e}", 400
+    logger.info("OAuth success — credentials saved.")
     return redirect("/")
 
 

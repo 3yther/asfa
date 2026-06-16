@@ -43,10 +43,16 @@ python app.py               # http://localhost:5000
    - Add yourself as a **test user** (stays in "Testing" mode — fine for personal use).
 4. **Credentials → Create credentials → OAuth client ID**:
    - Type: **Web application**
-   - Authorized redirect URIs:
-     - `http://localhost:5000/oauth/callback` (local)
-     - `https://YOUR-APP.up.railway.app/oauth/callback` (production)
-5. Copy the client ID/secret into `.env`, restart, and click **Connect Google** in the header.
+   - Authorized redirect URIs (must match `GOOGLE_REDIRECT_URI` **exactly** — no trailing slash):
+     - `http://localhost:5000/auth/google/callback` (local)
+     - `https://asfa-production.up.railway.app/auth/google/callback` (production)
+5. Copy the client ID/secret into `.env`, set `GOOGLE_REDIRECT_URI` to the matching URL,
+   restart, and click **Connect Google** in the header.
+
+> Note: ASFA requests the **full `calendar`** scope (not `calendar.readonly`) because it
+> also *adds* events (the "Add mission" form and email→event suggestions). Keep `calendar`
+> in the consent screen scopes or event creation will fail. The old `/oauth/callback`
+> path still works as an alias, but `/auth/google/callback` is canonical.
 
 ## Telegram bot setup
 
