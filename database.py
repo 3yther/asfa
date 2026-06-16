@@ -136,6 +136,12 @@ def init_db():
                 is_read INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
             )""",
+            """CREATE TABLE IF NOT EXISTS hydration_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                amount_ml INTEGER NOT NULL,
+                logged_at TEXT DEFAULT (datetime('now'))
+            )""",
             """CREATE TABLE IF NOT EXISTS kv_store (
                 key TEXT PRIMARY KEY,
                 value TEXT
@@ -189,6 +195,33 @@ def get_habits(days: int = 7):
                 "SELECT * FROM habits WHERE date >= date('now', ?) ORDER BY date DESC",
                 (f"-{days} days",))
         return [dict(r) for r in cur.fetchall()]
+
+
+def log_hydration(date: str, amount_ml: int, logged_at: str = None):
+    """Append a hydration ledger entry. Keeps a per-event audit trail in
+    addition to the rolled-up habits.water_ml total."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if logged_at:
+            cur.execute(
+                f"INSERT INTO hydration_log (date, amount_ml, logged_at) VALUES ({ph},{ph},{ph})",
+                (date, amount_ml, logged_at))
+        else:
+            cur.execute(
+                f"INSERT INTO hydration_log (date, amount_ml) VALUES ({ph},{ph})",
+                (date, amount_ml))
+
+
+def get_hydration_total(date: str) -> int:
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT COALESCE(SUM(amount_ml), 0) AS total FROM hydration_log WHERE date = {ph}",
+            (date,))
+        row = cur.fetchone()
+        return int(row["total"]) if row and row["total"] is not None else 0
 
 
 def get_water_streak():

@@ -32,6 +32,32 @@ function wireControls() {
   if (bell) bell.addEventListener("click", toggleNotif);
   const notifClear = document.getElementById("notif-clear");
   if (notifClear) notifClear.addEventListener("click", () => { markRead(); fetchNotifications(); });
+  // Hydration quick-add buttons (+250 / +500 / +750).
+  document.querySelectorAll(".water-add").forEach(btn => {
+    btn.addEventListener("click", () => addWater(parseInt(btn.dataset.ml, 10)));
+  });
+}
+
+// ── Hydration ───────────────────────────────────────────────────────────────────
+const WATER_TARGET = 2000;
+
+async function addWater(ml) {
+  if (!ml || ml <= 0) return;
+  const buttons = document.querySelectorAll(".water-add");
+  buttons.forEach(b => (b.disabled = true));
+  try {
+    const d = await apiPost("/api/asfa/water-intake", {
+      amount: ml,
+      timestamp: new Date().toISOString(),
+    });
+    if (d.error) throw new Error(d.error);
+    renderWater(d.total_ml || 0, d.target_ml || WATER_TARGET, d.streak || 0);
+    toast(`+${ml}ML — ${d.total_ml}/${d.target_ml || WATER_TARGET}ML`);
+  } catch (err) {
+    toast("WATER LOG FAILED");
+  } finally {
+    buttons.forEach(b => (b.disabled = false));
+  }
 }
 
 function playBriefing() {
@@ -251,12 +277,10 @@ function buildScoreTicks() {
 function updateWaterArc(ml, targetMl) {
   const arc = document.getElementById("water-arc");
   if (!arc) return;
-  const r = 44;
-  const circumference = 2 * Math.PI * r * (270 / 360); // 270° arc
-  const pct = Math.min(ml / targetMl, 1);
-  const offset = circumference * (1 - pct);
-  arc.style.strokeDasharray = circumference;
-  arc.style.strokeDashoffset = offset;
+  // Matches the SVG: r=40 → full circumference 251.3, visible 270° arc = 188.5.
+  const FULL = 251.3, VISIBLE = 188.5;
+  const pct = Math.min(ml / (targetMl || WATER_TARGET), 1);
+  arc.style.strokeDasharray = `${(VISIBLE * pct).toFixed(1)} ${FULL}`;
 
   let colour;
   if (pct < 0.5) colour = "rgba(124,58,237,0.9)";
@@ -472,17 +496,17 @@ async function fetchHabits() {
   try {
     const d = await apiGet("/api/habits");
     const today = d.today || {};
-    renderWater(today.water_ml || 0, 2500, d.water_streak || 0);
+    renderWater(today.water_ml || 0, WATER_TARGET, d.water_streak || 0);
     renderSleep(today.sleep_hours || 0);
   } catch { /* silent */ }
 }
 
 function renderWater(ml, target, streak) {
   updateWaterArc(ml, target);
-  const valEl = document.getElementById("water-val");
-  if (valEl) valEl.textContent = `${ml}ml`;
+  const numEl = document.getElementById("water-num");
+  if (numEl) numEl.textContent = ml;
   const strkEl = document.getElementById("water-streak");
-  if (strkEl) strkEl.textContent = streak;
+  if (strkEl) strkEl.textContent = streak ? `🔥 ${streak}` : "";
 }
 
 function renderSleep(hours) {

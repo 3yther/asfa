@@ -250,6 +250,43 @@ def api_emails():
     return jsonify({"connected": True, "emails": emails, "suggested_events": suggestions})
 
 
+# ── ASFA: water / hydration intake ────────────────────────────────────────────
+
+@app.route("/api/asfa/water-intake", methods=["POST"])
+def api_water_intake():
+    """Log a hydration entry. Body: {"amount": <ml int>, "timestamp": <iso?>}.
+    Writes the hydration_log ledger AND the rolled-up habits total so the gauge,
+    daily score, and briefing all stay in sync. Returns the updated daily total."""
+    d = request.get_json(force=True) or {}
+    try:
+        amount = int(d.get("amount", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "amount must be an integer (ml)"}), 400
+    if amount <= 0:
+        return jsonify({"error": "amount must be positive"}), 400
+
+    when = datetime.now()
+    ts_raw = d.get("timestamp")
+    if ts_raw:
+        try:
+            when = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+        except ValueError:
+            pass  # fall back to now() on an unparseable timestamp
+    date = when.strftime("%Y-%m-%d")
+
+    db.log_hydration(date, amount, when.isoformat())
+    db.log_water(date, amount)  # keep habits gauge / score / briefing consistent
+    db.kv_set("last_water_ts", datetime.now().isoformat())
+
+    return jsonify({
+        "ok": True,
+        "amount": amount,
+        "total_ml": db.get_hydration_total(date),
+        "target_ml": 2000,
+        "streak": db.get_water_streak(),
+    })
+
+
 # ── ASFA: email draft generator ───────────────────────────────────────────────
 
 @app.route("/api/asfa/draft-reply", methods=["POST"])
