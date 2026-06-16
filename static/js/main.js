@@ -432,10 +432,10 @@ async function fetchBots() {
   }
 }
 
-function renderBotLinks(links) {
+function renderBotLinks(links, active) {
   links = links || {};
   return `
-  <div class="bot-links">
+  <div class="bot-links${active ? " is-active" : ""}">
     <a class="bot-link" href="${esc(links.crypto || "#")}" target="_blank" rel="noopener">
       <span class="bot-link-icon">◈</span>
       <span class="bot-link-name">CRYPTO BOT</span>
@@ -451,7 +451,7 @@ function renderBotLinks(links) {
 
 function renderTradingActivity(d) {
   d = d || {};
-  let html = renderBotLinks(d.links);
+  let html = renderBotLinks(d.links, d.online);
 
   if (!d.online) {
     return html + `<div class="t-offline">> LIVE STATS OFFLINE${d.error ? " — " + esc(d.error) : ""}</div>`;
