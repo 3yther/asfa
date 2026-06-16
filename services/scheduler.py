@@ -10,8 +10,8 @@ from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 
 import database as db
-from services import telegram_bot
-from services.bots import get_bots_status
+from services import alerts, insights, telegram_bot
+from services.bots import get_bots_status, get_trading_activity
 
 logger = logging.getLogger(__name__)
 _scheduler = None
@@ -35,6 +35,29 @@ def morning_briefing():
         _notify(f"☀️ Morning briefing ready.\n\n{b['text'][:3500]}", "briefing")
     except Exception as e:
         logger.error(f"morning briefing failed: {e}")
+    # Proactive pattern check rides along with the morning briefing.
+    proactive_check()
+
+
+def proactive_check():
+    """Run predictive-alert rules and push anything concerning. Deduped so the
+    same alert isn't re-sent multiple times in one day."""
+    try:
+        metrics = insights.gather_metrics()
+        fired = insights.predictive_alerts(metrics)
+    except Exception as e:
+        logger.error(f"proactive check failed: {e}")
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    sent_key = f"alerts_sent_{today}"
+    already = set((db.kv_get(sent_key) or "").split("||")) - {""}
+    for a in fired:
+        msg = a["message"]
+        if msg in already:
+            continue
+        alerts.send_alert(msg, kind=a.get("kind", "alert"))
+        already.add(msg)
+    db.kv_set(sent_key, "||".join(already))
 
 
 def bedtime_reminder():
@@ -115,6 +138,81 @@ def poll_bot_trades():
             _notify(f"🤖 {name} positions changed: {before} → {current}", "trade")
 
 
+def _build_daily_summary() -> str:
+    """Compose the auto end-of-day summary: trades, habits met/missed,
+    tomorrow's calendar, one actionable insight. Each section is safe."""
+    from services.gcal import get_tomorrow_events
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    lines = [f"🛰️ ASFA Daily Summary — {datetime.now().strftime('%A, %d %B %Y')}", ""]
+
+    # Today's trades / bot performance
+    try:
+        trading = get_trading_activity()
+        if trading.get("online"):
+            p = trading.get("portfolio") or {}
+            sig = trading.get("latest_signal")
+            lines.append("TRADING")
+            if p:
+                lines.append(f"  Equity ${p.get('equity','?')}  P&L ${p.get('total_pnl','?')} ({p.get('total_pnl_pct','?')}%)")
+            if sig:
+                lines.append(f"  Latest: {sig.get('symbol')} MSS {sig.get('direction')} @ {sig.get('price')} [{sig.get('regime')}]")
+        else:
+            lines.append("TRADING\n  Bots offline")
+    except Exception as e:
+        logger.warning("summary trading failed: %s", e)
+
+    # Habits met / missed
+    try:
+        habits = db.get_habits(1)
+        h = next((x for x in habits if x["date"] == today), {})
+        water = h.get("water_ml", 0) or 0
+        sleep = h.get("sleep_hours", 0) or 0
+        lines.append("")
+        lines.append("HABITS")
+        lines.append(f"  Water {'✅' if water >= 2000 else '❌'} {water}/2000ml")
+        lines.append(f"  Sleep {'✅' if sleep >= 7 else '❌'} {sleep}h")
+    except Exception as e:
+        logger.warning("summary habits failed: %s", e)
+
+    # Tomorrow's calendar
+    try:
+        events = [e for e in get_tomorrow_events() if "error" not in e]
+        lines.append("")
+        lines.append("TOMORROW")
+        if events:
+            for e in events[:5]:
+                lines.append(f"  {e.get('start','?')} — {e.get('title','?')}")
+        else:
+            lines.append("  Nothing scheduled")
+    except Exception as e:
+        logger.warning("summary calendar failed: %s", e)
+
+    # One actionable insight
+    try:
+        ins = insights.generate_insights()
+        if ins:
+            lines.append("")
+            lines.append("INSIGHT")
+            lines.append(f"  💡 {ins[0]}")
+    except Exception as e:
+        logger.warning("summary insight failed: %s", e)
+
+    return "\n".join(lines)
+
+
+def daily_summary():
+    """21:00 UTC — auto-send the end-of-day summary across all channels.
+    The user never has to ask for this."""
+    try:
+        body = _build_daily_summary()
+        alerts.send_alert(body, kind="summary",
+                          subject="ASFA Daily Summary", email=True)
+        logger.info("Daily summary sent.")
+    except Exception as e:
+        logger.error(f"daily summary failed: {e}")
+
+
 def weekly_review():
     from services.ai import generate_weekly_review
     try:
@@ -139,6 +237,8 @@ def start_scheduler():
     sched.add_job(bedtime_reminder, "cron", day_of_week="sun,sat", hour=0, minute=0)
     sched.add_job(market_open_reminder, "cron", day_of_week="mon-fri", hour=14, minute=0)
     sched.add_job(reflection_prompt, "cron", hour=22, minute=0)
+    # Autonomous end-of-day summary — auto-sent, no user action required.
+    sched.add_job(daily_summary, "cron", hour=21, minute=0, timezone="UTC")
     sched.add_job(water_check, "interval", minutes=30)
     sched.add_job(poll_bot_trades, "interval", minutes=5)
     sched.add_job(weekly_review, "cron", day_of_week="sun", hour=18, minute=0)

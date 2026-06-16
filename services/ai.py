@@ -253,6 +253,7 @@ def generate_briefing(data: dict) -> dict:
     habits_avg = data.get("habits_avg") or {}
     goals = data.get("goals") or []
     trading = data.get("trading") or {}
+    insights = data.get("insights") or []
 
     # --- Section text (each independently safe) ---------------------------------
     weather_text = (
@@ -298,6 +299,9 @@ Cover these sections in this order, skipping any that have no data:
 5. GOALS:
 {goals_text}
 6. TRADING BOTS: {bots_text}
+
+DETECTED PATTERNS (weave these in naturally, don't just list them):
+{chr(10).join(f"- {i}" for i in insights) or "- none"}
 
 Write a warm, motivating briefing in 3-4 short paragraphs that flows naturally
 through the above. Be specific with numbers. Use "you" not "Amir". End with one

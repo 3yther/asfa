@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 
 import database as db
-from services import ai
+from services import ai, insights
 from services.bots import get_trading_activity
 from services.gcal import get_todays_events, get_tomorrow_events
 from services.gmail import get_unread_emails
@@ -59,6 +59,10 @@ def build_briefing(force: bool = False) -> dict:
     trading = _safe("trading", get_trading_activity, {})
     headlines = _safe("news", get_top_news, [])
 
+    # Autonomous pattern detection — 1-2 insights woven into every briefing.
+    metrics = _safe("metrics", insights.gather_metrics, {})
+    detected = _safe("insights", lambda: insights.generate_insights(metrics), [])
+
     result = ai.generate_briefing({
         "weather": weather,
         "events_today": events_today,
@@ -67,8 +71,11 @@ def build_briefing(force: bool = False) -> dict:
         "habits_avg": habits_avg,
         "goals": goals,
         "trading": trading,
+        "insights": detected,
     })
     content = result["content"]
+    if detected:
+        content += "\n\n🧠 Patterns:\n" + "\n".join(f"• {i}" for i in detected)
     if headlines:
         content += "\n\n📰 Headlines:\n" + "\n".join(
             f"• {h['title']}" for h in headlines[:4])
