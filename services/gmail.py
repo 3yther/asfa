@@ -33,7 +33,16 @@ def get_flow(redirect_uri=None):
     config = dict(CLIENT_CONFIG)
     if redirect_uri:
         config["web"]["redirect_uris"] = [redirect_uri]
-    return Flow.from_client_config(config, scopes=SCOPES, redirect_uri=redirect_uri or config["web"]["redirect_uris"][0])
+    # Confidential web client (we send a client_secret), so PKCE is not needed.
+    # Disable code_verifier autogeneration: auth_google and oauth_callback build
+    # separate Flow instances, so a PKCE verifier created during authorization_url
+    # would be lost before fetch_token, causing a "Missing code verifier" error.
+    return Flow.from_client_config(
+        config,
+        scopes=SCOPES,
+        redirect_uri=redirect_uri or config["web"]["redirect_uris"][0],
+        autogenerate_code_verifier=False,
+    )
 
 
 def save_credentials(creds):
