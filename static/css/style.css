@@ -733,3 +733,43 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
   #ideas-card { grid-column: span 2; }
 }
 @media (min-width: 761px) { .bottom-nav { display: none; } }
+
+/* ── Trading-bot links (briefing card) ─────────────────────────────────────── */
+.bot-links { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 480px) { .bot-links { grid-template-columns: 1fr; } }
+.bot-link {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; text-decoration: none;
+  border: 1px solid rgba(6,182,212,.3); border-radius: 8px;
+  background: rgba(6,182,212,.05); color: var(--text);
+  font-size: .68rem; letter-spacing: 1px; transition: all .15s;
+}
+.bot-link:hover { border-color: var(--cyan); background: rgba(6,182,212,.14); transform: translateY(-1px); }
+.bot-link-icon { color: var(--cyan); font-size: .9rem; }
+.bot-link-name { flex: 1; font-weight: 600; }
+.bot-link-go { color: var(--purple); font-size: .58rem; letter-spacing: 1px; }
+
+/* ── Email cards + draft generator ─────────────────────────────────────────── */
+.email-card {
+  padding: 9px 10px; margin-bottom: 8px;
+  border: 1px solid rgba(124,58,237,.18); border-radius: 8px;
+  background: rgba(124,58,237,.04);
+}
+.email-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.email-from { color: var(--cyan); font-size: .62rem; letter-spacing: .5px; }
+.email-subject { font-size: .82rem; font-weight: 600; color: var(--text); margin: 2px 0; }
+.email-summary { font-size: .72rem; line-height: 1.4; }
+.email-actions { margin-top: 6px; }
+.email-draft-btn { font-size: .55rem; padding: 4px 9px; }
+.email-draft {
+  margin-top: 8px; padding: 9px 10px;
+  border-left: 2px solid var(--cyan); background: rgba(6,182,212,.05); border-radius: 4px;
+}
+.draft-text { font-size: .74rem; line-height: 1.5; white-space: pre-wrap; color: var(--text); }
+.draft-edit {
+  width: 100%; min-height: 70px; margin-top: 4px; resize: vertical;
+  background: rgba(0,0,0,.4); border: 1px solid rgba(6,182,212,.3); border-radius: 4px;
+  color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: .74rem; padding: 6px;
+}
+.draft-actions { display: flex; gap: 6px; margin-top: 7px; }
+.draft-actions .btn { font-size: .55rem; padding: 4px 9px; }

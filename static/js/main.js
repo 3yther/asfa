@@ -15,7 +15,32 @@ document.addEventListener("DOMContentLoaded", () => {
   loadAll();
   spawnParticles();
   setStatusDate();
+  wireControls();
+  // Trading-bot data auto-refreshes every 10 minutes.
+  setInterval(fetchBots, 10 * 60 * 1000);
 });
+
+// ── Header / card controls ──────────────────────────────────────────────────────
+function wireControls() {
+  const refresh = document.getElementById("briefing-refresh");
+  if (refresh) refresh.addEventListener("click", refreshBriefing);
+  const play = document.getElementById("briefing-play");
+  if (play) play.addEventListener("click", playBriefing);
+  const botsRefresh = document.getElementById("bots-refresh");
+  if (botsRefresh) botsRefresh.addEventListener("click", fetchBots);
+  const bell = document.getElementById("bell-btn");
+  if (bell) bell.addEventListener("click", toggleNotif);
+  const notifClear = document.getElementById("notif-clear");
+  if (notifClear) notifClear.addEventListener("click", () => { markRead(); fetchNotifications(); });
+}
+
+function playBriefing() {
+  const el = document.getElementById("briefing-body");
+  const text = el ? el.textContent : "";
+  if (!text || !("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+}
 
 // ── Clock ──────────────────────────────────────────────────────────────────────
 function initClock() {
@@ -307,8 +332,8 @@ function loadAll() {
 async function fetchBriefing() {
   try {
     const d = await apiGet("/api/briefing");
-    const el = document.getElementById("briefing-text");
-    if (el) el.textContent = d.plain_text || d.content || "— NO SIGNAL —";
+    const el = document.getElementById("briefing-body");
+    if (el) el.textContent = d.text || d.content || "— NO SIGNAL —";
     const uv = document.getElementById("uptime-val");
     if (uv) uv.textContent = uptime();
     const ls = document.getElementById("last-sync");
@@ -372,49 +397,74 @@ async function fetchBots() {
   const body = document.getElementById("bots-body");
   if (!body) return;
   try {
-    const d = await apiGet("/api/bots");
-    body.innerHTML = botRow("STOCK-SCANNER // SIGNAL PROC.", d.scanner);
+    const d = await apiGet("/api/asfa/bot-status");
+    body.innerHTML = renderTradingActivity(d);
   } catch {
-    body.innerHTML = `<div class="t-offline">> CONNECTION FAILED</div>`;
+    // Even on failure, fall back to the static dashboard links.
+    body.innerHTML = renderBotLinks({
+      crypto: "https://stock-scanner-production-0b0d.up.railway.app/crypto",
+      scanner: "https://stock-scanner-production-0b0d.up.railway.app/scanner",
+    }) + `<div class="t-offline">> LIVE STATS OFFLINE</div>`;
   }
 }
 
-function botRow(name, b) {
-  const online = b && b.online;
+function renderBotLinks(links) {
+  links = links || {};
+  return `
+  <div class="bot-links">
+    <a class="bot-link" href="${esc(links.crypto || "#")}" target="_blank" rel="noopener">
+      <span class="bot-link-icon">◈</span>
+      <span class="bot-link-name">CRYPTO BOT</span>
+      <span class="bot-link-go">OPEN ▸</span>
+    </a>
+    <a class="bot-link" href="${esc(links.scanner || "#")}" target="_blank" rel="noopener">
+      <span class="bot-link-icon">⬡</span>
+      <span class="bot-link-name">STOCK SCANNER</span>
+      <span class="bot-link-go">OPEN ▸</span>
+    </a>
+  </div>`;
+}
 
-  if (!online) {
-    return `
-    <div class="terminal">
-      <div class="terminal-titlebar">
-        <div class="terminal-dots"><span></span><span></span><span></span></div>
-        <span class="terminal-name">${name}</span>
-        <span class="live-badge neg">&bull; OFFLINE</span>
-      </div>
-      <div class="terminal-body">
-        <div class="t-offline">> SIGNAL LOST — ${esc((b && b.error) || "NO RESPONSE")}</div>
-      </div>
-    </div>`;
+function renderTradingActivity(d) {
+  d = d || {};
+  let html = renderBotLinks(d.links);
+
+  if (!d.online) {
+    return html + `<div class="t-offline">> LIVE STATS OFFLINE${d.error ? " — " + esc(d.error) : ""}</div>`;
   }
 
-  const equity    = b.equity    || b.portfolio_value || "—";
-  const pnl       = b.pnl      || b.daily_pnl       || b.total_pnl || "—";
-  const positions = b.positions || b.open_positions  || 0;
-  const pnlNum    = parseFloat(pnl);
-  const pnlClass  = isNaN(pnlNum) ? "" : (pnlNum >= 0 ? "pos" : "neg");
+  const rows = [];
+  const p = d.portfolio;
+  if (p) {
+    const pnl = p.total_pnl;
+    const pnlNum = parseFloat(pnl);
+    const pnlClass = isNaN(pnlNum) ? "" : (pnlNum >= 0 ? "pos" : "neg");
+    const pct = (p.total_pnl_pct != null) ? ` (${p.total_pnl_pct}%)` : "";
+    rows.push(`<div class="t-row"><span class="t-label">EQUITY      :</span><span class="t-val glow">$${esc(p.equity)}</span></div>`);
+    rows.push(`<div class="t-row"><span class="t-label">TOTAL P&amp;L  :</span><span class="t-val ${pnlClass}">$${esc(pnl)}${pct}</span></div>`);
+  }
+  const sig = d.latest_signal;
+  if (sig) {
+    rows.push(`<div class="t-row"><span class="t-label">SIGNAL      :</span><span class="t-val">${esc(sig.symbol)} MSS ${esc(sig.direction)} @ ${esc(sig.price)}</span></div>`);
+    if (sig.regime) rows.push(`<div class="t-row"><span class="t-label">REGIME      :</span><span class="t-val">${esc(sig.regime)}</span></div>`);
+    if (sig.time) rows.push(`<div class="t-row"><span class="t-label">SIGNAL TIME :</span><span class="t-val">${fmtTs(sig.time)}</span></div>`);
+  } else if (d.regime) {
+    const rg = Object.entries(d.regime).map(([k, v]) => `${esc(k)}:${esc(v)}`).join("  ");
+    rows.push(`<div class="t-row"><span class="t-label">REGIME      :</span><span class="t-val">${rg}</span></div>`);
+  }
 
-  return `
-  <div class="terminal">
-    <div class="terminal-titlebar">
-      <div class="terminal-dots"><span></span><span></span><span></span></div>
-      <span class="terminal-name">${name}</span>
-      <span class="live-badge"><div class="pulse-dot"></div> LIVE</span>
-    </div>
-    <div class="terminal-body">
-      <div class="t-row"><span class="t-label">EQUITY         :</span><span class="t-val glow">${esc(equity)}</span></div>
-      <div class="t-row"><span class="t-label">DAILY P&amp;L    :</span><span class="t-val ${pnlClass}">${esc(pnl)}</span></div>
-      <div class="t-row"><span class="t-label">OPEN POSITIONS :</span><span class="t-val">${positions}</span></div>
-    </div>
-  </div>`;
+  if (rows.length) {
+    html += `
+    <div class="terminal" style="margin-top:10px">
+      <div class="terminal-titlebar">
+        <div class="terminal-dots"><span></span><span></span><span></span></div>
+        <span class="terminal-name">CRYPTO BOT // LIVE</span>
+        <span class="live-badge"><div class="pulse-dot"></div> LIVE</span>
+      </div>
+      <div class="terminal-body">${rows.join("")}</div>
+    </div>`;
+  }
+  return html;
 }
 
 // ── Habits (water + sleep) ─────────────────────────────────────────────────────
@@ -446,35 +496,119 @@ function renderSleep(hours) {
 
 // ── Calendar ───────────────────────────────────────────────────────────────────
 async function fetchCalendar() {
-  const el = document.getElementById("calendar-list");
+  const el = document.getElementById("calendar-body");
   if (!el) return;
   try {
     const d = await apiGet("/api/calendar");
     if (!d.connected) { el.innerHTML = `<div class="list-item muted mono">// GOOGLE NOT LINKED</div>`; return; }
     const events = [...(d.today || []), ...(d.tomorrow || [])];
     el.innerHTML = events.length
-      ? events.map(e => `<div class="list-item"><span class="time">${fmtTime(e.start)}</span><span>${esc(e.summary)}</span></div>`).join("")
+      ? events.map(e => `<div class="list-item"><span class="time">${fmtTime(e.start)}</span><span>${esc(e.title)}</span></div>`).join("")
       : `<div class="list-item muted mono">// SCHEDULE CLEAR</div>`;
   } catch { el.innerHTML = `<div class="list-item muted">—</div>`; }
 }
 
-// ── Inbox ──────────────────────────────────────────────────────────────────────
+// ── Inbox (with AI summaries + Draft Reply) ─────────────────────────────────────
 async function fetchEmails() {
-  const el = document.getElementById("inbox-list");
+  const el = document.getElementById("inbox-body");
   if (!el) return;
   try {
     const d = await apiGet("/api/emails");
-    if (!d.connected) { el.innerHTML = `<div class="list-item muted mono">// COMMS NOT LINKED</div>`; return; }
-    const emails = d.emails || [];
-    el.innerHTML = emails.slice(0, 5).map(e =>
-      `<div class="list-item"><span class="time">${esc((e.from || "").split("@")[0])}</span><a href="#">${esc(e.subject || "—")}</a></div>`
-    ).join("") || `<div class="list-item muted mono">// INBOX CLEAR</div>`;
-    if (d.suggested_events && d.suggested_events.length) {
+    if (!d.connected) { el.innerHTML = `<div class="list-item muted mono">// COMMS NOT LINKED — <a href="/auth/google">CONNECT GOOGLE</a></div>`; return; }
+    const emails = (d.emails || []).slice(0, 5);
+    el.innerHTML = emails.length
+      ? emails.map(emailCard).join("")
+      : `<div class="list-item muted mono">// INBOX CLEAR</div>`;
+    // Stash full email objects on their cards for the draft handler.
+    el.querySelectorAll(".email-card").forEach((card, i) => { card.__email = emails[i]; });
+
+    const sugWrap = document.getElementById("suggested-events");
+    if (sugWrap && d.suggested_events && d.suggested_events.length) {
       const ev = d.suggested_events[0];
-      el.innerHTML += `<div class="suggest-row"><span>${esc(ev.title)}</span><button class="btn btn-ghost" style="font-size:.55rem;padding:4px 8px;" onclick="addSuggested(this)">ADD EVENT</button></div>`;
-      el.querySelector(".suggest-row button").__ev = ev;
+      sugWrap.innerHTML = `<div class="suggest-row"><span>📅 ${esc(ev.title)}</span><button class="btn btn-ghost" style="font-size:.55rem;padding:4px 8px;" onclick="addSuggested(this)">ADD EVENT</button></div>`;
+      sugWrap.querySelector(".suggest-row button").__ev = ev;
+    } else if (sugWrap) {
+      sugWrap.innerHTML = "";
     }
-  } catch { el.innerHTML = `<div class="list-item muted">—</div>`; }
+  } catch { el.innerHTML = `<div class="list-item muted mono">// COMMS LINK FAILED</div>`; }
+}
+
+function emailCard(e) {
+  const sender = esc((e.from || "").replace(/<.*>/, "").trim() || (e.from || "").split("@")[0]);
+  return `
+  <div class="email-card">
+    <div class="email-head">
+      <span class="email-from mono">${sender}</span>
+      <span class="time">${fmtTs(e.date)}</span>
+    </div>
+    <div class="email-subject">${esc(e.subject || "—")}</div>
+    <div class="email-summary muted">${esc(e.summary || e.snippet || "")}</div>
+    <div class="email-actions">
+      <button class="btn btn-ghost email-draft-btn" onclick="draftReply(this)">✎ DRAFT REPLY</button>
+    </div>
+    <div class="email-draft hidden"></div>
+  </div>`;
+}
+
+// ── Email draft generator ───────────────────────────────────────────────────────
+async function draftReply(btn) {
+  const card = btn.closest(".email-card");
+  const email = card && card.__email;
+  if (!email) return;
+  const box = card.querySelector(".email-draft");
+  btn.disabled = true;
+  btn.textContent = "✎ DRAFTING…";
+  box.classList.remove("hidden");
+  box.innerHTML = `<span class="muted mono">GENERATING REPLY…</span>`;
+  try {
+    const d = await apiPost("/api/asfa/draft-reply", { email_id: email.id });
+    if (d.error) throw new Error(d.error);
+    renderDraft(box, d.draft || "");
+  } catch (err) {
+    box.innerHTML = `<span class="muted mono">// DRAFT FAILED — ${esc(err.message)}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "✎ DRAFT REPLY";
+  }
+}
+
+function renderDraft(box, draft) {
+  box.innerHTML = `
+    <div class="draft-text mono">${esc(draft)}</div>
+    <textarea class="draft-edit hidden">${esc(draft)}</textarea>
+    <div class="draft-actions">
+      <button class="btn btn-ghost" onclick="copyDraft(this)">⧉ COPY TO GMAIL</button>
+      <button class="btn btn-ghost" onclick="editDraft(this)">✎ EDIT</button>
+    </div>`;
+}
+
+function copyDraft(btn) {
+  const box = btn.closest(".email-draft");
+  const edit = box.querySelector(".draft-edit");
+  const view = box.querySelector(".draft-text");
+  const text = (edit && !edit.classList.contains("hidden")) ? edit.value : (view ? view.textContent : "");
+  navigator.clipboard?.writeText(text).then(
+    () => toast("DRAFT COPIED — PASTE INTO GMAIL"),
+    () => toast("COPY FAILED")
+  );
+}
+
+function editDraft(btn) {
+  const box = btn.closest(".email-draft");
+  const edit = box.querySelector(".draft-edit");
+  const view = box.querySelector(".draft-text");
+  if (!edit || !view) return;
+  if (edit.classList.contains("hidden")) {
+    edit.classList.remove("hidden");
+    view.classList.add("hidden");
+    edit.focus();
+    btn.textContent = "✓ DONE";
+  } else {
+    view.textContent = edit.value;
+    edit.classList.add("hidden");
+    view.classList.remove("hidden");
+    btn.textContent = "✎ EDIT";
+  }
 }
 
 async function addSuggested(btn) {
@@ -758,12 +892,15 @@ async function addIdea() {
 }
 
 async function refreshBriefing() {
-  const btn = document.getElementById("briefing-refresh-btn");
+  const btn = document.getElementById("briefing-refresh");
+  const el = document.getElementById("briefing-body");
   if (btn) btn.classList.add("btn-spinning");
+  if (el) el.innerHTML = `<span class="muted">REGENERATING BRIEFING…</span>`;
   try {
     const d = await apiGet("/api/briefing?refresh=1");
-    const el = document.getElementById("briefing-text");
-    if (el) el.textContent = d.plain_text || d.content || "—";
+    if (el) el.textContent = d.text || d.content || "—";
+  } catch {
+    if (el) el.innerHTML = `<span class="muted">// BRIEFING UNAVAILABLE</span>`;
   } finally {
     if (btn) btn.classList.remove("btn-spinning");
   }

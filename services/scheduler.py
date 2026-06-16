@@ -133,7 +133,8 @@ def start_scheduler():
     if _scheduler is not None:
         return _scheduler
     sched = BackgroundScheduler(timezone="Europe/London", daemon=True)
-    sched.add_job(morning_briefing, "cron", hour=6, minute=30)
+    # Morning briefing at 09:00 UTC (explicit tz so it's stable year-round).
+    sched.add_job(morning_briefing, "cron", hour=9, minute=0, timezone="UTC")
     sched.add_job(bedtime_reminder, "cron", day_of_week="mon-fri", hour=22, minute=30)
     sched.add_job(bedtime_reminder, "cron", day_of_week="sun,sat", hour=0, minute=0)
     sched.add_job(market_open_reminder, "cron", day_of_week="mon-fri", hour=14, minute=0)

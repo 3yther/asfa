@@ -1,6 +1,26 @@
+"""Trading-bot integration — pulls live state from the stock-scanner app.
+
+Everything degrades gracefully: if the scanner is offline or an endpoint is
+missing, we still return the dashboard links so the briefing card is useful.
+"""
+import logging
+
 import requests
 
-SCANNER_URL = "https://stock-scanner-production-0b0d.up.railway.app/api/status"
+logger = logging.getLogger("asfa.bots")
+
+# Base of the deployed stock-scanner / crypto-bot app.
+SCANNER_BASE = "https://stock-scanner-production-0b0d.up.railway.app"
+SCANNER_URL = f"{SCANNER_BASE}/api/status"
+TJR_STATUS_URL = f"{SCANNER_BASE}/api/tjr/status"
+TJR_PORTFOLIO_URL = f"{SCANNER_BASE}/api/tjr/portfolio"
+
+# Clickable dashboard links shown on the briefing card.
+LINKS = {
+    "crypto": f"{SCANNER_BASE}/crypto",
+    "scanner": f"{SCANNER_BASE}/scanner",
+}
+
 TIMEOUT = 8
 
 
@@ -9,9 +29,11 @@ def _fetch(url, name):
         r = requests.get(url, timeout=TIMEOUT)
         r.raise_for_status()
         data = r.json()
-        data["bot_name"] = name
-        data["online"] = True
-        return data
+        if isinstance(data, dict):
+            data["bot_name"] = name
+            data["online"] = True
+            return data
+        return {"bot_name": name, "online": True, "data": data}
     except requests.Timeout:
         return {"bot_name": name, "online": False, "error": "timeout"}
     except Exception as e:
@@ -23,13 +45,92 @@ def get_bots_status():
     return {"scanner": scanner}
 
 
+def _latest_signal(tjr: dict):
+    """Pick the most recent MSS across symbols from /api/tjr/status."""
+    if not tjr or not tjr.get("online"):
+        return None
+    best = None
+    for sym, s in (tjr.get("symbols") or {}).items():
+        mss = s.get("latest_mss")
+        if not mss:
+            continue
+        cand = {
+            "symbol": sym,
+            "direction": mss.get("direction"),
+            "time": mss.get("time"),
+            "price": mss.get("price"),
+            "regime": s.get("regime"),
+            "sweep_status": s.get("sweep_status"),
+            "active_fvgs": s.get("active_fvg_count"),
+        }
+        if best is None or str(cand["time"] or "") > str(best["time"] or ""):
+            best = cand
+    return best
+
+
+def get_trading_activity():
+    """Live trading snapshot for the ASFA briefing card.
+
+    Always returns the dashboard links. Adds live stats (regime, latest signal,
+    portfolio P&L) when the scanner endpoints respond. Never raises.
+    """
+    result = {
+        "links": dict(LINKS),
+        "online": False,
+        "regime": None,
+        "regime_filter": None,
+        "latest_signal": None,
+        "portfolio": None,
+    }
+
+    tjr = _fetch(TJR_STATUS_URL, "Crypto Bot")
+    if tjr.get("online"):
+        result["online"] = True
+        result["in_session"] = tjr.get("in_session")
+        result["regime_filter"] = tjr.get("regime_filter")
+        # Per-symbol regime summary, e.g. {"BTC": "TREND", "ETH": "RANGE"}
+        result["regime"] = {
+            sym: s.get("regime") for sym, s in (tjr.get("symbols") or {}).items()
+        }
+        result["latest_signal"] = _latest_signal(tjr)
+    else:
+        result["error"] = tjr.get("error")
+
+    portfolio = _fetch(TJR_PORTFOLIO_URL, "Crypto Bot")
+    if portfolio.get("online"):
+        result["online"] = True
+        result["portfolio"] = {
+            "equity": portfolio.get("equity"),
+            "balance": portfolio.get("balance"),
+            "holdings_value": portfolio.get("holdings_value"),
+            "total_pnl": portfolio.get("total_pnl"),
+            "total_pnl_pct": portfolio.get("total_pnl_pct"),
+            "holdings": portfolio.get("holdings"),
+        }
+
+    return result
+
+
 def get_bots_summary_text(status=None):
-    if status is None:
-        status = get_bots_status()
-    b = status["scanner"]
-    if not b.get("online"):
-        return f"Stock Scanner: offline ({b.get('error', '')})"
-    equity = b.get("equity") or b.get("portfolio_value") or "?"
-    pnl = b.get("pnl") or b.get("daily_pnl") or b.get("total_pnl") or "?"
-    positions = b.get("positions") or b.get("open_positions") or 0
-    return f"Stock Scanner: equity={equity}, P&L={pnl}, positions={positions}"
+    """One-line text summary used inside the AI context / briefing prompt."""
+    activity = get_trading_activity()
+    if not activity["online"]:
+        return f"Trading bots: offline ({activity.get('error', 'no response')})"
+
+    parts = []
+    p = activity.get("portfolio")
+    if p:
+        parts.append(
+            f"Crypto Bot equity=${p.get('equity', '?')}, "
+            f"P&L=${p.get('total_pnl', '?')} ({p.get('total_pnl_pct', '?')}%)"
+        )
+    sig = activity.get("latest_signal")
+    if sig:
+        parts.append(
+            f"latest signal: {sig.get('symbol')} MSS {sig.get('direction')} "
+            f"@ {sig.get('price')} [{sig.get('regime')}]"
+        )
+    if activity.get("regime"):
+        regimes = ", ".join(f"{k}:{v}" for k, v in activity["regime"].items())
+        parts.append(f"regime: {regimes}")
+    return "; ".join(parts) or "Crypto Bot online"

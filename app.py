@@ -16,10 +16,11 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 
 import database as db
 from services import ai
-from services.bots import get_bots_status
+from services.bots import get_bots_status, get_trading_activity
 from services.briefing import build_briefing
 from services.gcal import add_event, get_todays_events, get_tomorrow_events
-from services.gmail import get_flow, get_unread_emails, is_authenticated, save_credentials
+from services.gmail import (get_email_by_id, get_flow, get_unread_emails,
+                            is_authenticated, save_credentials)
 from services.news import get_finance_news, get_top_news
 from services.weather import get_forecast, get_weather
 
@@ -249,6 +250,37 @@ def api_emails():
     return jsonify({"connected": True, "emails": emails, "suggested_events": suggestions})
 
 
+# ── ASFA: email draft generator ───────────────────────────────────────────────
+
+@app.route("/api/asfa/draft-reply", methods=["POST"])
+def api_draft_reply():
+    """Compose (but never send) a professional reply to an email."""
+    if not is_authenticated():
+        return jsonify({"error": "Gmail not connected"}), 400
+    d = request.get_json(force=True)
+    email_id = d.get("email_id")
+    if not email_id:
+        return jsonify({"error": "email_id required"}), 400
+    email = get_email_by_id(email_id)
+    if "error" in email:
+        return jsonify({"error": email["error"]}), 502
+    draft = ai.draft_reply(email)
+    return jsonify({
+        "draft": draft,
+        "subject": email.get("subject", ""),
+        "to": email.get("from", ""),
+    })
+
+
+# ── ASFA: trading-bot status ──────────────────────────────────────────────────
+
+@app.route("/api/asfa/bot-status")
+def api_bot_status():
+    """Live trading snapshot for the briefing card. Always returns dashboard
+    links; adds live stats when the stock-scanner app is reachable."""
+    return jsonify(get_trading_activity())
+
+
 @app.route("/api/calendar")
 def api_calendar():
     if not is_authenticated():
@@ -411,14 +443,27 @@ def api_notifications_read():
 
 # ── Background services (started once, even under gunicorn) ───────────────────
 
+def _generate_startup_briefing():
+    """Warm the morning briefing once at boot so the home page has it ready.
+    Runs in a thread — a slow AI/Gmail call must not block app startup."""
+    try:
+        build_briefing(force=True)
+        logger.info("Startup briefing generated.")
+    except Exception as e:
+        logger.error(f"startup briefing failed: {e}")
+
+
 def _start_background():
     if os.environ.get("ASFA_BG_STARTED"):
         return
     os.environ["ASFA_BG_STARTED"] = "1"
+    import threading
+
     from services.scheduler import start_scheduler
     from services.telegram_bot import start_bot
     start_scheduler()
     start_bot()
+    threading.Thread(target=_generate_startup_briefing, daemon=True).start()
 
 
 _start_background()

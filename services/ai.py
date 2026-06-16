@@ -171,6 +171,35 @@ def summarise_emails(emails: list) -> list:
     return summaries
 
 
+def draft_reply(email: dict) -> str:
+    """Compose a concise, professional reply to an email. Does NOT send."""
+    c = _get_client()
+    if not c:
+        return "ANTHROPIC_API_KEY not set — can't draft a reply."
+    content = (email.get("body") or email.get("snippet") or "").strip()
+    context = (
+        f"From: {email.get('from','')}\n"
+        f"Subject: {email.get('subject','')}\n\n{content}"
+    )
+    try:
+        resp = c.messages.create(
+            model=MODEL,
+            max_tokens=300,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Write a professional, concise reply to this email "
+                    "(1-2 sentences max). Return only the reply body — no "
+                    "subject line, no greeting placeholder like [Name], and no "
+                    "commentary:\n\n" + context
+                ),
+            }],
+        )
+        return resp.content[0].text.strip()
+    except Exception as e:
+        return f"Draft error: {e}"
+
+
 def detect_events_in_emails(emails: list) -> list:
     """Scan email subjects/snippets for dates & times → suggest calendar events."""
     c = _get_client()
@@ -208,47 +237,92 @@ Use 1-hour duration if no end time. Return [] if nothing found."""
         return []
 
 
-def generate_briefing(weather, events, emails, bot_status) -> dict:
+def generate_briefing(data: dict) -> dict:
+    """Build the morning briefing from already-gathered, fault-tolerant sections.
+
+    `data` keys (any may be missing/empty — the briefing degrades gracefully):
+      weather, events_today, events_tomorrow, emails, habits_avg, goals, trading
+    """
     c = _get_client()
     today = datetime.now().strftime("%A, %d %B %Y")
-    context = build_context_block()
 
-    bots_text = get_bots_summary_text(bot_status)
-    events_text = "\n".join(f"- {e.get('start','?')}: {e.get('title','?')}" for e in events) or "No events today"
-    emails_text = "\n".join(f"- {e.get('from','?')}: {e.get('subject','?')}" for e in emails[:5]) or "No unread emails"
+    weather = data.get("weather") or {}
+    events_today = data.get("events_today") or []
+    events_tomorrow = data.get("events_tomorrow") or []
+    emails = data.get("emails") or []
+    habits_avg = data.get("habits_avg") or {}
+    goals = data.get("goals") or []
+    trading = data.get("trading") or {}
+
+    # --- Section text (each independently safe) ---------------------------------
+    weather_text = (
+        f"{weather.get('temp','?')}°C, {weather.get('description','?')}"
+        if weather else "unavailable"
+    )
+    cal_today = "\n".join(
+        f"- {e.get('start','?')}: {e.get('title','?')}" for e in events_today
+    ) or "No events today"
+    cal_tomorrow = "\n".join(
+        f"- {e.get('start','?')}: {e.get('title','?')}" for e in events_tomorrow
+    ) or "Nothing scheduled"
+    emails_text = "\n".join(
+        f"- {e.get('from','?')}: {e.get('subject','?')}"
+        + (f" — {e['summary']}" if e.get("summary") else "")
+        for e in emails[:5]
+    ) or "No unread emails"
+    habits_text = (
+        f"7-day avg — water {habits_avg.get('water_ml', 0):.0f}ml, "
+        f"sleep {habits_avg.get('sleep_hours', 0):.1f}h, "
+        f"water streak {habits_avg.get('water_streak', 0)} days"
+        if habits_avg else "No habit data"
+    )
+    goals_text = "\n".join(
+        f"- {g.get('title','?')}: {g.get('progress',0)}%" for g in goals
+    ) or "No goals set"
+    try:
+        bots_text = get_bots_summary_text(trading)
+    except Exception:
+        bots_text = "unavailable"
 
     prompt = f"""Generate a concise morning briefing for Amir for {today}.
 
-Weather: {weather.get('temp','?')}°C, {weather.get('description','?')}
-Calendar today:\n{events_text}
-Unread emails:\n{emails_text}
-Trading bots:\n{bots_text}
+Cover these sections in this order, skipping any that have no data:
+1. WEATHER: {weather_text}
+2. CALENDAR — today:
+{cal_today}
+   tomorrow:
+{cal_tomorrow}
+3. EMAILS (top unread):
+{emails_text}
+4. HABITS: {habits_text}
+5. GOALS:
+{goals_text}
+6. TRADING BOTS: {bots_text}
 
-{context}
+Write a warm, motivating briefing in 3-4 short paragraphs that flows naturally
+through the above. Be specific with numbers. Use "you" not "Amir". End with one
+clear focus for the day based on the goals/progress."""
 
-Write a warm, motivating briefing in 3-4 paragraphs:
-1. Good morning + weather + day overview
-2. Email highlights + calendar
-3. Trading bots P&L + habit progress
-4. One specific motivating focus for the day based on their goals/progress
-
-Keep it personal, concise, and energising. Use "you" not "Amir"."""
+    # Plain fallback used when AI is unavailable — still useful & non-crashing.
+    fallback = (
+        f"Good morning! It's {today}. {weather_text} in London. "
+        f"{len(events_today)} event(s) today, {len(emails)} unread email(s). "
+        f"{habits_text}."
+    )
 
     if not c:
-        plain = f"Good morning! It's {today}. {weather.get('description','?')}, {weather.get('temp','?')}°C in London. You have {len(events)} events today."
-        return {"content": plain, "plain_text": plain}
+        return {"content": fallback, "plain_text": fallback}
 
     try:
         resp = c.messages.create(
             model=MODEL,
-            max_tokens=600,
-            messages=[{"role": "user", "content": prompt}]
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
         )
         text = resp.content[0].text.strip()
         return {"content": text, "plain_text": text}
     except Exception as e:
-        plain = f"Good morning! It's {today}. {weather.get('description','?')}, {weather.get('temp','?')}°C in London."
-        return {"content": plain, "plain_text": plain, "error": str(e)}
+        return {"content": fallback, "plain_text": fallback, "error": str(e)}
 
 
 def compute_daily_score() -> dict:
