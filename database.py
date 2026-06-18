@@ -189,7 +189,7 @@ def get_habits(days: int = 7):
         cur = conn.cursor()
         if USE_POSTGRES:
             cur.execute(
-                "SELECT * FROM habits WHERE date >= NOW() - INTERVAL '%s days' ORDER BY date DESC", (days,))
+                "SELECT * FROM habits WHERE CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '%s days' ORDER BY date DESC", (days,))
         else:
             cur.execute(
                 "SELECT * FROM habits WHERE date >= date('now', ?) ORDER BY date DESC",
@@ -263,7 +263,7 @@ def get_spending(days: int = 7):
         cur = conn.cursor()
         if USE_POSTGRES:
             cur.execute(
-                "SELECT * FROM spending WHERE date >= NOW() - INTERVAL '%s days' ORDER BY date DESC",
+                "SELECT * FROM spending WHERE CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '%s days' ORDER BY date DESC",
                 (days,))
         else:
             cur.execute(
@@ -347,7 +347,7 @@ def get_daily_scores(days: int = 7):
         cur = conn.cursor()
         if USE_POSTGRES:
             cur.execute(
-                "SELECT * FROM daily_scores WHERE date >= NOW() - INTERVAL '%s days' ORDER BY date",
+                "SELECT * FROM daily_scores WHERE CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '%s days' ORDER BY date",
                 (days,))
         else:
             cur.execute(
@@ -431,7 +431,7 @@ def get_body_weight(days=30):
         cur = conn.cursor()
         if USE_POSTGRES:
             cur.execute(
-                "SELECT * FROM body_weight WHERE date >= NOW() - INTERVAL '%s days' ORDER BY date",
+                "SELECT * FROM body_weight WHERE CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '%s days' ORDER BY date",
                 (days,))
         else:
             cur.execute(
