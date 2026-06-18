@@ -18,7 +18,16 @@ def _get_client():
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
             return None
-        client = anthropic.Anthropic(api_key=api_key)
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+        except TypeError as e:
+            if 'proxies' in str(e) or 'unexpected keyword argument' in str(e):
+                raise RuntimeError(
+                    f"Anthropic SDK incompatibility detected. "
+                    f"Expected anthropic==0.109.1, but got incompatible version. "
+                    f"Error: {e}. Update requirements.txt and redeploy."
+                ) from e
+            raise
     return client
 
 

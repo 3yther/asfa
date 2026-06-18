@@ -1,6 +1,6 @@
 flask==3.0.3
 flask-cors==4.0.1
-anthropic==0.34.2
+anthropic==0.109.1
 google-auth==2.34.0
 google-auth-oauthlib==1.2.1
 google-auth-httplib2==0.2.0
