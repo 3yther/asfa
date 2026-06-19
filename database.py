@@ -469,6 +469,57 @@ def count_supplements_today(date: str) -> int:
     return len(get_supplements_today(date))
 
 
+# ── Focus sessions (Lock In) ────────────────────────────────────────────────────
+# Self-initialising, same as supplements: init_db() isn't called at boot, so the
+# table is created lazily on first use (idempotent, SQLite + Postgres).
+
+_FOCUS_READY = False
+
+
+def _ensure_focus_table():
+    global _FOCUS_READY
+    if _FOCUS_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS focus_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        duration_seconds INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+    )"""
+    if USE_POSTGRES:
+        stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        stmt = stmt.replace("datetime('now')", "NOW()")
+    with get_db() as conn:
+        conn.cursor().execute(stmt)
+    _FOCUS_READY = True
+
+
+def log_focus_session(started_at, ended_at, duration_seconds):
+    _ensure_focus_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"INSERT INTO focus_sessions (started_at, ended_at, duration_seconds) "
+            f"VALUES ({ph},{ph},{ph})",
+            (started_at, ended_at, int(duration_seconds)))
+
+
+def get_focus_seconds_today(date):
+    """Total focused seconds for sessions that started on `date`."""
+    _ensure_focus_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT COALESCE(SUM(duration_seconds),0) AS s FROM focus_sessions "
+            f"WHERE started_at LIKE {ph}",
+            (f"{date}%",))
+        row = cur.fetchone()
+        return int((row["s"] if row else 0) or 0)
+
+
 # ── Body weight ────────────────────────────────────────────────────────────────
 
 def log_body_weight(date, weight_kg):

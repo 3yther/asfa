@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
@@ -435,6 +435,86 @@ def api_spotify_play():
     """Resume playback on the user's active/default device. Always 200 so the
     frontend can surface the friendly message regardless of outcome."""
     return jsonify(spotify.resume_playback())
+
+
+@app.route("/api/asfa/spotify/focus")
+def api_spotify_focus():
+    """Start a mood playlist by search query (Think Mode ambient / Lock In focus)."""
+    query = request.args.get("q", "deep focus")
+    return jsonify(spotify.play_query(query))
+
+
+# ── Focus: "What now?" line + Lock In sessions ─────────────────────────────────
+
+@app.route("/api/asfa/focus-line")
+def api_focus_line():
+    """One prioritised sentence for the top of the dashboard.
+    Priority: market open imminent > unreplied emails > supplements > water > clear."""
+    text, urgent = None, False
+
+    # 1. US market opens within the next hour (09:30 ET == 14:30 UTC).
+    now_utc = datetime.now(timezone.utc)
+    market_open = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
+    secs = (market_open - now_utc).total_seconds()
+    if 0 < secs <= 3600:
+        mins = max(1, int(secs // 60))
+        text, urgent = f"Markets open in {mins} minute{'s' if mins != 1 else ''}.", True
+
+    # 2. Unread emails waiting on a reply.
+    if not text and is_authenticated():
+        try:
+            emails = [e for e in get_unread_emails() if "error" not in e]
+            n = len(emails)
+            if n > 0:
+                text = f"{n} email{'s' if n != 1 else ''} waiting on your reply."
+                urgent = n >= 3
+        except Exception:
+            pass
+
+    # 3. Supplements not logged once it's past 09:00 local.
+    if not text and datetime.now().hour >= 9:
+        try:
+            if db.count_supplements_today(_today()) < len(db.SUPPLEMENTS):
+                text = "You haven't logged your supplements yet."
+        except Exception:
+            pass
+
+    # 4. No water logged today.
+    if not text:
+        try:
+            habits = db.get_habits(1)
+            today_h = next((h for h in habits if h["date"] == _today()), {})
+            if (today_h.get("water_ml") or 0) <= 0:
+                text = "You haven't logged any water today."
+        except Exception:
+            pass
+
+    # 5. Nothing pressing.
+    if not text:
+        text = "All clear. Nice work."
+
+    return jsonify({"text": text, "urgent": urgent})
+
+
+@app.route("/api/asfa/focus/today")
+def api_focus_today():
+    return jsonify({"focus_seconds_today": db.get_focus_seconds_today(_today())})
+
+
+@app.route("/api/asfa/focus/session", methods=["POST"])
+def api_focus_session():
+    """Log a completed Lock In session. Body: {duration_seconds}. The server
+    timestamps it (now - duration → now) so the day-rollover stays consistent."""
+    d = request.get_json(force=True) or {}
+    try:
+        dur = int(d.get("duration_seconds", 0))
+    except (TypeError, ValueError):
+        dur = 0
+    if dur > 0:
+        ended = datetime.now()
+        started = ended - timedelta(seconds=dur)
+        db.log_focus_session(started.isoformat(), ended.isoformat(), dur)
+    return jsonify({"ok": True, "focus_seconds_today": db.get_focus_seconds_today(_today())})
 
 
 # ── Reflections, goals, memory ─────────────────────────────────────────────────

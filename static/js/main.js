@@ -36,6 +36,8 @@ function wireControls() {
   document.querySelectorAll(".water-add").forEach(btn => {
     btn.addEventListener("click", () => addWater(parseInt(btn.dataset.ml, 10)));
   });
+  Think.wire();
+  LockIn.wire();
 }
 
 // ── Hydration ───────────────────────────────────────────────────────────────────
@@ -351,6 +353,8 @@ function loadAll() {
   initChat();
   fetchNotifications();
   initSpotify();
+  fetchFocusLine();
+  fetchFocusToday();
 }
 
 // ── Briefing ───────────────────────────────────────────────────────────────────
@@ -817,6 +821,224 @@ function renderSpotify(s) {
     chip.title = s.device ? "Paused" : "No active device";
   }
 }
+
+// ── "What now?" focus line ───────────────────────────────────────────────────────
+async function fetchFocusLine() {
+  const el = document.getElementById("focus-line");
+  if (!el) return;
+  try {
+    const d = await apiGet("/api/asfa/focus-line");
+    el.textContent = d.text || "—";
+    el.classList.toggle("urgent", !!d.urgent);
+  } catch { el.textContent = "—"; }
+}
+
+async function fetchFocusToday() {
+  const el = document.getElementById("focus-today-chip");
+  if (!el) return;
+  try {
+    const d = await apiGet("/api/asfa/focus/today");
+    el.textContent = "◷ " + fmtFocus(d.focus_seconds_today || 0);
+  } catch { /* leave default */ }
+}
+
+function fmtFocus(secs) {
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+function fmtClock(secs) {
+  const m = Math.floor(secs / 60), s = secs % 60;
+  if (m >= 60) {
+    const h = Math.floor(m / 60);
+    return `${h}:${String(m % 60).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+// Calm ascending chime (shared by Think timer + Pomodoro transitions).
+function playChime() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    [523.25, 659.25, 783.99].forEach((f, i) => {   // C5 · E5 · G5
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = "sine"; o.frequency.value = f;
+      const t0 = ctx.currentTime + i * 0.18;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(0.16, t0 + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0006, t0 + 1.4);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(t0); o.stop(t0 + 1.5);
+    });
+    setTimeout(() => { try { ctx.close(); } catch {} }, 2200);
+  } catch { /* audio blocked — silent */ }
+}
+
+// ── THINK MODE — calm full-screen breathing space ────────────────────────────────
+const Think = (function () {
+  const C = 2 * Math.PI * 100;   // ring circumference (r=100 in the SVG viewBox)
+  let open = false, raf = 0, endAt = 0, durMs = 0, ambientOn = false;
+  const $ = (id) => document.getElementById(id);
+
+  function openMode() {
+    const m = $("think-mode");
+    if (!m || open) return;
+    open = true;
+    m.classList.add("think-open");
+    m.setAttribute("aria-hidden", "false");
+    document.body.classList.add("think-active");
+    resetRing();
+    // Defer wiring exit so the opening interaction doesn't immediately close it.
+    setTimeout(() => {
+      m.addEventListener("click", onClick);
+      document.addEventListener("keydown", onKey);
+    }, 60);
+  }
+
+  function closeMode() {
+    const m = $("think-mode");
+    if (!m || !open) return;
+    open = false;
+    m.classList.remove("think-open");
+    m.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("think-active");
+    cancelTimer();
+    m.removeEventListener("click", onClick);
+    document.removeEventListener("keydown", onKey);
+  }
+
+  function onClick(e) { if (!e.target.closest(".think-controls")) closeMode(); }
+  function onKey(e) { if (e.key === "Escape") closeMode(); }
+
+  function resetRing() {
+    const p = $("think-ring-prog");
+    if (p) { p.style.strokeDasharray = C; p.style.strokeDashoffset = 0; p.style.opacity = 0; }
+    const r = $("think-remaining"); if (r) r.textContent = "";
+  }
+  function cancelTimer() { if (raf) { cancelAnimationFrame(raf); raf = 0; } durMs = 0; }
+
+  function setTimer(min) {
+    cancelTimer();
+    durMs = min * 60 * 1000;
+    endAt = performance.now() + durMs;
+    const p = $("think-ring-prog");
+    if (p) { p.style.strokeDasharray = C; p.style.opacity = 1; }
+    tick();
+  }
+  function tick() {
+    raf = requestAnimationFrame(tick);
+    const remain = Math.max(0, endAt - performance.now());
+    const frac = durMs > 0 ? (1 - remain / durMs) : 0;   // 0→1 elapsed
+    const p = $("think-ring-prog");
+    if (p) p.style.strokeDashoffset = C * frac;           // ring depletes
+    const r = $("think-remaining");
+    if (r) {
+      const s = Math.ceil(remain / 1000);
+      r.textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+    }
+    if (remain <= 0) { cancelTimer(); playChime(); if (r) r.textContent = "DONE"; }
+  }
+
+  async function toggleAmbient() {
+    const b = $("think-ambient");
+    if (!b) return;
+    ambientOn = !ambientOn;
+    b.classList.toggle("on", ambientOn);
+    if (!ambientOn) return;
+    try {
+      const res = await apiGet("/api/asfa/spotify/focus?q=" + encodeURIComponent("ambient focus"));
+      if (!res.ok) { if (res.message) toast(res.message); ambientOn = false; b.classList.remove("on"); }
+    } catch { toast("Spotify unavailable"); ambientOn = false; b.classList.remove("on"); }
+  }
+
+  function wire() {
+    const btn = $("think-btn");
+    if (btn) btn.addEventListener("click", openMode);
+    document.querySelectorAll(".think-tbtn").forEach(b => {
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        document.querySelectorAll(".think-tbtn").forEach(x => x.classList.remove("on"));
+        b.classList.add("on");
+        setTimer(parseInt(b.dataset.min, 10));
+      });
+    });
+    const amb = $("think-ambient");
+    if (amb) amb.addEventListener("click", (e) => { e.stopPropagation(); toggleAmbient(); });
+  }
+  return { wire };
+})();
+
+// ── LOCK IN — focus session (count-up timer + music + dim) ────────────────────────
+const LockIn = (function () {
+  const WORK = 50 * 60, BREAK = 10 * 60;
+  let active = false, startTs = 0, raf = 0, pomodoro = false, phase = "work", phaseStart = 0;
+  const $ = (id) => document.getElementById(id);
+
+  async function start() {
+    if (active) return;
+    active = true; startTs = Date.now(); phaseStart = startTs; phase = "work";
+    const bar = $("lockin-bar");
+    bar.classList.add("lockin-on");
+    bar.setAttribute("aria-hidden", "false");
+    document.body.classList.add("locked-in");
+    const orb = $("orb-stage"); if (orb) orb.classList.add("orb-focus");
+    update();
+    try {
+      const res = await apiGet("/api/asfa/spotify/focus?q=" + encodeURIComponent("deep focus"));
+      if (!res.ok && res.reason !== "not_connected" && res.message) toast(res.message);
+    } catch { /* music optional */ }
+    toast("LOCKED IN");
+  }
+
+  async function end() {
+    if (!active) return;
+    active = false;
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    const dur = Math.round((Date.now() - startTs) / 1000);
+    const bar = $("lockin-bar");
+    bar.classList.remove("lockin-on");
+    bar.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("locked-in");
+    const orb = $("orb-stage"); if (orb) orb.classList.remove("orb-focus");
+    const ph = $("lockin-phase"); if (ph) ph.textContent = "";
+    try {
+      const d = await apiPost("/api/asfa/focus/session", { duration_seconds: dur });
+      const chip = $("focus-today-chip");
+      if (chip && d.focus_seconds_today != null) chip.textContent = "◷ " + fmtFocus(d.focus_seconds_today);
+    } catch { /* keep session locally even if log fails */ }
+    toast("SESSION LOGGED · " + fmtClock(dur));
+  }
+
+  function update() {
+    raf = requestAnimationFrame(update);
+    const elapsed = Math.floor((Date.now() - startTs) / 1000);
+    const t = $("lockin-time"); if (t) t.textContent = fmtClock(elapsed);
+    const ph = $("lockin-phase");
+    if (pomodoro) {
+      const inPhase = Math.floor((Date.now() - phaseStart) / 1000);
+      const limit = phase === "work" ? WORK : BREAK;
+      const left = Math.max(0, limit - inPhase);
+      if (ph) ph.textContent = (phase === "work" ? "WORK " : "BREAK ") + fmtClock(left);
+      if (left <= 0) { playChime(); phase = phase === "work" ? "break" : "work"; phaseStart = Date.now(); }
+    } else if (ph) { ph.textContent = ""; }
+  }
+
+  function togglePomo() {
+    pomodoro = !pomodoro;
+    const b = $("lockin-pomo");
+    if (b) { b.classList.toggle("on", pomodoro); b.setAttribute("aria-pressed", pomodoro ? "true" : "false"); }
+    if (pomodoro) { phase = "work"; phaseStart = Date.now(); }
+  }
+
+  function wire() {
+    const s = $("lockin-btn"); if (s) s.addEventListener("click", start);
+    const e = $("lockin-end"); if (e) e.addEventListener("click", end);
+    const p = $("lockin-pomo"); if (p) p.addEventListener("click", togglePomo);
+  }
+  return { wire };
+})();
 
 // ── Notifications ──────────────────────────────────────────────────────────────
 async function fetchNotifications() {

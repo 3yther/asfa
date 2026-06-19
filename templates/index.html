@@ -142,6 +142,16 @@
   <span class="sb-item mono" id="sb-date">——</span>
 </div>
 
+<!-- ── "What now?" focus line + focus controls ────────────────────────── -->
+<div class="focus-bar" id="focus-bar">
+  <div class="focus-line" id="focus-line">—</div>
+  <div class="focus-actions">
+    <span class="focus-today-chip" id="focus-today-chip" title="Focus time logged today">◷ 0h 0m</span>
+    <button class="fx-btn" id="think-btn" type="button">◍ THINK</button>
+    <button class="fx-btn fx-btn-mag" id="lockin-btn" type="button">▣ LOCK IN</button>
+  </div>
+</div>
+
 <!-- ── Notifications panel ────────────────────────────────────────────── -->
 <div class="notif-panel hidden" id="notif-panel">
   <div class="notif-head">
@@ -389,6 +399,41 @@
 </nav>
 
 <div class="toast hidden" id="toast"></div>
+
+<!-- ── THINK MODE — calm full-screen breathing space ──────────────────── -->
+<div id="think-mode" class="think-mode" aria-hidden="true">
+  <div class="think-orb-wrap">
+    <svg class="think-ring" viewBox="0 0 220 220" aria-hidden="true">
+      <circle class="think-ring-track" cx="110" cy="110" r="100"/>
+      <circle class="think-ring-prog" id="think-ring-prog" cx="110" cy="110" r="100"/>
+    </svg>
+    <div class="think-orb"></div>
+  </div>
+  <div class="think-text" id="think-text">Take a moment.</div>
+  <div class="think-controls" id="think-controls">
+    <div class="think-timers">
+      <button class="think-tbtn" data-min="5" type="button">5</button>
+      <button class="think-tbtn" data-min="10" type="button">10</button>
+      <button class="think-tbtn" data-min="15" type="button">15</button>
+      <button class="think-tbtn" data-min="20" type="button">20</button>
+      <span class="think-remaining mono" id="think-remaining"></span>
+    </div>
+    <button class="think-ambient" id="think-ambient" type="button">▷ AMBIENT</button>
+  </div>
+  <div class="think-exit mono">CLICK ANYWHERE · ESC TO EXIT</div>
+</div>
+
+<!-- ── LOCK IN — focus session bar ────────────────────────────────────── -->
+<div id="lockin-bar" class="lockin-bar" aria-hidden="true">
+  <span class="lockin-dot"></span>
+  <span class="lockin-label mono">FOCUS</span>
+  <span class="lockin-time mono" id="lockin-time">00:00</span>
+  <span class="lockin-phase mono" id="lockin-phase"></span>
+  <span class="lockin-spacer"></span>
+  <button class="lockin-pomo" id="lockin-pomo" type="button" aria-pressed="false">POMODORO</button>
+  <button class="lockin-end" id="lockin-end" type="button">END SESSION</button>
+</div>
+
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 
 <!-- Black-hole landing: Three.js resolved via import map; the module loads bare

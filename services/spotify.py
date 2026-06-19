@@ -197,28 +197,10 @@ def current_playback():
         return {"connected": True, "configured": True, "reason": "error"}
 
 
-def resume_playback():
-    """Resume playback on the active/default device. Returns {ok, message, reason}."""
-    if not is_configured():
-        return {"ok": False, "reason": "not_configured",
-                "message": "Spotify isn't configured on the server."}
-    if not is_connected():
-        return {"ok": False, "reason": "not_connected",
-                "message": "Connect your Spotify account to auto-play."}
-    headers = _auth_headers()
-    if not headers:
-        return {"ok": False, "reason": "reauth",
-                "message": "Spotify session expired — please reconnect."}
-    try:
-        r = requests.put(API_BASE + "/me/player/play", headers=headers, timeout=10)
-    except Exception as e:
-        logger.warning("Spotify play failed: %s", e)
-        return {"ok": False, "reason": "error", "message": "Couldn't reach Spotify."}
-
+def _interpret_play(r):
+    """Map a /play response to a structured {ok, reason, message} dict."""
     if r.status_code in (200, 202, 204):
-        return {"ok": True, "message": "Playback resumed."}
-
-    # Parse Spotify's structured error for a precise reason where possible.
+        return {"ok": True, "message": "Playback started."}
     reason = None
     msg = None
     try:
@@ -227,7 +209,6 @@ def resume_playback():
         msg = err.get("message")
     except Exception:
         pass
-
     no_device = "No Spotify device found. Open Spotify on your phone/computer and try again."
     if r.status_code == 404 or reason == "NO_ACTIVE_DEVICE":
         return {"ok": False, "reason": "no_device", "message": no_device}
@@ -241,3 +222,68 @@ def resume_playback():
         return {"ok": False, "reason": "restricted",
                 "message": msg or "Spotify Premium is required to control playback."}
     return {"ok": False, "reason": "error", "message": "Spotify error (%s)." % r.status_code}
+
+
+def _preflight():
+    """Shared connection check → (headers, error_dict). Exactly one is non-None."""
+    if not is_configured():
+        return None, {"ok": False, "reason": "not_configured",
+                      "message": "Spotify isn't configured on the server."}
+    if not is_connected():
+        return None, {"ok": False, "reason": "not_connected",
+                      "message": "Connect your Spotify account to auto-play."}
+    headers = _auth_headers()
+    if not headers:
+        return None, {"ok": False, "reason": "reauth",
+                      "message": "Spotify session expired — please reconnect."}
+    return headers, None
+
+
+def resume_playback():
+    """Resume playback on the active/default device. Returns {ok, message, reason}."""
+    headers, err = _preflight()
+    if err:
+        return err
+    try:
+        r = requests.put(API_BASE + "/me/player/play", headers=headers, timeout=10)
+    except Exception as e:
+        logger.warning("Spotify play failed: %s", e)
+        return {"ok": False, "reason": "error", "message": "Couldn't reach Spotify."}
+    return _interpret_play(r)
+
+
+def _search_playlist_uri(query, headers):
+    """Return the first playlist URI matching `query`, or None."""
+    try:
+        r = requests.get(API_BASE + "/search", headers=headers,
+                         params={"q": query, "type": "playlist", "limit": 1}, timeout=10)
+        r.raise_for_status()
+        items = (((r.json() or {}).get("playlists") or {}).get("items")) or []
+        for it in items:
+            if it and it.get("uri"):
+                return it["uri"]
+    except Exception as e:
+        logger.warning("Spotify search failed: %s", e)
+    return None
+
+
+def play_query(query):
+    """Start the first playlist matching `query` (e.g. 'deep focus', 'ambient
+    focus'). Falls back to resuming current playback if search finds nothing.
+    Same structured return shape as resume_playback()."""
+    headers, err = _preflight()
+    if err:
+        return err
+    uri = _search_playlist_uri(query, headers)
+    body = {"context_uri": uri} if uri else None
+    try:
+        r = requests.put(API_BASE + "/me/player/play", headers=headers,
+                         json=body, timeout=10)
+    except Exception as e:
+        logger.warning("Spotify play_query failed: %s", e)
+        return {"ok": False, "reason": "error", "message": "Couldn't reach Spotify."}
+    result = _interpret_play(r)
+    if result.get("ok"):
+        result["query"] = query
+        result["found_playlist"] = bool(uri)
+    return result
