@@ -6,26 +6,36 @@
 <meta name="theme-color" content="#000408">
 <title>ASFA // AI COMMAND CENTRE</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
-<!-- ── Sci-fi boot sequence (Event Horizon) ───────────────────────────────
-     Plays once per hour (sessionStorage gated). Press any key / click / tap
-     to skip. Removed from the DOM by main.js when finished. -->
+<!-- ── Cinematic boot sequence (Event Horizon) ─────────────────────────────
+     5-phase intro driven by static/js/main.js (rAF timeline). Plays once per
+     hour (sessionStorage), skips on any key/click, and removes itself from the
+     DOM when finished. prefers-reduced-motion → skipped entirely. -->
 <div id="boot-intro" class="boot-intro" aria-hidden="true">
-  <div class="boot-scanlines"></div>
-  <div class="boot-orb"></div>
-  <div class="boot-console">
-    <div class="boot-title">INITIALIZING ASFA<span class="boot-cursor">_</span></div>
-    <ul class="boot-lines">
-      <li data-line="auth">AUTH <span class="boot-dots">::</span> <span class="boot-ok">VERIFIED</span></li>
-      <li data-line="memory">MEMORY <span class="boot-dots">::</span> <span class="boot-ok">LOADED</span></li>
-      <li data-line="systems">SYSTEMS <span class="boot-dots">::</span> <span class="boot-ok">ONLINE</span></li>
-    </ul>
+  <div class="boot-particles"></div>
+  <div class="boot-grid"></div>
+  <div class="boot-line"></div>
+  <div class="boot-crt"></div>
+  <div class="boot-fragments"></div>
+  <div class="boot-vignette"></div>
+  <div class="boot-center">
+    <div class="boot-orbwrap">
+      <span class="boot-ring2 r1"></span>
+      <span class="boot-ring2 r2"></span>
+      <span class="boot-ring2 r3"></span>
+      <div class="boot-orb2"></div>
+    </div>
+    <div class="boot-brand">
+      <div class="boot-brand-line"><span id="boot-brand-title"></span><span class="boot-cur">_</span></div>
+      <div class="boot-brand-sub">AI PERSONAL ASSISTANT</div>
+    </div>
   </div>
+  <div class="boot-sweep"></div>
   <div class="boot-skip mono">PRESS ANY KEY TO SKIP</div>
 </div>
 
