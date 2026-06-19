@@ -1129,3 +1129,136 @@ body.bh-active { overflow: hidden; }
   .bh-warp { display: none; }
 }
 
+
+/* ── "What now?" focus bar + THINK / LOCK IN controls ──────────────────────────── */
+.focus-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; padding: 10px 20px;
+}
+.focus-line {
+  flex: 1; min-width: 200px;
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  font-size: .95rem; letter-spacing: .5px; color: #00d9ff;
+  text-shadow: 0 0 10px rgba(0,217,255,.35);
+}
+.focus-line.urgent { animation: fl-pulse 2s ease-in-out infinite; }
+@keyframes fl-pulse { 50% { opacity: .5; } }
+.focus-actions { display: flex; align-items: center; gap: 10px; }
+.focus-today-chip {
+  font-family: 'IBM Plex Mono', monospace; font-size: .58rem; letter-spacing: 1.5px;
+  color: var(--muted); border: 1px solid rgba(0,217,255,.2);
+  border-radius: 3px; padding: 6px 9px; white-space: nowrap;
+}
+.fx-btn {
+  font-family: 'IBM Plex Mono', monospace; font-size: .62rem; letter-spacing: 2px;
+  padding: 8px 14px; cursor: pointer; border-radius: 3px;
+  background: rgba(0,217,255,.06); border: 1px solid rgba(0,217,255,.4); color: #00d9ff;
+  transition: background .2s, box-shadow .2s, transform .2s;
+}
+.fx-btn:hover { background: rgba(0,217,255,.16); box-shadow: 0 0 16px rgba(0,217,255,.35); }
+.fx-btn-mag { background: rgba(255,0,110,.06); border-color: rgba(255,0,110,.45); color: #ff4d94; }
+.fx-btn-mag:hover { background: rgba(255,0,110,.16); box-shadow: 0 0 16px rgba(255,0,110,.4); }
+
+/* ── THINK MODE — calm full-screen view ────────────────────────────────────────── */
+.think-mode {
+  position: fixed; inset: 0; z-index: 10001;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 34px; background: #000; opacity: 0; pointer-events: none;
+  transition: opacity .9s ease;
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+}
+.think-mode.think-open { opacity: 1; pointer-events: auto; cursor: pointer; }
+.think-orb-wrap { position: relative; width: 240px; height: 240px; display: grid; place-items: center; }
+.think-orb {
+  width: 150px; height: 150px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, #05222e 0%, #000 62%);
+  box-shadow: 0 0 60px 6px rgba(0,217,255,.28), inset 0 0 50px rgba(0,217,255,.18);
+  animation: think-breathe 4s ease-in-out infinite;   /* ~4s breathing rhythm */
+}
+@keyframes think-breathe {
+  0%,100% { transform: scale(1);    box-shadow: 0 0 48px 4px rgba(0,217,255,.20), inset 0 0 40px rgba(0,217,255,.14); }
+  50%     { transform: scale(1.045); box-shadow: 0 0 82px 12px rgba(0,217,255,.42), inset 0 0 60px rgba(0,217,255,.24); }
+}
+.think-ring { position: absolute; inset: 0; width: 240px; height: 240px; transform: rotate(-90deg); }
+.think-ring-track { fill: none; stroke: rgba(0,217,255,.08); stroke-width: 2; }
+.think-ring-prog {
+  fill: none; stroke: #00d9ff; stroke-width: 2.5; stroke-linecap: round; opacity: 0;
+  filter: drop-shadow(0 0 6px rgba(0,217,255,.6));
+}
+.think-text {
+  color: rgba(0,217,255,.8); font-size: 1rem; letter-spacing: 4px;
+  opacity: 0; animation: think-text-in 2.4s ease .6s forwards;
+}
+@keyframes think-text-in { to { opacity: .8; } }
+.think-controls {
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  opacity: .5; transition: opacity .3s;
+}
+.think-controls:hover { opacity: .9; }
+.think-timers { display: flex; align-items: center; gap: 8px; }
+.think-tbtn {
+  width: 40px; height: 34px; border-radius: 3px; cursor: pointer;
+  background: transparent; border: 1px solid rgba(0,217,255,.25); color: rgba(0,217,255,.7);
+  font-family: inherit; font-size: .72rem;
+}
+.think-tbtn.on, .think-tbtn:hover { border-color: #00d9ff; color: #00d9ff; background: rgba(0,217,255,.1); }
+.think-remaining { margin-left: 8px; color: #00d9ff; font-size: .78rem; letter-spacing: 2px; }
+.think-ambient {
+  background: transparent; border: 1px solid rgba(0,217,255,.25); color: rgba(0,217,255,.7);
+  font-family: inherit; font-size: .6rem; letter-spacing: 2px; padding: 7px 14px;
+  cursor: pointer; border-radius: 3px;
+}
+.think-ambient.on { border-color: #00d9ff; color: #00d9ff; background: rgba(0,217,255,.12); }
+.think-exit {
+  position: absolute; bottom: 26px; font-size: .52rem; letter-spacing: 3px;
+  color: rgba(120,160,180,.4);
+}
+
+/* ── LOCK IN — session bar + card dimming ──────────────────────────────────────── */
+.lockin-bar {
+  position: fixed; left: 50%; bottom: 88px; transform: translateX(-50%) translateY(20px);
+  z-index: 9000; display: none; align-items: center; gap: 12px; padding: 10px 16px;
+  background: rgba(4,8,16,.92); border: 1px solid rgba(0,217,255,.4); border-radius: 6px;
+  box-shadow: 0 0 30px rgba(0,217,255,.2);
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  opacity: 0; transition: opacity .4s ease, transform .4s ease;
+}
+.lockin-bar.lockin-on { display: flex; opacity: 1; transform: translateX(-50%) translateY(0); }
+.lockin-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+  box-shadow: 0 0 8px var(--green); animation: blink-dot 2s ease-in-out infinite;
+}
+.lockin-label { font-size: .55rem; letter-spacing: 2px; color: rgba(0,217,255,.6); }
+.lockin-time { font-size: 1.1rem; letter-spacing: 2px; color: #00d9ff; text-shadow: 0 0 10px rgba(0,217,255,.5); }
+.lockin-phase { font-size: .6rem; letter-spacing: 1.5px; color: #ff4d94; }
+.lockin-spacer { width: 4px; }
+.lockin-pomo {
+  background: transparent; border: 1px solid rgba(0,217,255,.3); color: rgba(0,217,255,.7);
+  font-family: inherit; font-size: .55rem; letter-spacing: 1.5px; padding: 6px 10px;
+  cursor: pointer; border-radius: 3px;
+}
+.lockin-pomo.on { border-color: #ff4d94; color: #ff4d94; background: rgba(255,0,110,.1); }
+.lockin-end {
+  background: rgba(255,0,110,.1); border: 1px solid rgba(255,0,110,.45); color: #ff4d94;
+  font-family: inherit; font-size: .55rem; letter-spacing: 1.5px; padding: 6px 12px;
+  cursor: pointer; border-radius: 3px;
+}
+.lockin-end:hover { background: rgba(255,0,110,.2); }
+/* Dim non-essential cards during a focus session; keep the orb prominent. */
+body.locked-in #main-grid .card { opacity: .3; filter: saturate(.6); transition: opacity .6s ease; }
+body.locked-in #main-grid .card:hover { opacity: .9; }
+.orb-stage.orb-focus { animation: orb-focus-pulse 4s ease-in-out infinite; }
+@keyframes orb-focus-pulse { 50% { filter: drop-shadow(0 0 26px rgba(0,217,255,.5)); } }
+
+@media (max-width: 600px) {
+  .focus-bar { padding: 10px 14px; gap: 10px; }
+  .focus-line { font-size: .82rem; min-width: 140px; }
+  .think-orb-wrap, .think-ring { width: 200px; height: 200px; }
+  .think-orb { width: 122px; height: 122px; }
+  .lockin-bar { width: calc(100% - 24px); justify-content: center; flex-wrap: wrap; bottom: 84px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .think-orb, .focus-line.urgent, .orb-stage.orb-focus, .lockin-dot { animation: none; }
+  .think-text { animation: none; opacity: .8; }
+  .think-mode { transition: opacity .25s; }
+}
