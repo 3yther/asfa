@@ -263,6 +263,7 @@ def generate_briefing(data: dict) -> dict:
     goals = data.get("goals") or []
     trading = data.get("trading") or {}
     insights = data.get("insights") or []
+    supplements = data.get("supplements") or {}
 
     # --- Section text (each independently safe) ---------------------------------
     weather_text = (
@@ -289,6 +290,10 @@ def generate_briefing(data: dict) -> dict:
     goals_text = "\n".join(
         f"- {g.get('title','?')}: {g.get('progress',0)}%" for g in goals
     ) or "No goals set"
+    supp_text = (
+        f"{supplements.get('taken', 0)}/{supplements.get('total', 0)} taken today"
+        if supplements else "No supplement data"
+    )
     try:
         bots_text = get_bots_summary_text(trading)
     except Exception:
@@ -305,9 +310,10 @@ Cover these sections in this order, skipping any that have no data:
 3. EMAILS (top unread):
 {emails_text}
 4. HABITS: {habits_text}
-5. GOALS:
+5. SUPPLEMENTS: {supp_text}
+6. GOALS:
 {goals_text}
-6. TRADING BOTS: {bots_text}
+7. TRADING BOTS: {bots_text}
 
 DETECTED PATTERNS (weave these in naturally, don't just list them):
 {chr(10).join(f"- {i}" for i in insights) or "- none"}

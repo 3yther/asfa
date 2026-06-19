@@ -35,7 +35,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "asfa-dev-secret-change-me")
 app.config["PREFERRED_URL_SCHEME"] = "https"
 
-db.init_db()
+# db.init_db()
 
 
 def _today():
@@ -388,7 +388,7 @@ def auth_status():
     return jsonify({"google_connected": is_authenticated()})
 
 
-# ── Reflections, goals, memory, ideas ─────────────────────────────────────────
+# ── Reflections, goals, memory ─────────────────────────────────────────────────
 
 @app.route("/api/reflection", methods=["GET", "POST"])
 def api_reflection():
@@ -423,18 +423,37 @@ def api_memories():
     return jsonify(db.get_memories(20))
 
 
-@app.route("/api/ideas", methods=["GET", "POST"])
-def api_ideas():
-    if request.method == "POST":
-        db.save_idea(request.get_json(force=True)["content"])
-        return jsonify({"ok": True})
-    return jsonify(db.get_ideas())
-
-
 @app.route("/api/notes", methods=["POST"])
 def api_notes():
     db.save_voice_note(request.get_json(force=True)["content"])
     return jsonify({"ok": True})
+
+
+# ── Supplements ────────────────────────────────────────────────────────────────
+
+def _supplements_status():
+    taken = db.get_supplements_today(_today())
+    items = [{"name": key, "label": label, "taken": key in taken, "taken_at": taken.get(key)}
+             for key, label in db.SUPPLEMENTS]
+    return {"items": items, "taken_count": len(taken), "total": len(db.SUPPLEMENTS)}
+
+
+@app.route("/api/supplements", methods=["GET", "POST"])
+def api_supplements():
+    """GET → today's checklist status. POST {name, taken} → log/undo a supplement.
+    Naturally resets each day since status is filtered by today's date."""
+    if request.method == "POST":
+        d = request.get_json(force=True) or {}
+        name = (d.get("name") or "").lower()
+        if name not in {k for k, _ in db.SUPPLEMENTS}:
+            return jsonify({"error": "unknown supplement"}), 400
+        if d.get("taken", True):
+            # One log per supplement per day.
+            if name not in db.get_supplements_today(_today()):
+                db.log_supplement(name)
+        else:
+            db.remove_supplement_today(name, _today())
+    return jsonify(_supplements_status())
 
 
 # ── Weekly review ──────────────────────────────────────────────────────────────

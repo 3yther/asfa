@@ -213,6 +213,24 @@ def daily_summary():
         logger.error(f"daily summary failed: {e}")
 
 
+def supplement_reminder():
+    """Nudge if any daily supplement is still unchecked (09:00 + 20:00 local)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        taken = db.get_supplements_today(today)
+    except Exception as e:
+        logger.error(f"supplement reminder failed: {e}")
+        return
+    missing = [label for key, label in db.SUPPLEMENTS if key not in taken]
+    if not missing:
+        return
+    alerts.send_alert(
+        f"💊 Supplements — still to take today: {', '.join(missing)} "
+        f"({len(taken)}/{len(db.SUPPLEMENTS)} done).",
+        kind="supplement",
+    )
+
+
 def weekly_review():
     from services.ai import generate_weekly_review
     try:
@@ -239,6 +257,9 @@ def start_scheduler():
     sched.add_job(reflection_prompt, "cron", hour=22, minute=0)
     # Autonomous end-of-day summary — auto-sent, no user action required.
     sched.add_job(daily_summary, "cron", hour=21, minute=0, timezone="UTC")
+    # Supplement reminders (local time) — morning prompt + evening nudge.
+    sched.add_job(supplement_reminder, "cron", hour=9, minute=0)
+    sched.add_job(supplement_reminder, "cron", hour=20, minute=0)
     sched.add_job(water_check, "interval", minutes=30)
     sched.add_job(poll_bot_trades, "interval", minutes=5)
     sched.add_job(weekly_review, "cron", day_of_week="sun", hour=18, minute=0)
