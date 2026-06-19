@@ -14,6 +14,14 @@ else:
     USE_POSTGRES = False
     SQLITE_PATH = os.path.join(os.path.dirname(__file__), "asfa.db")
 
+# Canonical daily supplements: (key, display label). Shared by the API,
+# scheduler reminders, and briefing so they never drift.
+SUPPLEMENTS = [
+    ("creatine", "Creatine"),
+    ("omega3", "Omega-3 Fish Oil"),
+    ("magnesium", "Magnesium"),
+]
+
 
 @contextmanager
 def get_db():
@@ -124,11 +132,6 @@ def init_db():
                 content TEXT NOT NULL,
                 created_at TEXT DEFAULT (datetime('now'))
             )""",
-            """CREATE TABLE IF NOT EXISTS ideas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now'))
-            )""",
             """CREATE TABLE IF NOT EXISTS notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 message TEXT NOT NULL,
@@ -141,6 +144,12 @@ def init_db():
                 date TEXT NOT NULL,
                 amount_ml INTEGER NOT NULL,
                 logged_at TEXT DEFAULT (datetime('now'))
+            )""",
+            """CREATE TABLE IF NOT EXISTS supplements_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                supplement_name TEXT NOT NULL,
+                taken_at TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
             )""",
             """CREATE TABLE IF NOT EXISTS kv_store (
                 key TEXT PRIMARY KEY,
@@ -189,7 +198,7 @@ def get_habits(days: int = 7):
         cur = conn.cursor()
         if USE_POSTGRES:
             cur.execute(
-                "SELECT * FROM habits WHERE date >= NOW() - INTERVAL '%s days' ORDER BY date DESC", (days,))
+                "SELECT * FROM habits WHERE CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '%s days' ORDER BY date DESC", (days,))
         else:
             cur.execute(
                 "SELECT * FROM habits WHERE date >= date('now', ?) ORDER BY date DESC",
@@ -263,7 +272,7 @@ def get_spending(days: int = 7):
         cur = conn.cursor()
         if USE_POSTGRES:
             cur.execute(
-                "SELECT * FROM spending WHERE date >= NOW() - INTERVAL '%s days' ORDER BY date DESC",
+                "SELECT * FROM spending WHERE CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '%s days' ORDER BY date DESC",
                 (days,))
         else:
             cur.execute(
@@ -347,7 +356,7 @@ def get_daily_scores(days: int = 7):
         cur = conn.cursor()
         if USE_POSTGRES:
             cur.execute(
-                "SELECT * FROM daily_scores WHERE date >= NOW() - INTERVAL '%s days' ORDER BY date",
+                "SELECT * FROM daily_scores WHERE CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '%s days' ORDER BY date",
                 (days,))
         else:
             cur.execute(
@@ -386,7 +395,7 @@ def update_goal_progress(goal_id, progress):
         cur.execute(f"UPDATE goals SET progress = {ph} WHERE id = {ph}", (progress, goal_id))
 
 
-# ── Voice notes & ideas ────────────────────────────────────────────────────────
+# ── Voice notes ────────────────────────────────────────────────────────────────
 
 def save_voice_note(content):
     with get_db() as conn:
@@ -395,19 +404,69 @@ def save_voice_note(content):
         cur.execute(f"INSERT INTO voice_notes (content) VALUES ({ph})", (content,))
 
 
-def save_idea(content):
+# ── Supplements ────────────────────────────────────────────────────────────────
+# Self-initialising: init_db() isn't called at boot, so the table is created
+# lazily (idempotent CREATE IF NOT EXISTS) on first use, for SQLite and Postgres.
+
+_SUPPLEMENTS_READY = False
+
+
+def _ensure_supplements_table():
+    global _SUPPLEMENTS_READY
+    if _SUPPLEMENTS_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS supplements_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        supplement_name TEXT NOT NULL,
+        taken_at TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+    )"""
+    if USE_POSTGRES:
+        stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        stmt = stmt.replace("datetime('now')", "NOW()")
+    with get_db() as conn:
+        conn.cursor().execute(stmt)
+    _SUPPLEMENTS_READY = True
+
+
+def log_supplement(name: str, taken_at: str = None):
+    """Record a supplement as taken (idempotent per day handled by callers)."""
+    _ensure_supplements_table()
+    taken_at = taken_at or datetime.now().isoformat()
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
-        cur.execute(f"INSERT INTO ideas (content) VALUES ({ph})", (content,))
+        cur.execute(
+            f"INSERT INTO supplements_log (supplement_name, taken_at) VALUES ({ph},{ph})",
+            (name, taken_at))
 
 
-def get_ideas(limit=20):
+def remove_supplement_today(name: str, date: str):
+    """Undo a same-day check (uncheck the box)."""
+    _ensure_supplements_table()
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
-        cur.execute(f"SELECT * FROM ideas ORDER BY created_at DESC LIMIT {ph}", (limit,))
-        return [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            f"DELETE FROM supplements_log WHERE supplement_name = {ph} AND taken_at LIKE {ph}",
+            (name, f"{date}%"))
+
+
+def get_supplements_today(date: str) -> dict:
+    """Return {name: earliest_taken_at} for supplements taken on `date`."""
+    _ensure_supplements_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT supplement_name, MIN(taken_at) AS taken_at FROM supplements_log "
+            f"WHERE taken_at LIKE {ph} GROUP BY supplement_name",
+            (f"{date}%",))
+        return {r["supplement_name"]: r["taken_at"] for r in cur.fetchall()}
+
+
+def count_supplements_today(date: str) -> int:
+    return len(get_supplements_today(date))
 
 
 # ── Body weight ────────────────────────────────────────────────────────────────
@@ -431,7 +490,7 @@ def get_body_weight(days=30):
         cur = conn.cursor()
         if USE_POSTGRES:
             cur.execute(
-                "SELECT * FROM body_weight WHERE date >= NOW() - INTERVAL '%s days' ORDER BY date",
+                "SELECT * FROM body_weight WHERE CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '%s days' ORDER BY date",
                 (days,))
         else:
             cur.execute(

@@ -7,6 +7,7 @@ const SCORE_CIRCUMFERENCE = 2 * Math.PI * 72; // r=72
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
+  initBootIntro();
   initClock();
   initOrbCanvas();
   initOrbClick();
@@ -19,6 +20,40 @@ document.addEventListener("DOMContentLoaded", () => {
   // Trading-bot data auto-refreshes every 10 minutes.
   setInterval(fetchBots, 10 * 60 * 1000);
 });
+
+// ── Sci-fi boot intro ───────────────────────────────────────────────────────────
+// Plays the Event Horizon boot sequence on first load, then skips for an hour
+// (sessionStorage). Any key / click / tap skips it. ~2.6s total.
+function initBootIntro() {
+  const intro = document.getElementById("boot-intro");
+  if (!intro) return;
+
+  const HOUR = 60 * 60 * 1000;
+  let last = 0;
+  try { last = parseInt(sessionStorage.getItem("asfa_boot_ts") || "0", 10); } catch {}
+  if (Date.now() - last < HOUR) {
+    intro.remove();  // visited recently — straight to the dashboard
+    return;
+  }
+
+  try { sessionStorage.setItem("asfa_boot_ts", String(Date.now())); } catch {}
+
+  let done = false;
+  const dismiss = () => {
+    if (done) return;
+    done = true;
+    intro.classList.add("boot-done");
+    clearTimeout(autoTimer);
+    window.removeEventListener("keydown", dismiss);
+    intro.removeEventListener("click", dismiss);
+    setTimeout(() => intro.remove(), 600);  // let the fade finish
+  };
+
+  intro.classList.add("boot-playing");
+  const autoTimer = setTimeout(dismiss, 2600);
+  window.addEventListener("keydown", dismiss);
+  intro.addEventListener("click", dismiss);
+}
 
 // ── Header / card controls ──────────────────────────────────────────────────────
 function wireControls() {
@@ -347,7 +382,7 @@ function loadAll() {
   fetchGym();
   fetchReflection();
   fetchGoals();
-  fetchIdeas();
+  fetchSupplements();
   initChat();
   fetchNotifications();
 }
@@ -734,17 +769,44 @@ async function fetchGoals() {
   } catch { el.innerHTML = `<div class="muted">—</div>`; }
 }
 
-// ── Ideas ──────────────────────────────────────────────────────────────────────
-async function fetchIdeas() {
-  const el = document.getElementById("ideas-list");
+// ── Supplements ─────────────────────────────────────────────────────────────────
+// Daily checklist; status is filtered server-side by today's date so the
+// boxes reset naturally at the day rollover.
+async function fetchSupplements() {
+  const el = document.getElementById("supplements-body");
   if (!el) return;
   try {
-    const d = await apiGet("/api/ideas");
-    const ideas = Array.isArray(d) ? d : [];
-    el.innerHTML = ideas.slice(0, 8).map(i =>
-      `<div class="list-item"><span class="time">${fmtTs(i.created_at)}</span><span>${esc(i.content)}</span></div>`
-    ).join("") || `<div class="list-item muted mono">// NO IDEAS LOGGED</div>`;
-  } catch { /* silent */ }
+    const d = await apiGet("/api/supplements");
+    renderSupplements(el, d);
+  } catch { el.innerHTML = `<div class="muted mono">// SUPPLEMENTS OFFLINE</div>`; }
+}
+
+function renderSupplements(el, d) {
+  const items = (d && d.items) || [];
+  el.innerHTML = items.map(it => `
+    <button class="supp-row${it.taken ? " taken" : ""}" data-name="${esc(it.name)}"
+            onclick="toggleSupplement(this)" type="button">
+      <span class="supp-box">${it.taken ? "✓" : ""}</span>
+      <span class="supp-name">${esc(it.label)}</span>
+      <span class="supp-time mono">${it.taken ? fmtTime(it.taken_at) : ""}</span>
+    </button>`
+  ).join("");
+  const count = document.getElementById("supp-count");
+  if (count) count.textContent = `${d.taken_count || 0}/${d.total || items.length}`;
+}
+
+async function toggleSupplement(btn) {
+  const name = btn.dataset.name;
+  const taken = !btn.classList.contains("taken");
+  btn.disabled = true;
+  try {
+    const d = await apiPost("/api/supplements", { name, taken });
+    renderSupplements(document.getElementById("supplements-body"), d);
+    toast(taken ? "SUPPLEMENT LOGGED" : "SUPPLEMENT CLEARED");
+  } catch {
+    toast("FAILED");
+    btn.disabled = false;
+  }
 }
 
 // ── Notifications ──────────────────────────────────────────────────────────────
@@ -903,16 +965,6 @@ async function addGoal() {
   if (titleIn) titleIn.value = "";
   toast("OBJECTIVE ADDED");
   fetchGoals();
-}
-
-async function addIdea() {
-  const input = document.getElementById("idea-input");
-  const content = input?.value?.trim();
-  if (!content) return;
-  await apiPost("/api/ideas", { content });
-  if (input) input.value = "";
-  toast("IDEA LOGGED");
-  fetchIdeas();
 }
 
 async function refreshBriefing() {

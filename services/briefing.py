@@ -55,6 +55,8 @@ def build_briefing(force: bool = False) -> dict:
     emails = [e for e in raw_emails if "error" not in e]
     emails = _safe("email_summaries", lambda: ai.summarise_emails(emails), emails)
     habits_avg = _safe("habits", _habits_avg, {})
+    supplements = _safe("supplements", lambda: {
+        "taken": db.count_supplements_today(today), "total": len(db.SUPPLEMENTS)}, {})
     goals = _safe("goals", db.get_goals, [])
     trading = _safe("trading", get_trading_activity, {})
     headlines = _safe("news", get_top_news, [])
@@ -69,6 +71,7 @@ def build_briefing(force: bool = False) -> dict:
         "events_tomorrow": events_tomorrow,
         "emails": emails,
         "habits_avg": habits_avg,
+        "supplements": supplements,
         "goals": goals,
         "trading": trading,
         "insights": detected,

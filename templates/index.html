@@ -12,6 +12,23 @@
 </head>
 <body>
 
+<!-- ── Sci-fi boot sequence (Event Horizon) ───────────────────────────────
+     Plays once per hour (sessionStorage gated). Press any key / click / tap
+     to skip. Removed from the DOM by main.js when finished. -->
+<div id="boot-intro" class="boot-intro" aria-hidden="true">
+  <div class="boot-scanlines"></div>
+  <div class="boot-orb"></div>
+  <div class="boot-console">
+    <div class="boot-title">INITIALIZING ASFA<span class="boot-cursor">_</span></div>
+    <ul class="boot-lines">
+      <li data-line="auth">AUTH <span class="boot-dots">::</span> <span class="boot-ok">VERIFIED</span></li>
+      <li data-line="memory">MEMORY <span class="boot-dots">::</span> <span class="boot-ok">LOADED</span></li>
+      <li data-line="systems">SYSTEMS <span class="boot-dots">::</span> <span class="boot-ok">ONLINE</span></li>
+    </ul>
+  </div>
+  <div class="boot-skip mono">PRESS ANY KEY TO SKIP</div>
+</div>
+
 <!-- ── Page-level effects ──────────────────────────────────────────────── -->
 <div class="scanline-overlay" aria-hidden="true"></div>
 <div class="page-corner pc-tl" aria-hidden="true"></div>
@@ -309,6 +326,17 @@
     <div id="refl-recent" class="small muted"></div>
   </section>
 
+  <!-- Daily supplements checklist — resets at day rollover -->
+  <section class="card" id="supplements-card" data-tabs="habits">
+    <div class="card-head">
+      <h2>Supplements</h2>
+      <span class="hud-label" id="supp-count">0/3</span>
+    </div>
+    <div id="supplements-body" class="supp-list">
+      <div class="muted mono">// LOADING…</div>
+    </div>
+  </section>
+
   <!-- ROW 7: Objectives — full width -->
   <section class="card" id="goals-card" data-tabs="home">
     <div class="card-head"><h2>Operational Objectives</h2></div>
@@ -321,7 +349,7 @@
     <div id="review-body" class="review-body hidden"></div>
   </section>
 
-  <!-- ROW 8: Command Interface + Capture -->
+  <!-- ROW 8: Command Interface -->
   <section class="card chat-card" id="chat-card" data-tabs="chat">
     <div class="card-head">
       <h2>Command Interface</h2>
@@ -335,14 +363,6 @@
     </form>
   </section>
 
-  <section class="card" id="ideas-card" data-tabs="chat">
-    <div class="card-head"><h2>Capture Log</h2></div>
-    <form id="idea-form" class="inline-form">
-      <input type="text" id="idea-text" placeholder="CAPTURE THOUGHT…" required>
-      <button class="btn btn-grad" type="submit">＋</button>
-    </form>
-    <div id="ideas-body" class="small"></div>
-  </section>
 
 </main>
 
