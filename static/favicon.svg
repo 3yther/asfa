@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>ASFA — black hole</title>
+  <defs>
+    <!-- Accretion disk: cyan → hot white → magenta accent. -->
+    <linearGradient id="disk" x1="8" y1="10" x2="56" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00d9ff"/>
+      <stop offset="0.5" stop-color="#caf7ff"/>
+      <stop offset="1" stop-color="#ff006e"/>
+    </linearGradient>
+    <radialGradient id="coin" cx="50%" cy="50%" r="50%">
+      <stop offset="0.55" stop-color="#05070c"/>
+      <stop offset="1" stop-color="#000000"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Dark coin so the ring reads on any tab colour -->
+  <circle cx="32" cy="32" r="31.5" fill="url(#coin)"/>
+
+  <!-- Outer magenta accent ring -->
+  <circle cx="32" cy="32" r="24.5" fill="none" stroke="#ff006e" stroke-width="1.4" opacity="0.45"/>
+
+  <!-- Accretion disk -->
+  <circle cx="32" cy="32" r="19.5" fill="none" stroke="url(#disk)" stroke-width="7"/>
+
+  <!-- Thin bright photon ring at the event-horizon edge -->
+  <circle cx="32" cy="32" r="14.4" fill="none" stroke="#aef6ff" stroke-width="1.5"/>
+
+  <!-- Pure-black event horizon -->
+  <circle cx="32" cy="32" r="13" fill="#000000"/>
+</svg>
