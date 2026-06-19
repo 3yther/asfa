@@ -1,7 +1,7 @@
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -467,6 +467,32 @@ def get_supplements_today(date: str) -> dict:
 
 def count_supplements_today(date: str) -> int:
     return len(get_supplements_today(date))
+
+
+def _streak_from_complete(complete, today):
+    """Count consecutive days ending today (or yesterday, if today is still
+    pending) present in the `complete` set of 'YYYY-MM-DD' strings."""
+    cur = today if today.isoformat() in complete else today - timedelta(days=1)
+    streak = 0
+    while cur.isoformat() in complete:
+        streak += 1
+        cur -= timedelta(days=1)
+    return streak
+
+
+def get_supplements_streak():
+    """Consecutive days where ALL supplements were taken. Today counts once
+    complete, but a still-pending today won't break the streak."""
+    _ensure_supplements_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT substr(taken_at,1,10) AS d, COUNT(DISTINCT supplement_name) AS n "
+            "FROM supplements_log GROUP BY substr(taken_at,1,10)")
+        rows = cur.fetchall()
+    total = len(SUPPLEMENTS)
+    complete = {r["d"] for r in rows if (r["n"] or 0) >= total}
+    return _streak_from_complete(complete, date.today())
 
 
 # ── Focus sessions (Lock In) ────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 
@@ -20,7 +20,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 
 import database as db
 from services import ai
-from services.bots import get_bots_status, get_trading_activity
+from services.bots import get_bots_health, get_bots_status, get_trading_activity
 from services.briefing import build_briefing
 from services.gcal import add_event, get_todays_events, get_tomorrow_events
 from services.gmail import (get_email_by_id, get_flow, get_unread_emails,
@@ -449,16 +449,16 @@ def api_spotify_focus():
 @app.route("/api/asfa/focus-line")
 def api_focus_line():
     """One prioritised sentence for the top of the dashboard.
-    Priority: market open imminent > unreplied emails > supplements > water > clear."""
+    Priority: supplements (past 9am) > unreplied emails > water > all clear."""
     text, urgent = None, False
 
-    # 1. US market opens within the next hour (09:30 ET == 14:30 UTC).
-    now_utc = datetime.now(timezone.utc)
-    market_open = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
-    secs = (market_open - now_utc).total_seconds()
-    if 0 < secs <= 3600:
-        mins = max(1, int(secs // 60))
-        text, urgent = f"Markets open in {mins} minute{'s' if mins != 1 else ''}.", True
+    # 1. Supplements not logged once it's past 09:00 local.
+    if datetime.now().hour >= 9:
+        try:
+            if db.count_supplements_today(_today()) < len(db.SUPPLEMENTS):
+                text, urgent = "You haven't logged your supplements yet.", True
+        except Exception:
+            pass
 
     # 2. Unread emails waiting on a reply.
     if not text and is_authenticated():
@@ -471,15 +471,7 @@ def api_focus_line():
         except Exception:
             pass
 
-    # 3. Supplements not logged once it's past 09:00 local.
-    if not text and datetime.now().hour >= 9:
-        try:
-            if db.count_supplements_today(_today()) < len(db.SUPPLEMENTS):
-                text = "You haven't logged your supplements yet."
-        except Exception:
-            pass
-
-    # 4. No water logged today.
+    # 3. No water logged today.
     if not text:
         try:
             habits = db.get_habits(1)
@@ -489,11 +481,48 @@ def api_focus_line():
         except Exception:
             pass
 
-    # 5. Nothing pressing.
+    # 4. Nothing pressing.
     if not text:
         text = "All clear. Nice work."
 
     return jsonify({"text": text, "urgent": urgent})
+
+
+# ── Trading systems health + validation countdown ─────────────────────────────
+
+@app.route("/api/asfa/bots-health")
+def api_bots_health():
+    """Per-bot alive/status/last-signal (cached ~60s server-side)."""
+    return jsonify(get_bots_health())
+
+
+# Forward-validation window for both bots. Configurable; default targets the
+# ~6-week (42-day) mark from mid-June 2026.
+VALIDATION_START_DATE = os.environ.get("VALIDATION_START_DATE", "2026-06-16")
+VALIDATION_DAYS = 42
+
+
+@app.route("/api/asfa/validation")
+def api_validation():
+    try:
+        start = datetime.strptime(VALIDATION_START_DATE, "%Y-%m-%d").date()
+    except ValueError:
+        start = datetime(2026, 6, 16).date()
+    total = VALIDATION_DAYS
+    today = datetime.now().date()
+    raw_day = (today - start).days + 1          # day 1 on the start date itself
+    complete = raw_day > total
+    day = max(0, min(raw_day, total))
+    pct = round((day / total) * 100) if total else 0
+    return jsonify({
+        "start": start.isoformat(),
+        "end": (start + timedelta(days=total)).isoformat(),
+        "day": day,
+        "total": total,
+        "pct": max(0, min(100, pct)),
+        "complete": complete,
+        "not_started": raw_day < 1,
+    })
 
 
 @app.route("/api/asfa/focus/today")
@@ -564,7 +593,13 @@ def _supplements_status():
     taken = db.get_supplements_today(_today())
     items = [{"name": key, "label": label, "taken": key in taken, "taken_at": taken.get(key)}
              for key, label in db.SUPPLEMENTS]
-    return {"items": items, "taken_count": len(taken), "total": len(db.SUPPLEMENTS)}
+    streak = 0
+    try:
+        streak = db.get_supplements_streak()
+    except Exception:
+        pass
+    return {"items": items, "taken_count": len(taken), "total": len(db.SUPPLEMENTS),
+            "streak": streak}
 
 
 @app.route("/api/supplements", methods=["GET", "POST"])

@@ -234,6 +234,28 @@
     <div id="bots-body" class="bots-body"><span class="muted">ESTABLISHING LINK…</span></div>
   </section>
 
+  <!-- ROW 2b: Market clock · Trading systems health · Validation countdown -->
+  <section class="card" id="market-card" data-tabs="home">
+    <div class="card-head"><h2>Market Session</h2></div>
+    <div class="market-state">
+      <span class="market-dot" id="market-dot"></span>
+      <span class="market-status mono" id="market-status">——</span>
+    </div>
+    <div class="market-count mono" id="market-count">—</div>
+  </section>
+
+  <section class="card" id="systems-card" data-tabs="home">
+    <div class="card-head"><h2>Trading Systems</h2></div>
+    <div id="systems-body" class="systems-body"><span class="muted">PINGING…</span></div>
+  </section>
+
+  <section class="card" id="validation-card" data-tabs="home">
+    <div class="card-head"><h2>Validation</h2></div>
+    <div class="val-day mono" id="val-day">—</div>
+    <div class="val-bar"><div class="val-fill" id="val-fill"></div></div>
+    <div class="val-note mono">Let them run. No changes until validation completes.</div>
+  </section>
+
   <!-- ROW 3: Mission Schedule + Comms -->
   <section class="card" id="calendar-card" data-tabs="home">
     <div class="card-head"><h2>Mission Schedule</h2></div>
@@ -352,6 +374,7 @@
   <section class="card" id="supplements-card" data-tabs="habits">
     <div class="card-head">
       <h2>Supplements</h2>
+      <span class="streak" id="supp-streak"></span>
       <span class="hud-label" id="supp-count">0/3</span>
     </div>
     <div id="supplements-body" class="supp-list">

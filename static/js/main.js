@@ -355,6 +355,9 @@ function loadAll() {
   initSpotify();
   fetchFocusLine();
   fetchFocusToday();
+  fetchSystems();
+  fetchValidation();
+  initMarketClock();
 }
 
 // ── Briefing ───────────────────────────────────────────────────────────────────
@@ -763,6 +766,8 @@ function renderSupplements(el, d) {
   ).join("");
   const count = document.getElementById("supp-count");
   if (count) count.textContent = `${d.taken_count || 0}/${d.total || items.length}`;
+  const strk = document.getElementById("supp-streak");
+  if (strk) strk.textContent = d.streak ? `🔥 ${d.streak}` : "";
 }
 
 async function toggleSupplement(btn) {
@@ -820,6 +825,115 @@ function renderSpotify(s) {
     if (label) label.textContent = "SPOTIFY";
     chip.title = s.device ? "Paused" : "No active device";
   }
+}
+
+// ── Market session clock (client-side, live countdown) ──────────────────────────
+let _marketTimer = null;
+function initMarketClock() {
+  if (_marketTimer) return;                 // already ticking
+  if (!document.getElementById("market-status")) return;
+  renderMarketClock();
+  _marketTimer = setInterval(renderMarketClock, 1000);
+}
+
+// Current wall-clock in US Eastern, DST-safe via Intl (no manual offset math).
+function _etNow() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", weekday: "short",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const get = (t) => parts.find(p => p.type === t)?.value;
+  const wd = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[get("weekday")];
+  let h = parseInt(get("hour"), 10); if (h === 24) h = 0;
+  return { dow: wd, secs: h * 3600 + parseInt(get("minute"), 10) * 60 + parseInt(get("second"), 10) };
+}
+
+function _fmtDur(secs) {
+  secs = Math.max(0, Math.round(secs));
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  const s = secs % 60;
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+function renderMarketClock() {
+  const statusEl = document.getElementById("market-status");
+  const countEl = document.getElementById("market-count");
+  const dot = document.getElementById("market-dot");
+  if (!statusEl) { if (_marketTimer) { clearInterval(_marketTimer); _marketTimer = null; } return; }
+  const OPEN = 9 * 3600 + 30 * 60, CLOSE = 16 * 3600;   // 09:30–16:00 ET
+  const { dow, secs } = _etNow();
+  const weekday = dow >= 1 && dow <= 5;
+  let state, status, count;
+
+  if (weekday && secs >= OPEN && secs < CLOSE) {
+    state = "open";
+    status = "US MARKET OPEN";
+    count = "closes in " + _fmtDur(CLOSE - secs);
+  } else if (weekday && secs < OPEN) {
+    state = "pre";
+    status = "US MARKET OPENS IN";
+    count = _fmtDur(OPEN - secs);
+  } else {
+    // After close today, or weekend → find the next weekday open.
+    state = "closed";
+    let daysAhead = 1;
+    // if it's a weekday before close already handled; here we're after close or weekend
+    let d = dow;
+    // advance to next day until it's Mon–Fri
+    let added = 0;
+    do { d = (d + 1) % 7; added++; } while (!(d >= 1 && d <= 5));
+    daysAhead = added;
+    const secsToOpen = (daysAhead * 86400) - secs + OPEN;
+    if (dow === 0 || dow === 6) {
+      status = "MARKET CLOSED";
+      count = "opens " + (dow === 6 ? "Monday" : "Monday");
+    } else {
+      status = "US MARKET CLOSED";
+      count = "opens in " + _fmtDur(secsToOpen);
+    }
+  }
+  statusEl.textContent = status;
+  countEl.textContent = count;
+  if (dot) {
+    dot.classList.toggle("market-open", state === "open");
+    dot.classList.toggle("market-closed", state !== "open");
+  }
+}
+
+// ── Trading systems health glance ───────────────────────────────────────────────
+async function fetchSystems() {
+  const el = document.getElementById("systems-body");
+  if (!el) return;
+  try {
+    const d = await apiGet("/api/asfa/bots-health");
+    const bots = (d && d.bots) || [];
+    el.innerHTML = bots.map(b => `
+      <a class="system-row" href="${esc(b.url || "#")}" target="_blank" rel="noopener">
+        <span class="system-dot ${b.online ? "on" : "off"}"></span>
+        <span class="system-name">${esc(b.name)}</span>
+        <span class="system-meta mono">${esc(b.online ? (b.last_signal || b.status || "online") : "offline")}</span>
+      </a>`
+    ).join("") || `<span class="muted mono">// NO SYSTEMS</span>`;
+  } catch { el.innerHTML = `<span class="muted mono">// LINK DOWN</span>`; }
+}
+
+// ── Validation countdown ─────────────────────────────────────────────────────────
+async function fetchValidation() {
+  const dayEl = document.getElementById("val-day");
+  const fill = document.getElementById("val-fill");
+  if (!dayEl) return;
+  try {
+    const d = await apiGet("/api/asfa/validation");
+    if (d.complete) {
+      dayEl.textContent = `VALIDATION COMPLETE · ${d.total}/${d.total}`;
+    } else if (d.not_started) {
+      dayEl.textContent = `VALIDATION: starts ${d.start}`;
+    } else {
+      dayEl.textContent = `VALIDATION: Day ${d.day} of ${d.total}`;
+    }
+    if (fill) fill.style.width = `${d.pct || 0}%`;
+  } catch { dayEl.textContent = "VALIDATION: —"; }
 }
 
 // ── "What now?" focus line ───────────────────────────────────────────────────────
