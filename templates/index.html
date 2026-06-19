@@ -61,6 +61,13 @@
       {% else %}
         <a class="hud-chip chip-action" href="/auth/google">CONNECT::GOOGLE</a>
       {% endif %}
+      {% if spotify_connected %}
+        <span class="hud-chip chip-ok" id="spotify-chip" title="Spotify">
+          <span class="chip-dot dot-idle" id="spotify-dot"></span><span id="spotify-label">SPOTIFY</span>
+        </span>
+      {% else %}
+        <a class="hud-chip chip-action" href="/auth/spotify">CONNECT::SPOTIFY</a>
+      {% endif %}
       <button class="hud-chip chip-btn" id="bell-btn">
         ALERTS<span class="badge hidden" id="bell-badge">0</span>
       </button>

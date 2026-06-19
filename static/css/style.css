@@ -140,6 +140,11 @@ body {
   animation: blink-dot 2s ease-in-out infinite;
 }
 @keyframes blink-dot { 50% { opacity: .3; } }
+/* Spotify status dot: green pulse when playing, steady grey when paused/idle. */
+.chip-dot.dot-playing { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.chip-dot.dot-paused, .chip-dot.dot-idle {
+  background: var(--muted); box-shadow: none; animation: none; opacity: .8;
+}
 .badge {
   background: var(--red); color: #fff; font-size: .55rem; font-weight: 700;
   min-width: 14px; height: 14px; border-radius: 999px;
