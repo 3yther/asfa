@@ -969,72 +969,186 @@ body {
 }
 .supp-row.taken .supp-name { color: var(--cyan-hi); }
 
-/* ── Sci-fi boot intro (Event Horizon) ─────────────────────────────────────── */
+/* ── Cinematic boot sequence (Event Horizon) ───────────────────────────────────
+   5 phases, ~5s, driven by an rAF timeline in main.js. Layers stack back→front;
+   CSS keyframes carry the motion, JS handles fragment/typewriter sequencing. */
 .boot-intro {
-  position: fixed; inset: 0; z-index: 9999;
-  display: grid; place-items: center;
-  background: radial-gradient(circle at 50% 45%, #04101a 0%, #000408 70%, #000 100%);
-  cursor: pointer; overflow: hidden;
-  font-family: 'JetBrains Mono', monospace;
+  position: fixed; inset: 0; z-index: 9999; overflow: hidden;
+  background-color: #000; cursor: pointer;
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  --cy: #00d9ff; --mg: #ff006e;
 }
-.boot-intro.boot-done { opacity: 0; transition: opacity .55s ease; pointer-events: none; }
-.boot-scanlines {
-  position: absolute; inset: 0; pointer-events: none; opacity: .5;
-  background: repeating-linear-gradient(
-    0deg, transparent 0 2px, rgba(0,217,255,.05) 2px 3px);
-  animation: boot-scan 6s linear infinite;
+/* PHASE 4 — black background dissolves so the dashboard reads through. */
+.boot-intro.boot-playing { animation: bi-reveal 1s ease 4s forwards; }
+@keyframes bi-reveal { to { background-color: transparent; } }
+/* Final fade-out + DOM teardown handoff. */
+.boot-intro.boot-done { opacity: 0; transition: opacity .5s ease; pointer-events: none; }
+
+.boot-intro > * { position: absolute; pointer-events: none; }
+
+/* Vignette — corner darkening throughout. */
+.boot-vignette {
+  inset: 0; z-index: 6;
+  background: radial-gradient(ellipse at 50% 46%, transparent 42%, rgba(0,0,0,.78) 100%);
 }
-@keyframes boot-scan { from { background-position: 0 0; } to { background-position: 0 60px; } }
-.boot-orb {
-  position: absolute; width: 220px; height: 220px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(0,217,255,.35) 0%, rgba(255,0,110,.15) 45%, transparent 70%);
-  filter: blur(6px); transform: scale(.2); opacity: 0;
+
+/* PHASE 1 — single cyan line draws across the middle, very fast. */
+.boot-line {
+  top: 50%; left: 50%; width: 0; height: 1px; z-index: 3;
+  transform: translate(-50%, -50%);
+  background: var(--cy); box-shadow: 0 0 10px var(--cy), 0 0 22px var(--cy);
 }
-.boot-playing .boot-orb { animation: boot-orb 2.6s ease-out forwards; }
-@keyframes boot-orb {
-  0%   { transform: scale(.2); opacity: 0; }
-  35%  { transform: scale(1);  opacity: .9; }
-  100% { transform: scale(1.6); opacity: 0; }
+.boot-playing .boot-line { animation: bl-draw .55s cubic-bezier(.2,.8,.2,1) forwards; }
+@keyframes bl-draw {
+  0%   { width: 0; opacity: 0; }
+  18%  { opacity: 1; }
+  55%  { width: 100vw; opacity: 1; }
+  100% { width: 100vw; opacity: 0; }
 }
-.boot-console { position: relative; z-index: 2; text-align: center; padding: 0 24px; }
-.boot-title {
-  font-size: 1.1rem; letter-spacing: 5px; color: var(--cyan-hi);
-  text-shadow: 0 0 14px rgba(0,217,255,.7);
-  margin-bottom: 22px; white-space: nowrap;
+
+/* PHASE 2 — the line splits into a HUD grid that later collapses to a point. */
+.boot-grid {
+  inset: 0; z-index: 1; opacity: 0;
+  background-image:
+    linear-gradient(rgba(0,217,255,.22) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,217,255,.22) 1px, transparent 1px);
+  background-size: 46px 46px; background-position: center;
+  -webkit-mask-image: radial-gradient(circle at center, #000 0%, transparent 72%);
+          mask-image: radial-gradient(circle at center, #000 0%, transparent 72%);
 }
-.boot-cursor { animation: boot-blink 1s step-end infinite; color: var(--magenta); }
-@keyframes boot-blink { 50% { opacity: 0; } }
-.boot-lines {
-  list-style: none; display: inline-flex; flex-direction: column;
-  gap: 10px; text-align: left; font-size: .78rem; letter-spacing: 2px;
+.boot-playing .boot-grid { animation: bg-life 1.6s ease-out .45s forwards; }
+@keyframes bg-life {
+  0%   { opacity: 0; transform: perspective(700px) scale(1.25); }
+  22%  { opacity: .55; transform: perspective(700px) scale(1); }
+  68%  { opacity: .55; transform: perspective(700px) scale(1); }
+  100% { opacity: 0;  transform: perspective(700px) scale(.06); }
 }
-.boot-lines li {
-  opacity: 0; transform: translateX(-8px); color: var(--text);
-  text-shadow: 0 0 8px rgba(255,0,110,.4);
+
+/* PHASE 2 — faint cyan particle field drifting behind the grid. */
+.boot-particles {
+  inset: -12%; z-index: 0; opacity: 0;
+  background-image: radial-gradient(circle, rgba(0,217,255,.85) 1px, transparent 1.6px);
+  background-size: 64px 64px;
 }
-.boot-playing .boot-lines li { animation: boot-line .35s ease forwards; }
-.boot-playing .boot-lines li[data-line="auth"]    { animation-delay: .6s; }
-.boot-playing .boot-lines li[data-line="memory"]  { animation-delay: 1.1s; }
-.boot-playing .boot-lines li[data-line="systems"] { animation-delay: 1.6s; }
-@keyframes boot-line {
-  0%   { opacity: 0; transform: translateX(-8px); filter: blur(2px); }
-  60%  { opacity: 1; }
-  100% { opacity: 1; transform: translateX(0); filter: blur(0); }
+.boot-playing .boot-particles {
+  animation: bp-fade 3.2s ease-out .5s forwards, bp-drift 9s linear .5s infinite;
 }
-.boot-dots { color: var(--magenta); }
-.boot-ok { color: var(--cyan-hi); text-shadow: 0 0 10px rgba(0,217,255,.7); }
+@keyframes bp-fade { 0% { opacity: 0; } 28% { opacity: .22; } 80% { opacity: .16; } 100% { opacity: 0; } }
+@keyframes bp-drift { from { background-position: 0 0; } to { background-position: 130px -90px; } }
+
+/* PHASE 2 — subtle CRT scanline wash (~5%). */
+.boot-crt {
+  inset: 0; z-index: 4; opacity: 0; mix-blend-mode: screen;
+  background: repeating-linear-gradient(0deg, rgba(255,255,255,.05) 0 1px, transparent 1px 3px);
+}
+.boot-playing .boot-crt { animation: crt-win 2s linear .4s forwards; }
+@keyframes crt-win { 0% { opacity: 0; } 12% { opacity: .06; } 76% { opacity: .06; } 100% { opacity: 0; } }
+
+/* PHASE 2 — rapid-fire status fragments (injected by JS). */
+.boot-fragments { inset: 0; z-index: 5; }
+.boot-frag {
+  position: absolute; white-space: nowrap;
+  font-size: .64rem; letter-spacing: 2px; color: var(--cy);
+  text-shadow: 0 0 8px rgba(0,217,255,.75);
+  animation: bf-jit .36s steps(1) forwards;
+}
+.boot-frag::before, .boot-frag::after {
+  content: attr(data-text); position: absolute; top: 0; left: 0;
+}
+.boot-frag::before { color: var(--mg); animation: bf-r .36s ease forwards; }   /* chromatic split */
+.boot-frag::after  { color: #00fff0; animation: bf-l .36s ease forwards; }
+@keyframes bf-jit {
+  0%   { opacity: 0; transform: translateX(-3px); }
+  14%  { opacity: 1; transform: translateX(3px); }
+  30%  { transform: translateX(-1px); }
+  46%  { transform: translateX(0); }
+  84%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes bf-r { 0% { transform: translate(2px,-1px); opacity: .9; } 35% { transform: translate(-2px,1px); } 100% { transform: translate(0,0); opacity: 0; } }
+@keyframes bf-l { 0% { transform: translate(-2px,1px); opacity: .9; } 35% { transform: translate(2px,-1px); } 100% { transform: translate(0,0); opacity: 0; } }
+
+/* PHASE 3 — orb materialises from the collapsed point, brand types in. */
+.boot-center {
+  top: 42%; left: 50%; transform: translate(-50%, -50%); z-index: 7;
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+}
+.boot-orbwrap { position: relative; width: 168px; height: 168px; display: grid; place-items: center; }
+.boot-ring2 {
+  position: absolute; width: 168px; height: 168px; border-radius: 50%;
+  border: 1px solid rgba(0,217,255,.7); opacity: 0;
+}
+.boot-playing .boot-ring2 { animation: br-pulse 1.7s ease-out forwards; }
+.boot-playing .r1 { animation-delay: 2.45s; }
+.boot-playing .r2 { animation-delay: 2.85s; }
+.boot-playing .r3 { animation-delay: 3.25s; }
+@keyframes br-pulse {
+  0%   { transform: scale(.42); opacity: 0; }
+  22%  { opacity: .8; }
+  100% { transform: scale(2.7); opacity: 0; }
+}
+.boot-orb2 {
+  width: 158px; height: 158px; border-radius: 50%;
+  transform: scale(0); opacity: 0;
+  background:
+    radial-gradient(circle at 38% 33%, #c8f8ff 0%, var(--cy) 28%, #08506b 68%, transparent 72%),
+    radial-gradient(circle at 64% 72%, rgba(255,0,110,.55), transparent 58%);
+  box-shadow: 0 0 50px rgba(0,217,255,.6), 0 0 110px rgba(0,217,255,.25),
+              inset 0 0 42px rgba(0,217,255,.4);
+}
+/* ease-out (fast→slow) so it feels heavy as it settles. */
+.boot-playing .boot-orb2 { animation: bo-mat 1.9s cubic-bezier(.11,.7,.18,1) 2s forwards; }
+@keyframes bo-mat {
+  0%   { transform: scale(0);    opacity: 0; filter: brightness(2.6); }
+  12%  { opacity: 1; }
+  62%  { transform: scale(1.06); }
+  100% { transform: scale(1);    opacity: 1; filter: brightness(1); }
+}
+.boot-brand { margin-top: 26px; opacity: 0; }
+.boot-playing .boot-brand { animation: bb-show .01s linear 2.5s forwards; }
+@keyframes bb-show { to { opacity: 1; } }
+.boot-brand-line {
+  font-size: 1.45rem; letter-spacing: 9px; font-weight: 600; color: var(--cy);
+  text-shadow: 0 0 12px rgba(0,217,255,.85), 0 0 28px rgba(0,217,255,.4);  /* sharp edge glow */
+}
+.boot-cur { color: var(--mg); animation: bc-blink 1s step-end infinite; }
+@keyframes bc-blink { 50% { opacity: 0; } }
+.boot-brand-sub {
+  margin-top: 11px; font-size: .6rem; letter-spacing: 5px;
+  color: rgba(0,217,255,.55); opacity: 0;
+}
+.boot-playing .boot-brand-sub { animation: bsub-in .9s ease 3.55s forwards; }
+@keyframes bsub-in { to { opacity: .75; } }
+
+/* PHASE 4 — single magenta scanner line sweeps across once. */
+.boot-sweep { inset: 0; z-index: 8; overflow: hidden; }
+.boot-sweep::before {
+  content: ""; position: absolute; top: 0; left: -3%; width: 2px; height: 100%;
+  background: var(--mg); box-shadow: 0 0 18px 5px var(--mg); opacity: 0;
+}
+.boot-playing .boot-sweep::before { animation: bsw 1s ease-in-out 4s forwards; }
+@keyframes bsw {
+  0%   { left: -3%; opacity: 0; }
+  12%  { opacity: 1; }
+  88%  { opacity: 1; }
+  100% { left: 103%; opacity: 0; }
+}
+
 .boot-skip {
-  position: absolute; bottom: 28px; left: 0; right: 0; text-align: center;
+  bottom: 30px; left: 0; right: 0; z-index: 9; text-align: center;
   font-size: .56rem; letter-spacing: 3px; color: var(--muted);
-  opacity: 0; animation: boot-skip-in .4s ease 1.2s forwards;
+  opacity: 0; animation: boot-skip-in .4s ease 1s forwards;
 }
-@keyframes boot-skip-in { to { opacity: .7; } }
+@keyframes boot-skip-in { to { opacity: .65; } }
+
+/* Mobile — same sequence at ~0.75x. */
 @media (max-width: 760px) {
-  .boot-title { font-size: .82rem; letter-spacing: 3px; white-space: normal; }
-  .boot-orb { width: 150px; height: 150px; }
-  .boot-lines { font-size: .68rem; }
+  .boot-center { transform: translate(-50%, -50%) scale(.75); }
+  .boot-frag { font-size: .56rem; }
+  .boot-grid { background-size: 36px 36px; }
 }
+
+/* Reduced motion — skip the cinematic entirely (JS removes the overlay). */
 @media (prefers-reduced-motion: reduce) {
-  .boot-scanlines, .boot-orb { animation: none; }
-  .boot-playing .boot-lines li { animation: none; opacity: 1; transform: none; }
+  .boot-intro * { animation: none !important; }
 }
