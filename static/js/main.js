@@ -7,7 +7,6 @@ const SCORE_CIRCUMFERENCE = 2 * Math.PI * 72; // r=72
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
-  initBootIntro();
   initClock();
   initOrbCanvas();
   initOrbClick();
@@ -20,93 +19,6 @@ document.addEventListener("DOMContentLoaded", () => {
   // Trading-bot data auto-refreshes every 10 minutes.
   setInterval(fetchBots, 10 * 60 * 1000);
 });
-
-// ── Cinematic boot intro ──────────────────────────────────────────────────────
-// 5-phase Event Horizon boot sequence (~5s), driven off a single rAF timeline
-// for smooth, frame-aligned cueing. Plays once per hour (sessionStorage); any
-// key / click / tap skips it; prefers-reduced-motion skips it entirely. The
-// overlay removes itself from the DOM when finished — zero lingering cost.
-function initBootIntro() {
-  const intro = document.getElementById("boot-intro");
-  if (!intro) return;
-
-  const reduce = window.matchMedia &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const HOUR = 60 * 60 * 1000;
-  let last = 0;
-  try { last = parseInt(sessionStorage.getItem("asfa_boot_ts") || "0", 10); } catch {}
-  const recent = Date.now() - last < HOUR;
-  try { sessionStorage.setItem("asfa_boot_ts", String(Date.now())); } catch {}
-
-  // Skip entirely on recent visit or reduced-motion — straight to the dashboard.
-  if (recent || reduce) { intro.remove(); return; }
-
-  let done = false;
-  const finish = () => {
-    if (done) return;
-    done = true;
-    window.removeEventListener("keydown", finish);
-    window.removeEventListener("pointerdown", finish);
-    intro.classList.add("boot-done");
-    setTimeout(() => intro.remove(), 600);  // let the fade-out land, then tear down
-  };
-  window.addEventListener("keydown", finish);
-  window.addEventListener("pointerdown", finish);
-
-  intro.classList.add("boot-playing");
-
-  // ── Timeline cues (ms from start) ──────────────────────────────────────────
-  const cues = [];
-  const cue = (ms, fn) => cues.push({ ms, fn, fired: false });
-
-  // PHASE 2 — rapid-fire status fragments, glitching in at scattered positions.
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, ".");
-  const fragments = [
-    "BIOMETRIC SCAN... OK",
-    "NEURAL LINK :: ESTABLISHED",
-    "QUANTUM ENCRYPTION :: ACTIVE",
-    "MEMORY CORTEX :: LOADED",
-    "TEMPORAL SYNC :: " + stamp,
-    "USER :: AMIR / IDENTIFIED",
-  ];
-  const spots = [
-    { top: "20%", left: "12%" }, { top: "26%", right: "13%" },
-    { bottom: "30%", left: "16%" }, { top: "44%", right: "10%" },
-    { bottom: "24%", right: "18%" }, { top: "34%", left: "20%" },
-  ];
-  const fragLayer = intro.querySelector(".boot-fragments");
-  fragments.forEach((text, i) => cue(560 + i * 230, () => {
-    const el = document.createElement("div");
-    el.className = "boot-frag";
-    el.textContent = text;
-    el.setAttribute("data-text", text);
-    Object.assign(el.style, spots[i % spots.length]);
-    fragLayer.appendChild(el);
-    setTimeout(() => el.remove(), 380);
-  }));
-
-  // PHASE 3 — type "[ ASFA ]" beneath the orb, one char at a time.
-  const brand = intro.querySelector("#boot-brand-title");
-  const word = "[ ASFA ]";
-  for (let i = 1; i <= word.length; i++) {
-    cue(2550 + i * 55, () => { brand.textContent = word.slice(0, i); });
-  }
-
-  // PHASE 4 — auto-complete the sequence.
-  cue(5000, finish);
-
-  // ── rAF driver — fires each cue once its timestamp has elapsed. ─────────────
-  const t0 = performance.now();
-  const tick = (now) => {
-    if (done) return;
-    const t = now - t0;
-    for (const c of cues) {
-      if (!c.fired && t >= c.ms) { c.fired = true; c.fn(); }
-    }
-    if (t < 5200) requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-}
 
 // ── Header / card controls ──────────────────────────────────────────────────────
 function wireControls() {

@@ -12,31 +12,24 @@
 </head>
 <body>
 
-<!-- ── Cinematic boot sequence (Event Horizon) ─────────────────────────────
-     5-phase intro driven by static/js/main.js (rAF timeline). Plays once per
-     hour (sessionStorage), skips on any key/click, and removes itself from the
-     DOM when finished. prefers-reduced-motion → skipped entirely. -->
-<div id="boot-intro" class="boot-intro" aria-hidden="true">
-  <div class="boot-particles"></div>
-  <div class="boot-grid"></div>
-  <div class="boot-line"></div>
-  <div class="boot-crt"></div>
-  <div class="boot-fragments"></div>
-  <div class="boot-vignette"></div>
-  <div class="boot-center">
-    <div class="boot-orbwrap">
-      <span class="boot-ring2 r1"></span>
-      <span class="boot-ring2 r2"></span>
-      <span class="boot-ring2 r3"></span>
-      <div class="boot-orb2"></div>
-    </div>
-    <div class="boot-brand">
-      <div class="boot-brand-line"><span id="boot-brand-title"></span><span class="boot-cur">_</span></div>
-      <div class="boot-brand-sub">AI PERSONAL ASSISTANT</div>
-    </div>
+<!-- ── Cinematic black-hole landing (Event Horizon) ────────────────────────
+     Hyperspace warp → WebGL black hole (Three.js, custom lensing shader) →
+     fall-in transition → dashboard. Driven by static/js/blackhole.js. Falls
+     back to a CSS black hole on weak GPU / mobile, and is skipped entirely on
+     prefers-reduced-motion. Removes itself from the DOM on ENTER. -->
+<div id="bh-landing" class="bh-landing" aria-hidden="true">
+  <canvas id="bh-warp" class="bh-warp"></canvas>
+  <div id="bh-stage" class="bh-stage"></div>
+  <div class="bh-vignette"></div>
+  <div id="bh-brand" class="bh-brand">
+    <div class="bh-title">[ ASFA ]</div>
+    <button id="bh-enter" class="bh-enter" type="button">ENTER</button>
   </div>
-  <div class="boot-sweep"></div>
-  <div class="boot-skip mono">PRESS ANY KEY TO SKIP</div>
+  <button id="bh-mute" class="bh-mute" type="button" aria-label="Toggle sound" aria-pressed="false">
+    <span class="bh-mute-on">♪ SOUND ON</span><span class="bh-mute-off">♪ SOUND OFF</span>
+  </button>
+  <div class="bh-skip mono">PRESS ANY KEY TO SKIP</div>
+  <div id="bh-flash" class="bh-flash"></div>
 </div>
 
 <!-- ── Page-level effects ──────────────────────────────────────────────── -->
@@ -388,5 +381,26 @@
 
 <div class="toast hidden" id="toast"></div>
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+<!-- Black-hole landing: Three.js resolved via import map; the module loads bare
+     specifiers ("three", "three/addons/…") and dynamic-imports them so a CDN
+     failure degrades to the CSS fallback instead of trapping the user. -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+  }
+}
+</script>
+<!-- Safety net: if the module never boots (e.g. import map unsupported), don't
+     leave the overlay covering the dashboard. blackhole.js clears this. -->
+<script>
+  window.__bhSafety = setTimeout(function () {
+    var el = document.getElementById("bh-landing");
+    if (el) el.parentNode && el.remove();
+  }, 9000);
+</script>
+<script type="module" src="{{ url_for('static', filename='js/blackhole.js') }}"></script>
 </body>
 </html>
