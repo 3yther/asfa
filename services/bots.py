@@ -4,6 +4,7 @@ Everything degrades gracefully: if the scanner is offline or an endpoint is
 missing, we still return the dashboard links so the briefing card is useful.
 """
 import logging
+import time
 
 import requests
 
@@ -109,6 +110,56 @@ def get_trading_activity():
         }
 
     return result
+
+
+# ── Bot health glance (cached ~60s) ─────────────────────────────────────────────
+
+_HEALTH_CACHE = {"ts": 0.0, "data": None}
+
+
+def _bot_health_entry(key, name, data, url, crypto=False):
+    online = bool(data.get("online"))
+    entry = {"key": key, "name": name, "online": online, "url": url,
+             "status": "offline" if not online else "online", "last_signal": None}
+    if not online:
+        entry["error"] = data.get("error")
+        return entry
+    if crypto:
+        entry["status"] = "in session" if data.get("in_session") else "online"
+        sig = _latest_signal(data)
+        if sig:
+            entry["last_signal"] = (
+                f"{sig['symbol']} MSS {sig.get('direction', '')} @ {sig.get('price', '')}".strip())
+    else:
+        # Stock-scanner /api/status — shape isn't guaranteed; degrade defensively.
+        entry["status"] = str(data.get("status") or data.get("state") or "online")
+        last = data.get("last_signal") or data.get("latest_signal") or data.get("last_trade")
+        if isinstance(last, dict):
+            sym = last.get("symbol")
+            entry["last_signal"] = (f"{sym} {last.get('direction', '')}".strip()
+                                    if sym else str(last)[:60])
+        elif last:
+            entry["last_signal"] = str(last)[:60]
+    return entry
+
+
+def get_bots_health():
+    """Per-bot alive/status/last-signal for the TRADING SYSTEMS card. Cached
+    ~60s so the dashboard polling doesn't hammer the scanner. Never raises."""
+    now = time.time()
+    if _HEALTH_CACHE["data"] is not None and now - _HEALTH_CACHE["ts"] < 60:
+        return _HEALTH_CACHE["data"]
+    scanner = _fetch(SCANNER_URL, "Stock Scanner")
+    tjr = _fetch(TJR_STATUS_URL, "Crypto Bot")
+    data = {
+        "updated": now,
+        "bots": [
+            _bot_health_entry("scanner", "Stock Scanner", scanner, LINKS["scanner"]),
+            _bot_health_entry("crypto", "Crypto Bot", tjr, LINKS["crypto"], crypto=True),
+        ],
+    }
+    _HEALTH_CACHE.update(ts=now, data=data)
+    return data
 
 
 def get_bots_summary_text(status=None):
