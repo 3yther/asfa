@@ -969,186 +969,158 @@ body {
 }
 .supp-row.taken .supp-name { color: var(--cyan-hi); }
 
-/* ── Cinematic boot sequence (Event Horizon) ───────────────────────────────────
-   5 phases, ~5s, driven by an rAF timeline in main.js. Layers stack back→front;
-   CSS keyframes carry the motion, JS handles fragment/typewriter sequencing. */
-.boot-intro {
-  position: fixed; inset: 0; z-index: 9999; overflow: hidden;
-  background-color: #000; cursor: pointer;
+/* ── Cinematic black-hole landing (Event Horizon) ──────────────────────────────
+   Full-screen overlay: hyperspace warp (2D canvas) → WebGL black hole (Three.js
+   in #bh-stage) → fall-in → dashboard. JS in static/js/blackhole.js. */
+.bh-landing {
+  position: fixed; inset: 0; z-index: 10000; overflow: hidden;
+  background: #000; cursor: pointer;
   font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
-  --cy: #00d9ff; --mg: #ff006e;
+  opacity: 1; transition: opacity .8s ease;
 }
-/* PHASE 4 — black background dissolves so the dashboard reads through. */
-.boot-intro.boot-playing { animation: bi-reveal 1s ease 4s forwards; }
-@keyframes bi-reveal { to { background-color: transparent; } }
-/* Final fade-out + DOM teardown handoff. */
-.boot-intro.boot-done { opacity: 0; transition: opacity .5s ease; pointer-events: none; }
+.bh-landing.bh-gone { opacity: 0; pointer-events: none; }
+body.bh-active { overflow: hidden; }
 
-.boot-intro > * { position: absolute; pointer-events: none; }
+/* Warp + WebGL canvases fill the screen. */
+.bh-warp, .bh-stage {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+}
+.bh-warp { z-index: 2; display: block; transition: opacity .9s ease; }
+.bh-warp.bh-warp-out { opacity: 0; }
+.bh-stage { z-index: 1; }
+.bh-stage canvas { display: block; width: 100% !important; height: 100% !important; }
 
-/* Vignette — corner darkening throughout. */
-.boot-vignette {
-  inset: 0; z-index: 6;
-  background: radial-gradient(ellipse at 50% 46%, transparent 42%, rgba(0,0,0,.78) 100%);
-}
-
-/* PHASE 1 — single cyan line draws across the middle, very fast. */
-.boot-line {
-  top: 50%; left: 50%; width: 0; height: 1px; z-index: 3;
-  transform: translate(-50%, -50%);
-  background: var(--cy); box-shadow: 0 0 10px var(--cy), 0 0 22px var(--cy);
-}
-.boot-playing .boot-line { animation: bl-draw .55s cubic-bezier(.2,.8,.2,1) forwards; }
-@keyframes bl-draw {
-  0%   { width: 0; opacity: 0; }
-  18%  { opacity: 1; }
-  55%  { width: 100vw; opacity: 1; }
-  100% { width: 100vw; opacity: 0; }
-}
-
-/* PHASE 2 — the line splits into a HUD grid that later collapses to a point. */
-.boot-grid {
-  inset: 0; z-index: 1; opacity: 0;
-  background-image:
-    linear-gradient(rgba(0,217,255,.22) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,217,255,.22) 1px, transparent 1px);
-  background-size: 46px 46px; background-position: center;
-  -webkit-mask-image: radial-gradient(circle at center, #000 0%, transparent 72%);
-          mask-image: radial-gradient(circle at center, #000 0%, transparent 72%);
-}
-.boot-playing .boot-grid { animation: bg-life 1.6s ease-out .45s forwards; }
-@keyframes bg-life {
-  0%   { opacity: 0; transform: perspective(700px) scale(1.25); }
-  22%  { opacity: .55; transform: perspective(700px) scale(1); }
-  68%  { opacity: .55; transform: perspective(700px) scale(1); }
-  100% { opacity: 0;  transform: perspective(700px) scale(.06); }
-}
-
-/* PHASE 2 — faint cyan particle field drifting behind the grid. */
-.boot-particles {
-  inset: -12%; z-index: 0; opacity: 0;
-  background-image: radial-gradient(circle, rgba(0,217,255,.85) 1px, transparent 1.6px);
-  background-size: 64px 64px;
-}
-.boot-playing .boot-particles {
-  animation: bp-fade 3.2s ease-out .5s forwards, bp-drift 9s linear .5s infinite;
-}
-@keyframes bp-fade { 0% { opacity: 0; } 28% { opacity: .22; } 80% { opacity: .16; } 100% { opacity: 0; } }
-@keyframes bp-drift { from { background-position: 0 0; } to { background-position: 130px -90px; } }
-
-/* PHASE 2 — subtle CRT scanline wash (~5%). */
-.boot-crt {
-  inset: 0; z-index: 4; opacity: 0; mix-blend-mode: screen;
-  background: repeating-linear-gradient(0deg, rgba(255,255,255,.05) 0 1px, transparent 1px 3px);
-}
-.boot-playing .boot-crt { animation: crt-win 2s linear .4s forwards; }
-@keyframes crt-win { 0% { opacity: 0; } 12% { opacity: .06; } 76% { opacity: .06; } 100% { opacity: 0; } }
-
-/* PHASE 2 — rapid-fire status fragments (injected by JS). */
-.boot-fragments { inset: 0; z-index: 5; }
-.boot-frag {
-  position: absolute; white-space: nowrap;
-  font-size: .64rem; letter-spacing: 2px; color: var(--cy);
-  text-shadow: 0 0 8px rgba(0,217,255,.75);
-  animation: bf-jit .36s steps(1) forwards;
-}
-.boot-frag::before, .boot-frag::after {
-  content: attr(data-text); position: absolute; top: 0; left: 0;
-}
-.boot-frag::before { color: var(--mg); animation: bf-r .36s ease forwards; }   /* chromatic split */
-.boot-frag::after  { color: #00fff0; animation: bf-l .36s ease forwards; }
-@keyframes bf-jit {
-  0%   { opacity: 0; transform: translateX(-3px); }
-  14%  { opacity: 1; transform: translateX(3px); }
-  30%  { transform: translateX(-1px); }
-  46%  { transform: translateX(0); }
-  84%  { opacity: 1; }
-  100% { opacity: 0; }
-}
-@keyframes bf-r { 0% { transform: translate(2px,-1px); opacity: .9; } 35% { transform: translate(-2px,1px); } 100% { transform: translate(0,0); opacity: 0; } }
-@keyframes bf-l { 0% { transform: translate(-2px,1px); opacity: .9; } 35% { transform: translate(2px,-1px); } 100% { transform: translate(0,0); opacity: 0; } }
-
-/* PHASE 3 — orb materialises from the collapsed point, brand types in. */
-.boot-center {
-  top: 42%; left: 50%; transform: translate(-50%, -50%); z-index: 7;
-  display: flex; flex-direction: column; align-items: center; text-align: center;
-}
-.boot-orbwrap { position: relative; width: 168px; height: 168px; display: grid; place-items: center; }
-.boot-ring2 {
-  position: absolute; width: 168px; height: 168px; border-radius: 50%;
-  border: 1px solid rgba(0,217,255,.7); opacity: 0;
-}
-.boot-playing .boot-ring2 { animation: br-pulse 1.7s ease-out forwards; }
-.boot-playing .r1 { animation-delay: 2.45s; }
-.boot-playing .r2 { animation-delay: 2.85s; }
-.boot-playing .r3 { animation-delay: 3.25s; }
-@keyframes br-pulse {
-  0%   { transform: scale(.42); opacity: 0; }
-  22%  { opacity: .8; }
-  100% { transform: scale(2.7); opacity: 0; }
-}
-.boot-orb2 {
-  width: 158px; height: 158px; border-radius: 50%;
-  transform: scale(0); opacity: 0;
+/* Faint cyan vignette around the black-hole view. */
+.bh-vignette {
+  position: absolute; inset: 0; z-index: 3; pointer-events: none;
   background:
-    radial-gradient(circle at 38% 33%, #c8f8ff 0%, var(--cy) 28%, #08506b 68%, transparent 72%),
-    radial-gradient(circle at 64% 72%, rgba(255,0,110,.55), transparent 58%);
-  box-shadow: 0 0 50px rgba(0,217,255,.6), 0 0 110px rgba(0,217,255,.25),
-              inset 0 0 42px rgba(0,217,255,.4);
-}
-/* ease-out (fast→slow) so it feels heavy as it settles. */
-.boot-playing .boot-orb2 { animation: bo-mat 1.9s cubic-bezier(.11,.7,.18,1) 2s forwards; }
-@keyframes bo-mat {
-  0%   { transform: scale(0);    opacity: 0; filter: brightness(2.6); }
-  12%  { opacity: 1; }
-  62%  { transform: scale(1.06); }
-  100% { transform: scale(1);    opacity: 1; filter: brightness(1); }
-}
-.boot-brand { margin-top: 26px; opacity: 0; }
-.boot-playing .boot-brand { animation: bb-show .01s linear 2.5s forwards; }
-@keyframes bb-show { to { opacity: 1; } }
-.boot-brand-line {
-  font-size: 1.45rem; letter-spacing: 9px; font-weight: 600; color: var(--cy);
-  text-shadow: 0 0 12px rgba(0,217,255,.85), 0 0 28px rgba(0,217,255,.4);  /* sharp edge glow */
-}
-.boot-cur { color: var(--mg); animation: bc-blink 1s step-end infinite; }
-@keyframes bc-blink { 50% { opacity: 0; } }
-.boot-brand-sub {
-  margin-top: 11px; font-size: .6rem; letter-spacing: 5px;
-  color: rgba(0,217,255,.55); opacity: 0;
-}
-.boot-playing .boot-brand-sub { animation: bsub-in .9s ease 3.55s forwards; }
-@keyframes bsub-in { to { opacity: .75; } }
-
-/* PHASE 4 — single magenta scanner line sweeps across once. */
-.boot-sweep { inset: 0; z-index: 8; overflow: hidden; }
-.boot-sweep::before {
-  content: ""; position: absolute; top: 0; left: -3%; width: 2px; height: 100%;
-  background: var(--mg); box-shadow: 0 0 18px 5px var(--mg); opacity: 0;
-}
-.boot-playing .boot-sweep::before { animation: bsw 1s ease-in-out 4s forwards; }
-@keyframes bsw {
-  0%   { left: -3%; opacity: 0; }
-  12%  { opacity: 1; }
-  88%  { opacity: 1; }
-  100% { left: 103%; opacity: 0; }
+    radial-gradient(ellipse at center, transparent 52%, rgba(0,0,0,.72) 100%),
+    radial-gradient(ellipse at center, transparent 60%, rgba(0,150,200,.07) 100%);
 }
 
-.boot-skip {
-  bottom: 30px; left: 0; right: 0; z-index: 9; text-align: center;
-  font-size: .56rem; letter-spacing: 3px; color: var(--muted);
-  opacity: 0; animation: boot-skip-in .4s ease 1s forwards;
+/* Brand + ENTER, revealed at phase 3. */
+.bh-brand {
+  position: absolute; left: 0; right: 0; bottom: 16%; z-index: 4;
+  text-align: center; opacity: 0; transform: translateY(8px);
+  transition: opacity 1.6s ease, transform 1.6s ease; pointer-events: none;
 }
-@keyframes boot-skip-in { to { opacity: .65; } }
+.bh-brand.bh-show { opacity: 1; transform: translateY(0); }
+.bh-title {
+  font-size: 1.7rem; letter-spacing: 12px; font-weight: 600; color: #00d9ff;
+  text-shadow: 0 0 14px rgba(0,217,255,.85), 0 0 34px rgba(0,217,255,.4);
+}
+.bh-enter {
+  margin-top: 18px; padding: 9px 26px; pointer-events: auto; cursor: pointer;
+  background: rgba(0,217,255,.05); border: 1px solid rgba(0,217,255,.55);
+  border-radius: 3px; color: #00d9ff;
+  font-family: inherit; font-size: .72rem; letter-spacing: 6px;
+  text-shadow: 0 0 10px rgba(0,217,255,.7);
+  animation: bh-enter-pulse 2.4s ease-in-out infinite;
+  transition: background .25s, box-shadow .25s, transform .25s;
+}
+.bh-enter:hover {
+  background: rgba(0,217,255,.16); box-shadow: 0 0 24px rgba(0,217,255,.5);
+  transform: scale(1.04);
+}
+@keyframes bh-enter-pulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
 
-/* Mobile — same sequence at ~0.75x. */
-@media (max-width: 760px) {
-  .boot-center { transform: translate(-50%, -50%) scale(.75); }
-  .boot-frag { font-size: .56rem; }
-  .boot-grid { background-size: 36px 36px; }
+/* Sound toggle + skip hint. */
+.bh-mute {
+  position: absolute; top: 20px; right: 20px; z-index: 5; pointer-events: auto;
+  cursor: pointer; background: rgba(0,217,255,.04);
+  border: 1px solid rgba(0,217,255,.3); border-radius: 3px; color: rgba(0,217,255,.7);
+  font-family: inherit; font-size: .54rem; letter-spacing: 2px; padding: 6px 10px;
+}
+.bh-mute:hover { border-color: rgba(0,217,255,.7); color: #00d9ff; }
+.bh-mute .bh-mute-on { display: none; }
+.bh-mute .bh-mute-off { display: inline; }
+.bh-mute:not(.bh-muted) .bh-mute-on { display: inline; }
+.bh-mute:not(.bh-muted) .bh-mute-off { display: none; }
+.bh-skip {
+  position: absolute; bottom: 26px; left: 0; right: 0; z-index: 5; text-align: center;
+  font-size: .54rem; letter-spacing: 3px; color: rgba(120,160,180,.5);
+  opacity: 0; animation: bh-skip-in .6s ease 1.2s forwards; pointer-events: none;
+}
+.bh-landing.bh-no-skiphint .bh-skip { display: none; }
+@keyframes bh-skip-in { to { opacity: 1; } }
+
+/* Entry flash at horizon crossing. */
+.bh-flash {
+  position: absolute; inset: 0; z-index: 8; background: #eafaff;
+  opacity: 0; pointer-events: none;
+}
+.bh-flash.bh-flash-on { animation: bh-flash 600ms ease-out forwards; }
+@keyframes bh-flash {
+  0% { opacity: 0; } 22% { opacity: 1; } 100% { opacity: 0; }
 }
 
-/* Reduced motion — skip the cinematic entirely (JS removes the overlay). */
+/* ── CSS fallback black hole (weak GPU / mobile) ─────────────────────────────── */
+.bhf {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background: radial-gradient(ellipse at center, #03070d 0%, #000 70%);
+  overflow: hidden;
+}
+.bhf-stars {
+  position: absolute; inset: -20%;
+  background-image:
+    radial-gradient(1px 1px at 20% 30%, rgba(180,220,255,.9), transparent),
+    radial-gradient(1px 1px at 70% 60%, rgba(140,200,255,.8), transparent),
+    radial-gradient(1px 1px at 40% 80%, rgba(200,230,255,.7), transparent),
+    radial-gradient(1px 1px at 85% 20%, rgba(160,210,255,.8), transparent),
+    radial-gradient(1px 1px at 55% 45%, rgba(190,220,255,.6), transparent);
+  background-size: 240px 240px, 320px 320px, 200px 200px, 280px 280px, 360px 360px;
+  animation: bhf-drift 60s linear infinite; opacity: .8;
+}
+@keyframes bhf-drift { to { transform: translate(-40px, -30px); } }
+.bhf-core {
+  position: relative; width: 168px; height: 168px; border-radius: 50%;
+  background: #000; box-shadow: 0 0 0 2px rgba(0,217,255,.55),
+    0 0 26px 4px rgba(0,217,255,.5), inset 0 0 30px 6px rgba(0,0,0,.9); z-index: 3;
+}
+.bhf-disk, .bhf-disk2 {
+  position: absolute; width: 460px; height: 460px; border-radius: 50%; z-index: 2;
+  background: conic-gradient(from 0deg,
+    #fff7ec, #ffb24d, #ff6a1f, #b5310a, #2a0c04, #b5310a, #ff6a1f, #ffb24d, #fff7ec);
+  -webkit-mask: radial-gradient(circle, transparent 36%, #000 38%, #000 60%, transparent 64%);
+          mask: radial-gradient(circle, transparent 36%, #000 38%, #000 60%, transparent 64%);
+  filter: blur(2px) brightness(1.15); opacity: .92;
+  animation: bhf-spin 11s linear infinite;
+}
+.bhf-disk2 {
+  width: 470px; height: 200px; filter: blur(6px) brightness(1.3);
+  animation: bhf-spin 14s linear infinite reverse; opacity: .55;
+}
+@keyframes bhf-spin { to { transform: rotate(360deg); } }
+.bhf-ring {
+  position: absolute; width: 182px; height: 182px; border-radius: 50%; z-index: 4;
+  border: 1.5px solid rgba(0,229,255,.9);
+  box-shadow: 0 0 18px rgba(0,217,255,.8), inset 0 0 12px rgba(0,217,255,.5);
+}
+.bhf-jet {
+  position: absolute; width: 14px; height: 230px; z-index: 1; left: 50%;
+  margin-left: -7px; filter: blur(5px);
+  background: linear-gradient(to top, rgba(0,229,255,0), rgba(0,229,255,.85), rgba(220,250,255,.95));
+  animation: bhf-jet-flicker 1.6s ease-in-out infinite;
+}
+.bhf-jet-up   { bottom: 50%; transform-origin: bottom center; }
+.bhf-jet-down { top: 50%; transform: scaleY(-1); transform-origin: top center; opacity: .8; }
+@keyframes bhf-jet-flicker { 0%,100% { opacity: .8; } 45% { opacity: 1; } 70% { opacity: .65; } }
+/* fallback arrival / fall-in */
+.bhf-arrive .bhf { animation: bhf-arrive 1.1s cubic-bezier(.2,.9,.2,1) both; }
+@keyframes bhf-arrive { 0% { transform: scale(.55); opacity: 0; } 70% { transform: scale(1.04); } 100% { transform: scale(1); opacity: 1; } }
+.bhf-fall .bhf { animation: bhf-fall 1.2s cubic-bezier(.6,0,.9,.3) forwards; }
+@keyframes bhf-fall { 0% { transform: scale(1); } 100% { transform: scale(9); opacity: 1; } }
+
+@media (max-width: 767px) {
+  .bh-title { font-size: 1.25rem; letter-spacing: 8px; }
+  .bhf-disk { width: 320px; height: 320px; }
+  .bhf-disk2 { width: 330px; height: 150px; }
+  .bhf-core { width: 120px; height: 120px; }
+  .bhf-ring { width: 132px; height: 132px; }
+  .bhf-jet { height: 160px; }
+}
 @media (prefers-reduced-motion: reduce) {
-  .boot-intro * { animation: none !important; }
+  .bhf-stars, .bhf-disk, .bhf-disk2, .bhf-jet, .bh-enter { animation: none; }
+  .bh-warp { display: none; }
 }
+
