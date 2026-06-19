@@ -350,6 +350,7 @@ function loadAll() {
   fetchSupplements();
   initChat();
   fetchNotifications();
+  initSpotify();
 }
 
 // ── Briefing ───────────────────────────────────────────────────────────────────
@@ -771,6 +772,49 @@ async function toggleSupplement(btn) {
   } catch {
     toast("FAILED");
     btn.disabled = false;
+  }
+}
+
+// ── Spotify — status indicator + auto-resume on load ────────────────────────────
+async function initSpotify() {
+  const chip = document.getElementById("spotify-chip");
+  if (!chip) return;  // not connected → header shows the CONNECT::SPOTIFY link
+  let status;
+  try { status = await apiGet("/api/asfa/spotify/status"); }
+  catch { return; }
+  renderSpotify(status);
+
+  // Auto-resume only when connected and nothing is currently playing — so we
+  // don't yank a track that's already going.
+  if (status.connected && !status.is_playing) {
+    try {
+      const r = await apiGet("/api/asfa/spotify/play");
+      if (r.ok) {
+        setTimeout(async () => {
+          try { renderSpotify(await apiGet("/api/asfa/spotify/status")); } catch {}
+        }, 1200);
+      } else if (r.reason === "no_device" || r.reason === "reauth") {
+        toast(r.message);
+      }
+      if (r.message) chip.title = r.message;
+    } catch { /* silent — indicator already reflects state */ }
+  }
+}
+
+function renderSpotify(s) {
+  const dot = document.getElementById("spotify-dot");
+  const label = document.getElementById("spotify-label");
+  const chip = document.getElementById("spotify-chip");
+  if (!dot || !chip) return;
+  dot.classList.remove("dot-playing", "dot-paused", "dot-idle");
+  if (s.is_playing) {
+    dot.classList.add("dot-playing");
+    if (label) label.textContent = "PLAYING";
+    if (s.track) chip.title = `${s.track} — ${s.artist || ""}`.trim();
+  } else {
+    dot.classList.add("dot-paused");
+    if (label) label.textContent = "SPOTIFY";
+    chip.title = s.device ? "Paused" : "No active device";
   }
 }
 

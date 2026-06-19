@@ -26,6 +26,7 @@ from services.gcal import add_event, get_todays_events, get_tomorrow_events
 from services.gmail import (get_email_by_id, get_flow, get_unread_emails,
                             is_authenticated, save_credentials)
 from services.news import get_finance_news, get_top_news
+from services import spotify
 from services.weather import get_forecast, get_weather
 
 logging.basicConfig(level=logging.INFO)
@@ -46,7 +47,11 @@ def _today():
 
 @app.route("/")
 def index():
-    return render_template("index.html", google_connected=is_authenticated())
+    return render_template(
+        "index.html",
+        google_connected=is_authenticated(),
+        spotify_connected=spotify.is_connected(),
+    )
 
 
 # ── Briefing ───────────────────────────────────────────────────────────────────
@@ -386,6 +391,50 @@ def oauth_callback():
 @app.route("/auth/status")
 def auth_status():
     return jsonify({"google_connected": is_authenticated()})
+
+
+# ── Spotify OAuth + playback ───────────────────────────────────────────────────
+
+@app.route("/auth/spotify")
+def auth_spotify():
+    if not spotify.is_configured():
+        return "Spotify is not configured on the server.", 400
+    state = base64.urlsafe_b64encode(os.urandom(16)).decode()
+    session["spotify_oauth_state"] = state
+    return redirect(spotify.get_auth_url(state))
+
+
+@app.route("/auth/spotify/callback")
+def auth_spotify_callback():
+    if request.args.get("error"):
+        return redirect("/")
+    state = request.args.get("state")
+    if not state or state != session.get("spotify_oauth_state"):
+        return "Invalid OAuth state.", 400
+    code = request.args.get("code")
+    if not code or not spotify.exchange_code(code):
+        return "Spotify authorization failed.", 400
+    logger.info("Spotify connected.")
+    return redirect("/")
+
+
+@app.route("/auth/spotify/disconnect", methods=["POST"])
+def auth_spotify_disconnect():
+    spotify.disconnect()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/asfa/spotify/status")
+def api_spotify_status():
+    """Connection + current-playback snapshot for the dashboard indicator."""
+    return jsonify(spotify.current_playback())
+
+
+@app.route("/api/asfa/spotify/play")
+def api_spotify_play():
+    """Resume playback on the user's active/default device. Always 200 so the
+    frontend can surface the friendly message regardless of outcome."""
+    return jsonify(spotify.resume_playback())
 
 
 # ── Reflections, goals, memory ─────────────────────────────────────────────────
