@@ -233,6 +233,17 @@ def get_hydration_total(date: str) -> int:
         return int(row["total"]) if row and row["total"] is not None else 0
 
 
+def get_hydration_count(date: str) -> int:
+    """Number of separate hydration entries logged on `date`."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT COUNT(*) AS n FROM hydration_log WHERE date = {ph}", (date,))
+        row = cur.fetchone()
+        return int(row["n"]) if row and row["n"] is not None else 0
+
+
 def get_water_streak():
     with get_db() as conn:
         cur = conn.cursor()
@@ -402,6 +413,18 @@ def save_voice_note(content):
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
         cur.execute(f"INSERT INTO voice_notes (content) VALUES ({ph})", (content,))
+
+
+def get_voice_notes(date: str):
+    """Voice notes / quick captures created on `date` (oldest first)."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT content, created_at FROM voice_notes "
+            f"WHERE substr(created_at,1,10) = {ph} ORDER BY created_at ASC",
+            (date,))
+        return [dict(r) for r in cur.fetchall()]
 
 
 # ── Supplements ────────────────────────────────────────────────────────────────

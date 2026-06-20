@@ -231,6 +231,19 @@ def supplement_reminder():
     )
 
 
+def obsidian_sync_job():
+    """Write the daily Obsidian markdown log (no-op on cloud filesystems)."""
+    from services.obsidian_sync import sync_to_obsidian
+    try:
+        res = sync_to_obsidian()
+        if res.get("status") == "synced":
+            logger.info("Obsidian daily sync: %s", res.get("path"))
+        else:
+            logger.warning("Obsidian daily sync skipped: %s", res.get("error"))
+    except Exception as e:
+        logger.error("obsidian sync job failed: %s", e)
+
+
 def weekly_review():
     from services.ai import generate_weekly_review
     try:
@@ -257,6 +270,9 @@ def start_scheduler():
     sched.add_job(reflection_prompt, "cron", hour=22, minute=0)
     # Autonomous end-of-day summary — auto-sent, no user action required.
     sched.add_job(daily_summary, "cron", hour=21, minute=0, timezone="UTC")
+    # Daily Obsidian markdown log, shortly after the end-of-day debrief.
+    sched.add_job(obsidian_sync_job, "cron", hour=21, minute=10,
+                  id="obsidian_sync_daily")
     # Supplement reminders (local time) — morning prompt + evening nudge.
     sched.add_job(supplement_reminder, "cron", hour=9, minute=0)
     sched.add_job(supplement_reminder, "cron", hour=20, minute=0)

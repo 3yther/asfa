@@ -26,6 +26,7 @@ from services.gcal import add_event, get_todays_events, get_tomorrow_events
 from services.gmail import (get_email_by_id, get_flow, get_unread_emails,
                             is_authenticated, save_credentials)
 from services.news import get_finance_news, get_top_news
+from services.obsidian_sync import OBSIDIAN_VAULT_PATH, sync_to_obsidian
 from services import spotify
 from services.weather import get_forecast, get_weather
 
@@ -494,6 +495,17 @@ def api_focus_line():
 def api_bots_health():
     """Per-bot alive/status/last-signal (cached ~60s server-side)."""
     return jsonify(get_bots_health())
+
+
+# ── Obsidian sync (local markdown daily logs) ──────────────────────────────────
+
+@app.route("/api/asfa/obsidian/sync-now")
+def api_obsidian_sync():
+    """Write today's markdown log to OBSIDIAN_VAULT_PATH. Only writes when ASFA
+    runs on a machine with that local folder (i.e. the Mac, not Railway)."""
+    result = sync_to_obsidian()
+    result.setdefault("vault", OBSIDIAN_VAULT_PATH)
+    return jsonify(result)
 
 
 # Forward-validation window for both bots. Configurable; default targets the
