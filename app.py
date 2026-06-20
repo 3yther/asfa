@@ -18,7 +18,7 @@ os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
-import database as db
+# import database as db
 from services import ai
 from services.bots import get_bots_health, get_bots_status, get_trading_activity
 from services.briefing import build_briefing
