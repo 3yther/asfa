@@ -38,6 +38,23 @@ function wireControls() {
   });
   Think.wire();
   LockIn.wire();
+  wireObsidian();
+}
+
+// ── Obsidian sync (manual) ───────────────────────────────────────────────────────
+function wireObsidian() {
+  const b = document.getElementById("obsidian-btn");
+  if (!b) return;
+  b.addEventListener("click", async () => {
+    const label = b.textContent;
+    b.disabled = true; b.textContent = "SYNCING…";
+    try {
+      const d = await apiGet("/api/asfa/obsidian/sync-now");
+      if (d.status === "synced") toast("OBSIDIAN · " + d.file);
+      else toast(d.message || "Sync failed — run ASFA on your Mac");
+    } catch { toast("Sync failed"); }
+    b.textContent = label; b.disabled = false;
+  });
 }
 
 // ── Hydration ───────────────────────────────────────────────────────────────────
