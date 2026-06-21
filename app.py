@@ -1,5 +1,6 @@
 """ASFA — AI Software For Amir. JARVIS-style life command centre."""
 import base64
+import hmac
 import json
 import logging
 import os
@@ -34,8 +35,70 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("asfa")
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "asfa-dev-secret-change-me")
+
+# Session signing key. Never fall back to a hardcoded value — a predictable
+# secret lets anyone forge session cookies. Use the env var if set; otherwise
+# generate a random ephemeral key (single gunicorn worker, so it's stable for
+# the process lifetime) and warn loudly so prod gets a persistent one set.
+_secret = os.environ.get("SECRET_KEY")
+if not _secret:
+    _secret = base64.urlsafe_b64encode(os.urandom(32)).decode()
+    logger.warning(
+        "SECRET_KEY not set — using a random ephemeral key. Sessions will reset "
+        "on restart. Set SECRET_KEY in the environment for production.")
+app.secret_key = _secret
 app.config["PREFERRED_URL_SCHEME"] = "https"
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("GOOGLE_REDIRECT_URI", "").startswith("https")
+
+# ── App access gate ────────────────────────────────────────────────────────────
+# The dashboard exposes personal Gmail/Calendar/finance data, so the whole app
+# sits behind a single shared passphrase (APP_PASSWORD). Google/Spotify OAuth
+# only authorises the *server* to reach those accounts — it does not gate users.
+APP_PASSWORD = os.environ.get("APP_PASSWORD")
+# Endpoints reachable without a session. Everything else requires login.
+_PUBLIC_ENDPOINTS = {"login", "static"}
+
+
+@app.before_request
+def _require_login():
+    if request.endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    if session.get("authed"):
+        return None
+    # Fail closed: if no passphrase is configured the app stays locked.
+    if not APP_PASSWORD:
+        logger.error("APP_PASSWORD not set — app is locked. Set it to enable access.")
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "app auth not configured"}), 503
+        return "ASFA is locked: set APP_PASSWORD in the environment.", 503
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "unauthorized"}), 401
+    return redirect(url_for("login", next=request.path))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    next_url = request.args.get("next") or "/"
+    # Only allow same-site relative paths as the post-login redirect target.
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/"
+    if request.method == "POST":
+        pw = request.form.get("password") or ""
+        if APP_PASSWORD and hmac.compare_digest(pw, APP_PASSWORD):
+            session["authed"] = True
+            session.permanent = True
+            return redirect(next_url)
+        return render_template("login.html", error="Incorrect passphrase.", next_url=next_url), 401
+    return render_template("login.html", error=None, next_url=next_url)
+
+
+@app.route("/logout", methods=["POST", "GET"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 # db.init_db()
 
@@ -372,6 +435,13 @@ def auth_google():
 @app.route("/auth/google/callback")
 @app.route("/oauth/callback")
 def oauth_callback():
+    # Validate the OAuth state to prevent CSRF / authorization-code injection:
+    # the `state` Google returns must match the one we stored at /auth/google.
+    expected = session.pop("oauth_state", None)
+    returned = request.args.get("state")
+    if not expected or not returned or not hmac.compare_digest(returned, expected):
+        logger.warning("OAuth callback rejected: state mismatch.")
+        return "Invalid OAuth state.", 400
     # Use the SAME configured redirect_uri that auth_google sent to Google — it
     # must match exactly at token exchange. (request.base_url can arrive as http
     # behind Railway's TLS proxy and would mismatch the https URI.)
