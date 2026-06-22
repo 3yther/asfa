@@ -19,7 +19,7 @@ os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
-# import database as db
+import database as db
 from services import ai
 from services.bots import get_bots_health, get_bots_status, get_trading_activity
 from services.briefing import build_briefing
@@ -100,7 +100,10 @@ def logout():
     session.clear()
     return redirect(url_for("login"))
 
-# db.init_db()
+# Create tables if missing. Idempotent (CREATE TABLE IF NOT EXISTS) and handles
+# the Postgres/SQLite difference, so it's safe to run on every boot. Critical on
+# a fresh Railway Postgres where no tables exist yet.
+db.init_db()
 
 
 def _today():
