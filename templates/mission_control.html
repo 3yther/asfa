@@ -98,22 +98,23 @@
   @media(max-width:560px){ .bldg{width:84px;padding:8px 5px;} }
   .bldg:hover{transform:translate(-50%,-50%) scale(1.06); box-shadow:0 8px 26px rgba(0,0,0,.5);}
   .bldg.sel{box-shadow:0 0 0 2px var(--cyan), 0 8px 26px rgba(0,0,0,.5);}
-  .bldg .ico{font-size:1.5rem; line-height:1; margin-bottom:4px;}
+  .bldg .ico{line-height:0; margin-bottom:5px;}
+  .bldg .ico .bsvg{width:56px; height:65px; display:block; margin:0 auto;
+    transition:filter .25s ease;}
+  @media(max-width:560px){ .bldg .ico .bsvg{width:46px;height:54px;} }
   .bldg .nm{font-size:.62rem; letter-spacing:1.5px; font-weight:700; text-transform:uppercase;}
   .bldg .lvl{font-size:.5rem; color:var(--muted); letter-spacing:1px; margin-top:2px;}
-  .bldg .roof{height:3px; border-radius:3px; margin:6px 4px 0; background:var(--muted);}
   .bldg.active{border-color:var(--green);}
-  .bldg.active .roof{background:var(--green); box-shadow:0 0 8px var(--green);}
   .bldg.active{animation:bpulse 2.2s ease-in-out infinite;}
   @keyframes bpulse{0%,100%{border-color:rgba(16,185,129,.55);}50%{border-color:rgba(16,185,129,1);}}
-  .bldg.idle .roof{background:var(--muted);}
-  .bldg.locked{opacity:.4; cursor:not-allowed; filter:grayscale(.7);}
+  .bldg.locked{opacity:.5; cursor:not-allowed; filter:grayscale(.5);}
   .bldg.locked .nm::after{content:" 🔒"; font-size:.6rem;}
 
   /* ── Detail panel ───────────────────────────────────────────────────── */
   .detail-body{padding:16px;}
   .d-head{display:flex; align-items:center; gap:14px; margin-bottom:14px;}
-  .d-ico{font-size:2.4rem;}
+  .d-ico{font-size:2.4rem; line-height:0;}
+  .d-ico .bsvg{width:52px; height:60px; display:block;}
   .d-name{font-size:1.1rem; font-weight:700; letter-spacing:1px;}
   .d-role{font-size:.66rem; color:var(--muted); letter-spacing:1.5px; text-transform:uppercase;}
   .d-badge{margin-left:auto; font-size:.55rem; letter-spacing:2px; padding:4px 10px; border-radius:20px; text-transform:uppercase;}
@@ -261,6 +262,142 @@ const TREES = [
   {x:24,y:78},{x:48,y:80},{x:72,y:80},{x:90,y:74},{x:50,y:38},{x:50,y:58}
 ];
 
+// ── Pixel-art SVG buildings ───────────────────────────────────────────────
+// Each agent gets a unique ~60x70 inline-SVG building. Three visual states are
+// derived from status (active / idle / locked) via a shared palette so a status
+// toggle just re-renders the SVG — no external images, no CDN.
+const BUILDING_ACCENTS = {
+  nexus:"#22d3ee", sentinel:"#10b981", axiom:"#7c3aed", pyro:"#f59e0b",
+  quant:"#3b82f6", ghost:"#ec4899", pixel:"#14b8a6", forge:"#64748b"
+};
+
+function bldgPalette(accent, status){
+  if(status==="locked"){
+    return {wall:"#262b33", wallDark:"#1a1e25", roof:"#3a414b", win:"#14171c",
+            door:"#14171c", line:"#39414c", accent:"#5b6573", glow:""};
+  }
+  if(status==="active"){
+    return {wall:"#1c2b3b", wallDark:"#142433", roof:accent, win:"#ffe6a3",
+            door:"#ffd766", line:accent, accent:accent, glow:accent};
+  }
+  // idle
+  return {wall:"#172230", wallDark:"#101a26", roof:"#3c4a5e", win:"#0c141d",
+          door:"#0c141d", line:"#28384c", accent:"#4a5870", glow:""};
+}
+
+// Per-agent shape builders. Each returns inner SVG markup for a 60x70 viewBox.
+const BUILDING_SHAPES = {
+  // Nexus — central castle/tower with side turrets, battlements + flag
+  nexus:(p)=>`
+    <rect x="5" y="32" width="12" height="34" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="43" y="32" width="12" height="34" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="5" y="29" width="3" height="4" fill="${p.roof}"/><rect x="11" y="29" width="3" height="4" fill="${p.roof}"/>
+    <rect x="43" y="29" width="3" height="4" fill="${p.roof}"/><rect x="49" y="29" width="3" height="4" fill="${p.roof}"/>
+    <rect x="20" y="16" width="20" height="50" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="20" y="12" width="4" height="4" fill="${p.roof}"/><rect x="28" y="12" width="4" height="4" fill="${p.roof}"/><rect x="36" y="12" width="4" height="4" fill="${p.roof}"/>
+    <rect x="29" y="2" width="2" height="10" fill="${p.accent}"/>
+    <polygon points="31,3 31,9 38,6" fill="${p.accent}"/>
+    <rect x="27" y="24" width="6" height="6" fill="${p.win}"/><rect x="27" y="36" width="6" height="6" fill="${p.win}"/>
+    <rect x="8" y="40" width="6" height="6" fill="${p.win}"/><rect x="46" y="40" width="6" height="6" fill="${p.win}"/>
+    <rect x="26" y="52" width="8" height="14" fill="${p.door}"/>`,
+
+  // Sentinel — fortified guard tower, battlements, arrow-slits + shield
+  sentinel:(p)=>`
+    <rect x="10" y="58" width="40" height="8" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="14" y="22" width="32" height="40" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="13" y="17" width="5" height="5" fill="${p.roof}"/><rect x="22" y="17" width="5" height="5" fill="${p.roof}"/>
+    <rect x="33" y="17" width="5" height="5" fill="${p.roof}"/><rect x="42" y="17" width="5" height="5" fill="${p.roof}"/>
+    <rect x="22" y="28" width="4" height="9" fill="${p.win}"/><rect x="34" y="28" width="4" height="9" fill="${p.win}"/>
+    <polygon points="30,40 36,42 36,48 30,52 24,48 24,42" fill="${p.wallDark}" stroke="${p.accent}" stroke-width="1"/>
+    <rect x="26" y="56" width="8" height="10" fill="${p.door}"/>`,
+
+  // Axiom — library/archive with columns + pediment
+  axiom:(p)=>`
+    <polygon points="6,30 30,16 54,30" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="8" y="30" width="44" height="6" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="10" y="36" width="40" height="24" fill="${p.wall}"/>
+    <rect x="13" y="36" width="4" height="24" fill="${p.wallDark}"/><rect x="21" y="36" width="4" height="24" fill="${p.wallDark}"/>
+    <rect x="29" y="36" width="4" height="24" fill="${p.wallDark}"/><rect x="37" y="36" width="4" height="24" fill="${p.wallDark}"/>
+    <rect x="45" y="36" width="4" height="24" fill="${p.wallDark}"/>
+    <rect x="17" y="40" width="4" height="16" fill="${p.win}"/><rect x="33" y="40" width="4" height="16" fill="${p.win}"/>
+    <rect x="6" y="60" width="48" height="3" fill="${p.wallDark}"/><rect x="3" y="63" width="54" height="3" fill="${p.line}"/>`,
+
+  // Pyro — workshop/forge with chimney + glowing forge door
+  pyro:(p)=>`
+    <rect x="40" y="10" width="8" height="20" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
+    <circle cx="44" cy="8" r="2" fill="${p.accent}" opacity=".5"/><circle cx="46" cy="4" r="2.5" fill="${p.accent}" opacity=".3"/>
+    <polygon points="6,30 30,18 54,30" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="10" y="30" width="40" height="36" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="14" y="36" width="7" height="7" fill="${p.win}"/><rect x="39" y="36" width="7" height="7" fill="${p.win}"/>
+    <rect x="22" y="44" width="16" height="22" fill="${p.door}"/>
+    <rect x="24" y="48" width="12" height="16" fill="${p.win}"/>`,
+
+  // Quant — observatory with dome + telescope slit
+  quant:(p)=>`
+    <path d="M16 30 A14 14 0 0 1 44 30 Z" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="28" y="16" width="4" height="14" fill="${p.win}"/>
+    <rect x="14" y="30" width="32" height="36" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="19" y="36" width="6" height="6" fill="${p.win}"/><rect x="35" y="36" width="6" height="6" fill="${p.win}"/>
+    <rect x="19" y="48" width="6" height="6" fill="${p.win}"/><rect x="35" y="48" width="6" height="6" fill="${p.win}"/>
+    <rect x="26" y="54" width="8" height="12" fill="${p.door}"/>`,
+
+  // Ghost — dark spooky manor with pointed gables + round window
+  ghost:(p)=>`
+    <polygon points="10,34 20,16 30,34" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
+    <polygon points="28,36 40,20 52,36" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="10" y="34" width="42" height="32" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="15" y="26" width="6" height="8" fill="${p.win}"/><rect x="34" y="28" width="6" height="8" fill="${p.win}"/>
+    <rect x="14" y="42" width="6" height="7" fill="${p.win}"/><rect x="42" y="42" width="6" height="7" fill="${p.win}"/>
+    <circle cx="30" cy="46" r="3.5" fill="${p.win}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="26" y="54" width="8" height="12" fill="${p.door}"/>`,
+
+  // Pixel — arcade/studio cabinet with marquee + screen
+  pixel:(p)=>`
+    <rect x="14" y="20" width="32" height="46" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="12" y="16" width="36" height="8" fill="${p.roof}"/>
+    <rect x="18" y="28" width="24" height="16" fill="${p.win}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="21" y="31" width="4" height="4" fill="${p.accent}"/><rect x="29" y="35" width="4" height="4" fill="${p.accent}"/><rect x="35" y="31" width="4" height="4" fill="${p.accent}"/>
+    <rect x="18" y="48" width="24" height="6" fill="${p.wallDark}"/>
+    <circle cx="23" cy="51" r="2" fill="${p.accent}"/><rect x="30" y="49" width="3" height="4" fill="${p.accent}"/>
+    <rect x="27" y="58" width="6" height="6" fill="${p.door}"/>`,
+
+  // Forge — crumbling ruins / locked vault
+  forge:(p)=>`
+    <polygon points="8,40 8,66 20,66 20,30 14,34 14,40" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
+    <polygon points="40,66 40,32 46,28 52,34 52,66" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
+    <rect x="20" y="40" width="20" height="26" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
+    <circle cx="30" cy="52" r="8" fill="${p.win}" stroke="${p.accent}" stroke-width="1.5"/>
+    <circle cx="30" cy="52" r="3" fill="${p.wallDark}" stroke="${p.accent}" stroke-width="1"/>
+    <line x1="30" y1="44" x2="30" y2="60" stroke="${p.accent}" stroke-width="1"/>
+    <line x1="22" y1="52" x2="38" y2="52" stroke="${p.accent}" stroke-width="1"/>
+    <polyline points="24,42 26,48 23,54 27,60" fill="none" stroke="${p.line}" stroke-width="1"/>
+    <rect x="26" y="64" width="8" height="2" fill="${p.accent}"/>`
+};
+
+function buildingSVG(id, status){
+  const accent = BUILDING_ACCENTS[id] || "#22d3ee";
+  // Forge is always a locked ruin regardless of stored status.
+  const st = (id==="forge") ? "locked" : status;
+  const p = bldgPalette(accent, st);
+  const shape = BUILDING_SHAPES[id] || BUILDING_SHAPES.nexus;
+  const glow = p.glow ? `filter:drop-shadow(0 0 4px ${p.glow})` : "";
+  return `<svg class="bsvg" viewBox="0 0 60 70" width="60" height="70" `+
+         `xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" `+
+         `style="${glow}">${shape(p)}</svg>`;
+}
+
+// Swap a single building's SVG in place when its status changes (no full reload).
+function swapBuildingState(id, status){
+  const a = AGENTS.find(x=>x.id===id);
+  if(a) a.status = status;
+  document.querySelectorAll(`.bldg[data-agent-id="${id}"]`).forEach(card=>{
+    card.classList.remove("active","idle","locked");
+    card.classList.add(status);
+    const ico = card.querySelector(".ico");
+    if(ico) ico.innerHTML = buildingSVG(id, status);
+  });
+}
+
 // ── HTTP helpers (session-cookie auth gate) ──────────────────────────────
 async function apiGet(url){
   const r = await fetch(url, {credentials:"include"});
@@ -339,12 +476,12 @@ function renderMap(){
     const pos=a.building_position||{x:50,y:50};
     const el=document.createElement("div");
     el.className="bldg "+a.status+(a.id===SELECTED?" sel":"");
+    el.dataset.agentId=a.id;
     el.style.left=pos.x+"%"; el.style.top=pos.y+"%";
     el.innerHTML=`
-      <div class="ico">${esc(a.icon||"🤖")}</div>
+      <div class="ico">${buildingSVG(a.id, a.status)}</div>
       <div class="nm">${esc(a.name)}</div>
-      <div class="lvl">LV ${a.level}</div>
-      <div class="roof"></div>`;
+      <div class="lvl">LV ${a.level}</div>`;
     if(a.status!=="locked"){
       el.addEventListener("click",()=>selectAgent(a.id,true));
     }else{
@@ -397,7 +534,7 @@ async function selectAgent(id, refreshLog){
 
   let html = `
     <div class="d-head">
-      <div class="d-ico">${esc(a.icon||"🤖")}</div>
+      <div class="d-ico">${buildingSVG(a.id, a.status)}</div>
       <div>
         <div class="d-name">${esc(a.name)}</div>
         <div class="d-role">${esc(a.role||"")}</div>
@@ -483,7 +620,12 @@ async function doDeploy(id){
   }catch(e){ toast("FAILED"); }
 }
 async function doToggle(id){
-  try{ const a=await apiPost(`/api/agents/${id}/status`,{}); toast("STATUS → "+(a.status||"").toUpperCase()); await loadAgents(); }
+  try{
+    const a=await apiPost(`/api/agents/${id}/status`,{});
+    if(a.status) swapBuildingState(id, a.status); // instant SVG state swap
+    toast("STATUS → "+(a.status||"").toUpperCase());
+    await loadAgents();
+  }
   catch(e){ toast("FAILED"); }
 }
 async function doBattle(id){
