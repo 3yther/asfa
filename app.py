@@ -104,6 +104,8 @@ def logout():
 # the Postgres/SQLite difference, so it's safe to run on every boot. Critical on
 # a fresh Railway Postgres where no tables exist yet.
 db.init_db()
+# Mission Control — create the agent ecosystem tables and seed the roster.
+db.init_agents_db()
 
 
 def _today():
@@ -762,6 +764,180 @@ def api_notifications():
 def api_notifications_read():
     db.mark_notifications_read()
     return jsonify({"ok": True})
+
+
+# ── Mission Control — gamified AI-agent ecosystem ──────────────────────────────
+
+def _mc_live_data() -> dict:
+    """Real ASFA data surfaced on the Mission Control dashboard. Every source is
+    best-effort; the last good trading P&L is cached so the panel still shows a
+    value when the scanner is unreachable."""
+    today = _today()
+
+    # Water today
+    water_ml = 0
+    try:
+        habits = db.get_habits(1)
+        today_h = next((h for h in habits if h["date"] == today), {})
+        water_ml = int(today_h.get("water_ml") or 0)
+    except Exception as e:
+        logger.warning("mc live water failed: %s", e)
+
+    # Supplements
+    supp_taken, supp_total = 0, len(db.SUPPLEMENTS)
+    try:
+        supp_taken = db.count_supplements_today(today)
+    except Exception as e:
+        logger.warning("mc live supplements failed: %s", e)
+
+    # Trading P&L (live, with last-cached fallback)
+    trading = {"online": False, "pnl": None, "pnl_pct": None, "equity": None,
+               "signals": 0, "cached": False}
+    try:
+        activity = get_trading_activity()
+        portfolio = (activity or {}).get("portfolio") or {}
+        if activity.get("online") and portfolio:
+            trading.update(
+                online=True,
+                pnl=portfolio.get("total_pnl"),
+                pnl_pct=portfolio.get("total_pnl_pct"),
+                equity=portfolio.get("equity"),
+                signals=1 if activity.get("latest_signal") else 0,
+            )
+            db.kv_set("mc_last_trading", json.dumps({
+                "pnl": trading["pnl"], "pnl_pct": trading["pnl_pct"],
+                "equity": trading["equity"], "signals": trading["signals"],
+            }))
+        else:
+            raise ValueError("trading offline")
+    except Exception:
+        cached = db.kv_get("mc_last_trading")
+        if cached:
+            try:
+                c = json.loads(cached)
+                trading.update(pnl=c.get("pnl"), pnl_pct=c.get("pnl_pct"),
+                               equity=c.get("equity"), signals=c.get("signals", 0),
+                               cached=True)
+            except (TypeError, ValueError):
+                pass
+
+    return {
+        "water_ml": water_ml,
+        "water_target": 2000,
+        "supplements_taken": supp_taken,
+        "supplements_total": supp_total,
+        "trading": trading,
+        "uptime": "ONLINE",
+        "time": datetime.now().isoformat(),
+    }
+
+
+def _mc_alerts(agents: list, live: dict) -> list:
+    """Up to 3 attention items pulled from real ASFA state + agent readiness."""
+    alerts = []
+    if live["supplements_taken"] < live["supplements_total"]:
+        alerts.append({"level": "warn", "text": "Supplements not logged today"})
+    if live["water_ml"] < 500:
+        alerts.append({"level": "warn", "text": "Water intake low — log some water"})
+    # Any agent within 10% of its next level → ready to level up.
+    for a in agents:
+        if a["status"] == "locked":
+            continue
+        xp_max = a.get("xp_max") or 1
+        if xp_max and a["xp"] >= 0.9 * xp_max:
+            alerts.append({"level": "info", "text": f"{a['name']} ready to level up"})
+            break
+    # Trading/deployment health — surfaced as a deployment issue when offline.
+    if not live["trading"]["online"]:
+        alerts.append({"level": "crit", "text": "Railway deployment issue detected"})
+    return alerts[:3]
+
+
+@app.route("/mission-control")
+def mission_control():
+    return render_template("mission_control.html")
+
+
+@app.route("/api/agents")
+def api_agents():
+    agents = db.get_agents()
+    live = _mc_live_data()
+    return jsonify({
+        "agents": agents,
+        "live": live,
+        "alerts": _mc_alerts(agents, live),
+    })
+
+
+@app.route("/api/agents/<agent_id>/xp", methods=["POST"])
+def api_agent_xp(agent_id):
+    d = request.get_json(force=True) or {}
+    try:
+        amount = int(d.get("amount", 50))
+    except (TypeError, ValueError):
+        return jsonify({"error": "amount must be an integer"}), 400
+    message = d.get("message") or f"+{amount} XP awarded"
+    result = db.award_agent_xp(agent_id, amount, message)
+    if "error" in result:
+        return jsonify(result), 404
+    return jsonify(result)
+
+
+@app.route("/api/agents/<agent_id>/status", methods=["POST"])
+def api_agent_status(agent_id):
+    """Toggle active⇄idle, or set an explicit status when one is provided."""
+    d = request.get_json(silent=True) or {}
+    status = d.get("status")
+    if status in ("active", "idle", "locked"):
+        agent = db.set_agent_status(agent_id, status)
+    else:
+        agent = db.toggle_agent_status(agent_id)
+    if not agent or "error" in (agent or {}):
+        return jsonify({"error": "unknown agent"}), 404
+    return jsonify(agent)
+
+
+@app.route("/api/agents/<agent_id>/log", methods=["GET", "POST"])
+def api_agent_log(agent_id):
+    if request.method == "POST":
+        d = request.get_json(force=True) or {}
+        message = (d.get("message") or "").strip()
+        if not message:
+            return jsonify({"error": "message required"}), 400
+        xp_earned = 0
+        try:
+            xp_earned = int(d.get("xp_earned", 0))
+        except (TypeError, ValueError):
+            xp_earned = 0
+        db.add_agent_log(agent_id, message, xp_earned)
+        return jsonify({"ok": True, "log": db.get_agent_log(agent_id, 20)})
+    return jsonify(db.get_agent_log(agent_id, 20))
+
+
+@app.route("/api/battles", methods=["POST"])
+def api_battles():
+    d = request.get_json(force=True) or {}
+    a1, a2 = d.get("agent1_id"), d.get("agent2_id")
+    winner = d.get("winner_id")
+    topic = (d.get("topic") or "head-to-head").strip()
+    if not a1 or not a2 or not winner:
+        return jsonify({"error": "agent1_id, agent2_id and winner_id required"}), 400
+    if winner not in (a1, a2):
+        return jsonify({"error": "winner must be one of the two combatants"}), 400
+    return jsonify(db.create_battle(a1, a2, topic, winner))
+
+
+@app.route("/api/missions/today")
+def api_missions_today():
+    return jsonify(db.get_today_missions())
+
+
+@app.route("/api/missions/<int:mission_id>/complete", methods=["POST"])
+def api_mission_complete(mission_id):
+    result = db.complete_mission(mission_id)
+    if "error" in result:
+        return jsonify(result), 404
+    return jsonify(result)
 
 
 # ── Background services (started once, even under gunicorn) ───────────────────
