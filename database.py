@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -669,3 +670,340 @@ def kv_set(key, value):
                 (key, value, value))
         else:
             cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?,?)", (key, value))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# MISSION CONTROL — gamified AI-agent ecosystem (agents, logs, battles, missions)
+# Self-initialising, same pattern as supplements/focus: idempotent CREATE on
+# first use plus a one-time seed, so it works on SQLite and a fresh Postgres.
+# ════════════════════════════════════════════════════════════════════════════
+
+_AGENTS_READY = False
+
+# Seed roster. building_position is stored as a JSON blob. xp_max is derived from
+# the level via _xp_max_for_level so the level-up maths stays consistent.
+_AGENT_SEED = [
+    ("nexus",    "Nexus",    "Multi-agent coordinator", "🛰️", 8, 850, "active",
+     {"x": 40, "y": 28}, 142, 0,  12, 3),
+    ("sentinel", "Sentinel", "Security auditor",         "🛡️", 7, 720, "active",
+     {"x": 8,  "y": 8},  89,  34, 9,  2),
+    ("axiom",    "Axiom",    "Code reviewer",            "🔍", 5, 430, "active",
+     {"x": 60, "y": 8},  76,  21, 7,  4),
+    ("pyro",     "Pyro",     "Python specialist",        "🐍", 4, 310, "idle",
+     {"x": 6,  "y": 62}, 54,  8,  4,  5),
+    ("quant",    "Quant",    "Trading analyst",          "📈", 6, 580, "idle",
+     {"x": 60, "y": 62}, 63,  5,  8,  3),
+    ("ghost",    "Ghost",    "Debugger",                 "👻", 3, 190, "idle",
+     {"x": 82, "y": 62}, 28,  12, 2,  6),
+    ("pixel",    "Pixel",    "Game developer",           "🎮", 3, 160, "idle",
+     {"x": 82, "y": 8},  22,  3,  1,  2),
+    ("forge",    "Forge",    "POD studio agent",         "⚒️", 0, 0,   "locked",
+     {"x": 36, "y": 62}, 0,   0,  0,  0),
+]
+
+# Default daily missions. (title, description, xp_reward, target_agent_id)
+_MISSION_TEMPLATES = [
+    ("Run a security audit", "Have Sentinel sweep the codebase for vulnerabilities.",
+     100, "sentinel"),
+    ("Deploy 2 agents in parallel", "Coordinate a parallel multi-agent run via Nexus.",
+     150, "nexus"),
+    ("Win a battle", "Have any agent win a head-to-head battle.", 200, None),
+]
+
+BATTLE_XP = 75  # XP awarded to the winner of a battle
+
+
+def _xp_max_for_level(level: int) -> int:
+    """XP needed to clear a level. Grows linearly so higher levels take longer."""
+    return (int(level) + 1) * 100
+
+
+def _ensure_agents_tables():
+    global _AGENTS_READY
+    if _AGENTS_READY:
+        return
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS agents (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            role TEXT,
+            icon TEXT,
+            level INTEGER DEFAULT 0,
+            xp INTEGER DEFAULT 0,
+            xp_max INTEGER DEFAULT 100,
+            tasks_run INTEGER DEFAULT 0,
+            findings INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'idle',
+            building_position TEXT,
+            battles_won INTEGER DEFAULT 0,
+            battles_lost INTEGER DEFAULT 0,
+            last_active TEXT DEFAULT (datetime('now'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS agent_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL,
+            timestamp TEXT DEFAULT (datetime('now')),
+            message TEXT NOT NULL,
+            xp_earned INTEGER DEFAULT 0
+        )""",
+        """CREATE TABLE IF NOT EXISTS agent_battles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent1_id TEXT,
+            agent2_id TEXT,
+            topic TEXT,
+            winner_id TEXT,
+            timestamp TEXT DEFAULT (datetime('now'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS daily_missions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            description TEXT,
+            xp_reward INTEGER DEFAULT 0,
+            completed INTEGER DEFAULT 0,
+            date TEXT NOT NULL,
+            agent_id TEXT
+        )""",
+    ]
+    with get_db() as conn:
+        cur = conn.cursor()
+        for stmt in stmts:
+            if USE_POSTGRES:
+                stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+                stmt = stmt.replace("datetime('now')", "NOW()")
+            cur.execute(stmt)
+    _AGENTS_READY = True
+
+
+def seed_agents():
+    """Insert the seed roster once. Idempotent — existing agents are left alone."""
+    _ensure_agents_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        for (aid, name, role, icon, level, xp, status, pos,
+             tasks, findings, won, lost) in _AGENT_SEED:
+            xp_max = _xp_max_for_level(level)
+            cols = ("id, name, role, icon, level, xp, xp_max, tasks_run, findings, "
+                    "status, building_position, battles_won, battles_lost")
+            vals = (aid, name, role, icon, level, xp, xp_max, tasks, findings,
+                    status, json.dumps(pos), won, lost)
+            placeholders = ",".join([ph] * 13)
+            if USE_POSTGRES:
+                cur.execute(
+                    f"INSERT INTO agents ({cols}) VALUES ({placeholders}) "
+                    f"ON CONFLICT (id) DO NOTHING", vals)
+            else:
+                cur.execute(
+                    f"INSERT OR IGNORE INTO agents ({cols}) VALUES ({placeholders})", vals)
+
+
+def init_agents_db():
+    """Create the Mission Control tables and seed the roster. Safe on every boot."""
+    _ensure_agents_tables()
+    seed_agents()
+
+
+# ── Agent reads ──────────────────────────────────────────────────────────────
+
+def _agent_row_to_dict(r) -> dict:
+    d = dict(r)
+    pos = d.get("building_position")
+    try:
+        d["building_position"] = json.loads(pos) if pos else {"x": 50, "y": 50}
+    except (TypeError, ValueError):
+        d["building_position"] = {"x": 50, "y": 50}
+    return d
+
+
+# Stable display order matching the seed roster.
+_AGENT_ORDER = {a[0]: i for i, a in enumerate(_AGENT_SEED)}
+
+
+def get_agents() -> list:
+    _ensure_agents_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM agents")
+        agents = [_agent_row_to_dict(r) for r in cur.fetchall()]
+    agents.sort(key=lambda a: _AGENT_ORDER.get(a["id"], 999))
+    return agents
+
+
+def get_agent(agent_id: str):
+    _ensure_agents_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM agents WHERE id = {ph}", (agent_id,))
+        row = cur.fetchone()
+        return _agent_row_to_dict(row) if row else None
+
+
+# ── Agent writes (XP / status / logs) ────────────────────────────────────────
+
+def add_agent_log(agent_id: str, message: str, xp_earned: int = 0):
+    _ensure_agents_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"INSERT INTO agent_log (agent_id, message, xp_earned) VALUES ({ph},{ph},{ph})",
+            (agent_id, message, int(xp_earned)))
+
+
+def get_agent_log(agent_id: str, limit: int = 20) -> list:
+    _ensure_agents_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT id, agent_id, timestamp, message, xp_earned FROM agent_log "
+            f"WHERE agent_id = {ph} ORDER BY id DESC LIMIT {ph}",
+            (agent_id, limit))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def award_agent_xp(agent_id: str, amount: int, message: str = None) -> dict:
+    """Add XP to an agent, rolling over level-ups. Bumps last_active and writes a
+    log line. Returns {agent, leveled_up, levels_gained} or {error}."""
+    _ensure_agents_tables()
+    agent = get_agent(agent_id)
+    if not agent:
+        return {"error": "unknown agent"}
+    amount = int(amount)
+    level = int(agent["level"])
+    xp = int(agent["xp"]) + amount
+    xp_max = int(agent["xp_max"]) or _xp_max_for_level(level)
+    levels_gained = 0
+    # Roll forward through as many level-ups as the XP covers.
+    while xp >= xp_max:
+        xp -= xp_max
+        level += 1
+        levels_gained += 1
+        xp_max = _xp_max_for_level(level)
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"UPDATE agents SET level={ph}, xp={ph}, xp_max={ph}, last_active={ph} "
+            f"WHERE id={ph}",
+            (level, xp, xp_max, now, agent_id))
+    if message:
+        add_agent_log(agent_id, message, amount)
+    if levels_gained:
+        add_agent_log(agent_id, f"⬆️ Leveled up to L{level}!", 0)
+    return {"agent": get_agent(agent_id), "leveled_up": levels_gained > 0,
+            "levels_gained": levels_gained, "xp_awarded": amount}
+
+
+def set_agent_status(agent_id: str, status: str) -> dict:
+    _ensure_agents_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"UPDATE agents SET status={ph}, last_active={ph} WHERE id={ph}",
+            (status, datetime.now().isoformat(), agent_id))
+    return get_agent(agent_id)
+
+
+def toggle_agent_status(agent_id: str) -> dict:
+    """Flip active⇄idle. Locked agents stay locked (must be unlocked elsewhere)."""
+    agent = get_agent(agent_id)
+    if not agent:
+        return {"error": "unknown agent"}
+    if agent["status"] == "locked":
+        return agent
+    new_status = "idle" if agent["status"] == "active" else "active"
+    return set_agent_status(agent_id, new_status)
+
+
+def increment_agent_tasks(agent_id: str, n: int = 1):
+    _ensure_agents_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"UPDATE agents SET tasks_run = tasks_run + {ph} WHERE id = {ph}",
+            (int(n), agent_id))
+
+
+# ── Battles ──────────────────────────────────────────────────────────────────
+
+def create_battle(agent1_id: str, agent2_id: str, topic: str, winner_id: str,
+                  xp: int = BATTLE_XP) -> dict:
+    """Record a battle, update win/loss records, and award XP to the winner."""
+    _ensure_agents_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"INSERT INTO agent_battles (agent1_id, agent2_id, topic, winner_id) "
+            f"VALUES ({ph},{ph},{ph},{ph})",
+            (agent1_id, agent2_id, topic, winner_id))
+        loser_id = agent2_id if winner_id == agent1_id else agent1_id
+        cur.execute(f"UPDATE agents SET battles_won = battles_won + 1 WHERE id = {ph}",
+                    (winner_id,))
+        cur.execute(f"UPDATE agents SET battles_lost = battles_lost + 1 WHERE id = {ph}",
+                    (loser_id,))
+    award = award_agent_xp(
+        winner_id, xp, f"⚔️ Won a battle over '{topic}'")
+    return {"winner_id": winner_id, "loser_id": loser_id, "topic": topic,
+            "xp_awarded": xp, "result": award}
+
+
+def get_recent_battles(limit: int = 10) -> list:
+    _ensure_agents_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM agent_battles ORDER BY id DESC LIMIT {ph}", (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+# ── Daily missions ───────────────────────────────────────────────────────────
+
+def get_today_missions() -> list:
+    """Return today's missions, auto-generating the 3 defaults on first call."""
+    _ensure_agents_tables()
+    today = datetime.now().strftime("%Y-%m-%d")
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT COUNT(*) AS n FROM daily_missions WHERE date = {ph}", (today,))
+        row = cur.fetchone()
+        count = (row["n"] if row else 0) or 0
+        if count == 0:
+            for title, desc, reward, agent_id in _MISSION_TEMPLATES:
+                cur.execute(
+                    f"INSERT INTO daily_missions (title, description, xp_reward, date, agent_id) "
+                    f"VALUES ({ph},{ph},{ph},{ph},{ph})",
+                    (title, desc, reward, today, agent_id))
+        cur.execute(
+            f"SELECT * FROM daily_missions WHERE date = {ph} ORDER BY id", (today,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def complete_mission(mission_id: int) -> dict:
+    """Mark a mission complete (idempotent) and award its XP to the target agent."""
+    _ensure_agents_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM daily_missions WHERE id = {ph}", (mission_id,))
+        row = cur.fetchone()
+        if not row:
+            return {"error": "unknown mission"}
+        mission = dict(row)
+        if mission.get("completed"):
+            return {"mission": mission, "already_completed": True}
+        cur.execute(f"UPDATE daily_missions SET completed = 1 WHERE id = {ph}", (mission_id,))
+    award = None
+    if mission.get("agent_id") and mission.get("xp_reward"):
+        award = award_agent_xp(
+            mission["agent_id"], mission["xp_reward"],
+            f"🎯 Completed mission: {mission['title']}")
+    mission["completed"] = 1
+    return {"mission": mission, "award": award}

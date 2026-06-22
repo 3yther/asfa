@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f1923">
+<title>ASFA · MISSION CONTROL</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<style>
+  :root{
+    --bg:#0f1923; --card:#111827; --border:#1e2a3a;
+    --green:#10b981; --amber:#f59e0b; --purple:#7c3aed;
+    --red:#ef4444; --text:#cbd5e1; --muted:#64748b; --cyan:#22d3ee;
+    --crit:#ef4444; --high:#f59e0b; --med:#eab308; --low:#10b981;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html{color-scheme:dark;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,monospace;
+    min-height:100vh; padding-bottom:40px; -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--cyan);text-decoration:none;}
+  .muted{color:var(--muted);}
+  .mono{font-variant-numeric:tabular-nums;}
+
+  /* ── Top bar ────────────────────────────────────────────────────────── */
+  .topbar{
+    display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+    padding:14px 22px; background:#0b131c;
+    border-bottom:1px solid var(--border); position:sticky; top:0; z-index:50;
+  }
+  .topbar .title{font-size:1rem; font-weight:700; letter-spacing:3px; color:#e2e8f0;}
+  .topbar .title b{color:var(--green);}
+  .topbar .spacer{flex:1;}
+  .stat{
+    display:flex; flex-direction:column; align-items:flex-end; line-height:1.2;
+  }
+  .stat .k{font-size:.55rem; letter-spacing:2px; color:var(--muted); text-transform:uppercase;}
+  .stat .v{font-size:.95rem; font-weight:700;}
+  .stat .v.xp{color:var(--purple);}
+  .stat .v.agents{color:var(--green);}
+  .home-link{font-size:.6rem;letter-spacing:2px;border:1px solid var(--border);
+    padding:6px 10px;border-radius:6px;color:var(--muted);}
+  .home-link:hover{border-color:var(--cyan);color:var(--cyan);}
+
+  /* ── Alert banner ───────────────────────────────────────────────────── */
+  .alerts{display:flex; flex-direction:column; gap:6px; padding:12px 22px 0;}
+  .alert{
+    display:flex; align-items:center; gap:10px;
+    padding:9px 14px; border-radius:8px; font-size:.72rem; letter-spacing:.5px;
+    border:1px solid var(--border); background:var(--card);
+  }
+  .alert .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;
+    animation:pulse 1.8s ease-in-out infinite;}
+  .alert.warn{border-color:rgba(245,158,11,.4);} .alert.warn .dot{background:var(--amber);}
+  .alert.crit{border-color:rgba(239,68,68,.45);} .alert.crit .dot{background:var(--red);}
+  .alert.info{border-color:rgba(124,58,237,.45);} .alert.info .dot{background:var(--purple);}
+  .alert .tag{font-size:.55rem;letter-spacing:2px;color:var(--muted);text-transform:uppercase;}
+  @keyframes pulse{50%{opacity:.3;}}
+
+  /* ── Layout ─────────────────────────────────────────────────────────── */
+  .layout{display:grid; grid-template-columns:1fr 320px; gap:16px; padding:16px 22px;}
+  @media(max-width:920px){ .layout{grid-template-columns:1fr;} }
+
+  .panel{background:var(--card); border:1px solid var(--border); border-radius:12px;}
+  .panel-head{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px 16px; border-bottom:1px solid var(--border);
+  }
+  .panel-head h2{font-size:.68rem; letter-spacing:2.5px; color:var(--muted); text-transform:uppercase; font-weight:700;}
+  .panel-head h2::before{content:"▸ "; color:var(--green);}
+
+  /* ── Map ────────────────────────────────────────────────────────────── */
+  .map-wrap{position:relative; width:100%; aspect-ratio:16/10; background:#0c141d;
+    border-radius:0 0 12px 12px; overflow:hidden;}
+  @media(max-width:560px){ .map-wrap{aspect-ratio:4/5;} }
+  .map-grid{position:absolute; inset:0;
+    background-image:
+      linear-gradient(rgba(30,42,58,.5) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(30,42,58,.5) 1px,transparent 1px);
+    background-size:34px 34px;}
+  .road{position:absolute; background:#161f2b;}
+  .road.h{left:0; right:0; height:8%; top:46%; border-top:1px solid #1e2a3a; border-bottom:1px solid #1e2a3a;}
+  .road.v{top:0; bottom:0; width:7%; left:46.5%; border-left:1px solid #1e2a3a; border-right:1px solid #1e2a3a;}
+  .road.h::after{content:""; position:absolute; top:50%; left:0; right:0; height:0;
+    border-top:2px dashed #2c3b50; transform:translateY(-50%);}
+  .road.v::after{content:""; position:absolute; left:50%; top:0; bottom:0; width:0;
+    border-left:2px dashed #2c3b50; transform:translateX(-50%);}
+  .tree{position:absolute; font-size:1rem; opacity:.55; filter:grayscale(.3); pointer-events:none; user-select:none;}
+
+  .bldg{
+    position:absolute; transform:translate(-50%,-50%);
+    width:104px; padding:10px 8px 9px; border-radius:10px; cursor:pointer;
+    background:#0e1a26; border:1.5px solid var(--border); text-align:center;
+    transition:transform .12s ease, box-shadow .2s ease, border-color .2s ease;
+  }
+  @media(max-width:560px){ .bldg{width:84px;padding:8px 5px;} }
+  .bldg:hover{transform:translate(-50%,-50%) scale(1.06); box-shadow:0 8px 26px rgba(0,0,0,.5);}
+  .bldg.sel{box-shadow:0 0 0 2px var(--cyan), 0 8px 26px rgba(0,0,0,.5);}
+  .bldg .ico{font-size:1.5rem; line-height:1; margin-bottom:4px;}
+  .bldg .nm{font-size:.62rem; letter-spacing:1.5px; font-weight:700; text-transform:uppercase;}
+  .bldg .lvl{font-size:.5rem; color:var(--muted); letter-spacing:1px; margin-top:2px;}
+  .bldg .roof{height:3px; border-radius:3px; margin:6px 4px 0; background:var(--muted);}
+  .bldg.active{border-color:var(--green);}
+  .bldg.active .roof{background:var(--green); box-shadow:0 0 8px var(--green);}
+  .bldg.active{animation:bpulse 2.2s ease-in-out infinite;}
+  @keyframes bpulse{0%,100%{border-color:rgba(16,185,129,.55);}50%{border-color:rgba(16,185,129,1);}}
+  .bldg.idle .roof{background:var(--muted);}
+  .bldg.locked{opacity:.4; cursor:not-allowed; filter:grayscale(.7);}
+  .bldg.locked .nm::after{content:" 🔒"; font-size:.6rem;}
+
+  /* ── Detail panel ───────────────────────────────────────────────────── */
+  .detail-body{padding:16px;}
+  .d-head{display:flex; align-items:center; gap:14px; margin-bottom:14px;}
+  .d-ico{font-size:2.4rem;}
+  .d-name{font-size:1.1rem; font-weight:700; letter-spacing:1px;}
+  .d-role{font-size:.66rem; color:var(--muted); letter-spacing:1.5px; text-transform:uppercase;}
+  .d-badge{margin-left:auto; font-size:.55rem; letter-spacing:2px; padding:4px 10px; border-radius:20px; text-transform:uppercase;}
+  .d-badge.active{background:rgba(16,185,129,.15); color:var(--green); border:1px solid rgba(16,185,129,.4);}
+  .d-badge.idle{background:rgba(100,116,139,.12); color:var(--muted); border:1px solid var(--border);}
+  .d-badge.locked{background:rgba(239,68,68,.1); color:var(--red); border:1px solid rgba(239,68,68,.3);}
+
+  .xp-row{display:flex; align-items:center; gap:10px; margin-bottom:6px;}
+  .xp-row .lv{font-size:.7rem; color:var(--purple); font-weight:700; letter-spacing:1px;}
+  .xp-row .pct{margin-left:auto; font-size:.62rem; color:var(--muted);}
+  .xp-bar{height:9px; border-radius:6px; background:#0c141d; border:1px solid var(--border); overflow:hidden;}
+  .xp-fill{height:100%; background:linear-gradient(90deg,var(--purple),var(--cyan)); width:0; transition:width .6s cubic-bezier(.25,1,.35,1);}
+  .xp-sub{font-size:.58rem; color:var(--muted); margin-top:4px;}
+
+  .grid4{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:16px 0;}
+  @media(max-width:560px){ .grid4{grid-template-columns:repeat(2,1fr);} }
+  .cell{background:#0c141d; border:1px solid var(--border); border-radius:8px; padding:10px; text-align:center;}
+  .cell .k{font-size:.5rem; letter-spacing:1.5px; color:var(--muted); text-transform:uppercase;}
+  .cell .v{font-size:1.05rem; font-weight:700; margin-top:3px;}
+
+  .sub-h{font-size:.58rem; letter-spacing:2px; color:var(--muted); text-transform:uppercase; margin:16px 0 8px;}
+  .sub-h::before{content:"// "; color:var(--green);}
+
+  .findings{display:flex; gap:8px; flex-wrap:wrap;}
+  .fbadge{font-size:.55rem; letter-spacing:1px; padding:5px 9px; border-radius:6px; font-weight:700;}
+  .fbadge .n{margin-left:5px;}
+  .fbadge.critical{background:rgba(239,68,68,.14); color:var(--crit); border:1px solid rgba(239,68,68,.4);}
+  .fbadge.high{background:rgba(245,158,11,.14); color:var(--high); border:1px solid rgba(245,158,11,.4);}
+  .fbadge.medium{background:rgba(234,179,8,.12); color:var(--med); border:1px solid rgba(234,179,8,.35);}
+  .fbadge.low{background:rgba(16,185,129,.12); color:var(--low); border:1px solid rgba(16,185,129,.35);}
+
+  .live-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:8px;}
+  .live-cell{background:#0c141d; border:1px solid rgba(34,211,238,.25); border-radius:8px; padding:10px; text-align:center;}
+  .live-cell .k{font-size:.5rem; letter-spacing:1.5px; color:var(--muted); text-transform:uppercase;}
+  .live-cell .v{font-size:1rem; font-weight:700; margin-top:3px;}
+  .pos{color:var(--green);} .neg{color:var(--red);}
+
+  .log{display:flex; flex-direction:column; gap:0; max-height:240px; overflow-y:auto;}
+  .log-item{display:flex; gap:10px; padding:7px 0; border-bottom:1px solid rgba(30,42,58,.5); font-size:.68rem;}
+  .log-item:last-child{border-bottom:none;}
+  .log-item .ts{color:var(--muted); font-size:.58rem; white-space:nowrap;}
+  .log-item .xp{margin-left:auto; color:var(--purple); font-size:.58rem; white-space:nowrap;}
+
+  .actions{display:flex; gap:8px; flex-wrap:wrap; margin-top:16px;}
+  .btn{
+    flex:1; min-width:90px; padding:9px 10px; border-radius:8px; cursor:pointer;
+    font-family:inherit; font-size:.6rem; letter-spacing:1.5px; font-weight:700;
+    text-transform:uppercase; border:1px solid var(--border); background:#0c141d; color:var(--text);
+    transition:transform .1s, border-color .2s, background .2s;
+  }
+  .btn:hover{border-color:var(--cyan);} .btn:active{transform:scale(.97);}
+  .btn:disabled{opacity:.4; cursor:not-allowed;}
+  .btn.xp{border-color:rgba(124,58,237,.5); color:#c4b5fd;}
+  .btn.battle{border-color:rgba(245,158,11,.5); color:#fcd34d;}
+  .btn.deploy{border-color:rgba(16,185,129,.5); color:#6ee7b7;}
+
+  /* ── Missions ───────────────────────────────────────────────────────── */
+  .missions{display:flex; flex-direction:column; gap:10px; padding:14px;}
+  .mission{
+    display:flex; align-items:flex-start; gap:10px;
+    background:#0c141d; border:1px solid var(--border); border-radius:10px; padding:11px 12px;
+    cursor:pointer; transition:border-color .2s;
+  }
+  .mission:hover{border-color:var(--cyan);}
+  .mission.done{opacity:.6;}
+  .mission.done .m-title{text-decoration:line-through; color:var(--muted);}
+  .m-check{width:18px; height:18px; border-radius:5px; border:1.5px solid var(--muted);
+    flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:.7rem; margin-top:1px;}
+  .mission.done .m-check{background:var(--green); border-color:var(--green); color:#04110b;}
+  .m-title{font-size:.72rem; font-weight:700; letter-spacing:.5px;}
+  .m-desc{font-size:.58rem; color:var(--muted); margin-top:3px; line-height:1.4;}
+  .m-xp{margin-left:auto; font-size:.58rem; color:var(--purple); font-weight:700; white-space:nowrap;}
+
+  .live-strip{display:grid; grid-template-columns:repeat(2,1fr); gap:8px; padding:14px;}
+  .live-strip .live-cell{text-align:left;}
+
+  /* ── Toast ──────────────────────────────────────────────────────────── */
+  .toast{position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+    background:#0b131c; border:1px solid var(--cyan); border-radius:8px;
+    padding:10px 18px; font-size:.66rem; letter-spacing:1px; z-index:200;
+    animation:tin .2s ease; text-transform:uppercase; white-space:nowrap;}
+  @keyframes tin{from{opacity:0;transform:translate(-50%,8px);}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="title">ASFA · <b>MISSION CONTROL</b></div>
+  <div class="spacer"></div>
+  <div class="stat"><span class="k">Active</span><span class="v agents" id="stat-active">0</span></div>
+  <div class="stat"><span class="k">Total XP</span><span class="v xp" id="stat-xp">0</span></div>
+  <div class="stat"><span class="k">Time</span><span class="v mono" id="stat-time">--:--:--</span></div>
+  <a class="home-link" href="/">⌂ DASH</a>
+</div>
+
+<div class="alerts" id="alerts"></div>
+
+<div class="layout">
+  <!-- LEFT: map + detail -->
+  <div style="display:flex; flex-direction:column; gap:16px; min-width:0;">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Base Map</h2>
+        <span class="muted" style="font-size:.55rem; letter-spacing:1.5px;">CLICK A BUILDING</span>
+      </div>
+      <div class="map-wrap" id="map">
+        <div class="map-grid"></div>
+        <div class="road h"></div>
+        <div class="road v"></div>
+        <!-- trees injected -->
+        <!-- buildings injected -->
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Agent Detail</h2><span class="muted" id="detail-id" style="font-size:.55rem;letter-spacing:1.5px;"></span></div>
+      <div class="detail-body" id="detail">
+        <div class="muted" style="font-size:.7rem;">// SELECT AN AGENT FROM THE MAP</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: missions + live -->
+  <div style="display:flex; flex-direction:column; gap:16px; min-width:0;">
+    <div class="panel">
+      <div class="panel-head"><h2>Daily Missions</h2><span class="muted" id="mission-count" style="font-size:.55rem;letter-spacing:1.5px;">0/3</span></div>
+      <div class="missions" id="missions"><div class="muted" style="font-size:.7rem;">// LOADING…</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>ASFA Live</h2><span class="muted" id="live-uptime" style="font-size:.55rem;letter-spacing:1.5px;color:var(--green);">●</span></div>
+      <div class="live-strip" id="live-strip"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ── State ────────────────────────────────────────────────────────────────
+let AGENTS = [];
+let LIVE = {};
+let SELECTED = null;
+const TREES = [
+  {x:24,y:20},{x:50,y:18},{x:74,y:22},{x:18,y:42},{x:90,y:44},
+  {x:24,y:78},{x:48,y:80},{x:72,y:80},{x:90,y:74},{x:50,y:38},{x:50,y:58}
+];
+
+// ── HTTP helpers (session-cookie auth gate) ──────────────────────────────
+async function apiGet(url){
+  const r = await fetch(url, {credentials:"include"});
+  if(!r.ok) throw new Error(r.status);
+  return r.json();
+}
+async function apiPost(url, body){
+  const r = await fetch(url, {
+    method:"POST", credentials:"include",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body||{})
+  });
+  if(!r.ok) throw new Error(r.status);
+  return r.json();
+}
+function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function toast(msg){
+  const t=document.createElement("div"); t.className="toast"; t.textContent=msg;
+  document.body.appendChild(t); setTimeout(()=>t.remove(),2200);
+}
+
+// ── Clock ────────────────────────────────────────────────────────────────
+function tickClock(){
+  const el=document.getElementById("stat-time");
+  if(el) el.textContent=new Date().toLocaleTimeString("en-GB",{hour12:false});
+}
+setInterval(tickClock,1000); tickClock();
+
+// ── Load ─────────────────────────────────────────────────────────────────
+async function loadAgents(){
+  try{
+    const d = await apiGet("/api/agents");
+    AGENTS = d.agents||[]; LIVE = d.live||{};
+    renderTopBar(); renderAlerts(d.alerts||[]); renderMap(); renderLiveStrip();
+    if(!SELECTED && AGENTS.length) SELECTED = AGENTS[0].id;
+    if(SELECTED) selectAgent(SELECTED, false);
+  }catch(e){ toast("LINK DOWN"); }
+}
+
+async function loadMissions(){
+  try{ renderMissions(await apiGet("/api/missions/today")); }
+  catch(e){ /* silent */ }
+}
+
+// ── Top bar ──────────────────────────────────────────────────────────────
+function renderTopBar(){
+  const active = AGENTS.filter(a=>a.status==="active").length;
+  const totalXp = AGENTS.reduce((s,a)=>s + (a.level*1000) + (a.xp||0), 0);
+  document.getElementById("stat-active").textContent = active + "/" + AGENTS.length;
+  document.getElementById("stat-xp").textContent = totalXp.toLocaleString();
+}
+
+// ── Alerts ───────────────────────────────────────────────────────────────
+function renderAlerts(alerts){
+  const wrap=document.getElementById("alerts");
+  if(!alerts.length){ wrap.innerHTML=""; return; }
+  wrap.innerHTML = alerts.map(a=>`
+    <div class="alert ${esc(a.level)}">
+      <span class="dot"></span>
+      <span class="tag">${a.level==="crit"?"Critical":a.level==="warn"?"Attention":"Info"}</span>
+      <span>${esc(a.text)}</span>
+    </div>`).join("");
+}
+
+// ── Map ──────────────────────────────────────────────────────────────────
+function renderMap(){
+  const map=document.getElementById("map");
+  // drop old buildings/trees
+  map.querySelectorAll(".bldg,.tree").forEach(n=>n.remove());
+  TREES.forEach(t=>{
+    const el=document.createElement("div"); el.className="tree";
+    el.style.left=t.x+"%"; el.style.top=t.y+"%"; el.textContent="🌲";
+    map.appendChild(el);
+  });
+  AGENTS.forEach(a=>{
+    const pos=a.building_position||{x:50,y:50};
+    const el=document.createElement("div");
+    el.className="bldg "+a.status+(a.id===SELECTED?" sel":"");
+    el.style.left=pos.x+"%"; el.style.top=pos.y+"%";
+    el.innerHTML=`
+      <div class="ico">${esc(a.icon||"🤖")}</div>
+      <div class="nm">${esc(a.name)}</div>
+      <div class="lvl">LV ${a.level}</div>
+      <div class="roof"></div>`;
+    if(a.status!=="locked"){
+      el.addEventListener("click",()=>selectAgent(a.id,true));
+    }else{
+      el.addEventListener("click",()=>toast(esc(a.name)+" is locked"));
+    }
+    map.appendChild(el);
+  });
+}
+
+// ── Live strip (sidebar) ─────────────────────────────────────────────────
+function renderLiveStrip(){
+  const t = LIVE.trading||{};
+  const pnl = t.pnl;
+  const pnlClass = (pnl==null)?"":(parseFloat(pnl)>=0?"pos":"neg");
+  const pnlTxt = (pnl==null)?"—":("$"+pnl+(t.pnl_pct!=null?" ("+t.pnl_pct+"%)":""))+(t.cached?" ·c":"");
+  document.getElementById("live-strip").innerHTML = `
+    <div class="live-cell"><div class="k">Water</div><div class="v">${LIVE.water_ml||0}<span class="muted" style="font-size:.6rem">/${LIVE.water_target||2000}ml</span></div></div>
+    <div class="live-cell"><div class="k">Supplements</div><div class="v">${LIVE.supplements_taken||0}<span class="muted" style="font-size:.6rem">/${LIVE.supplements_total||3}</span></div></div>
+    <div class="live-cell"><div class="k">Trading P&amp;L</div><div class="v ${pnlClass}" style="font-size:.8rem">${esc(pnlTxt)}</div></div>
+    <div class="live-cell"><div class="k">ASFA</div><div class="v pos" style="font-size:.8rem">${esc(LIVE.uptime||"ONLINE")}</div></div>`;
+}
+
+// ── Findings synthesis (Sentinel / Axiom) ────────────────────────────────
+function severityBreakdown(n){
+  n=n||0;
+  const crit=Math.round(n*0.12), high=Math.round(n*0.23), med=Math.round(n*0.32);
+  const low=Math.max(0, n-crit-high-med);
+  return {critical:crit, high:high, medium:med, low:low};
+}
+
+// ── Detail panel ─────────────────────────────────────────────────────────
+async function selectAgent(id, refreshLog){
+  SELECTED=id;
+  document.querySelectorAll(".bldg").forEach(b=>b.classList.remove("sel"));
+  const a=AGENTS.find(x=>x.id===id);
+  if(!a) return;
+  // re-highlight building
+  renderMap();
+  document.getElementById("detail-id").textContent = "#"+a.id;
+
+  let logs=[];
+  try{ logs = await apiGet(`/api/agents/${a.id}/log`); }catch(e){ logs=[]; }
+
+  const pct = a.xp_max? Math.min(100, Math.round((a.xp/a.xp_max)*100)) : 0;
+  const showFindings = (a.id==="sentinel"||a.id==="axiom");
+  const showLive = (a.id==="quant");
+  const sev = severityBreakdown(a.findings);
+  const t = LIVE.trading||{};
+  const locked = a.status==="locked";
+
+  let html = `
+    <div class="d-head">
+      <div class="d-ico">${esc(a.icon||"🤖")}</div>
+      <div>
+        <div class="d-name">${esc(a.name)}</div>
+        <div class="d-role">${esc(a.role||"")}</div>
+      </div>
+      <div class="d-badge ${a.status}">${a.status}</div>
+    </div>
+
+    <div class="xp-row">
+      <span class="lv">LEVEL ${a.level}</span>
+      <span class="pct">${pct}%</span>
+    </div>
+    <div class="xp-bar"><div class="xp-fill" style="width:${pct}%"></div></div>
+    <div class="xp-sub">${a.xp} / ${a.xp_max} XP to next level</div>
+
+    <div class="grid4">
+      <div class="cell"><div class="k">Tasks Run</div><div class="v">${a.tasks_run||0}</div></div>
+      <div class="cell"><div class="k">Findings</div><div class="v">${a.findings||0}</div></div>
+      <div class="cell"><div class="k">Uptime</div><div class="v pos" style="font-size:.7rem">${esc(LIVE.uptime||"ONLINE")}</div></div>
+      <div class="cell"><div class="k">Battles</div><div class="v" style="font-size:.85rem"><span class="pos">${a.battles_won||0}</span>·<span class="neg">${a.battles_lost||0}</span></div></div>
+    </div>`;
+
+  if(showFindings){
+    html += `
+      <div class="sub-h">Findings by Severity</div>
+      <div class="findings">
+        <span class="fbadge critical">CRITICAL<span class="n">${sev.critical}</span></span>
+        <span class="fbadge high">HIGH<span class="n">${sev.high}</span></span>
+        <span class="fbadge medium">MEDIUM<span class="n">${sev.medium}</span></span>
+        <span class="fbadge low">LOW<span class="n">${sev.low}</span></span>
+      </div>`;
+  }
+
+  if(showLive){
+    const pnl=t.pnl, pnlClass=(pnl==null)?"":(parseFloat(pnl)>=0?"pos":"neg");
+    html += `
+      <div class="sub-h">Live Trading Data ${t.cached?'<span class="muted" style="font-size:.5rem">(cached)</span>':''}</div>
+      <div class="live-grid">
+        <div class="live-cell"><div class="k">P&amp;L</div><div class="v ${pnlClass}">${pnl==null?"—":"$"+esc(pnl)}</div></div>
+        <div class="live-cell"><div class="k">Equity</div><div class="v">${t.equity==null?"—":"$"+esc(t.equity)}</div></div>
+        <div class="live-cell"><div class="k">Signals</div><div class="v">${t.signals||0}</div></div>
+      </div>`;
+  }
+
+  html += `<div class="sub-h">Activity Log</div>`;
+  if(logs.length){
+    html += `<div class="log">` + logs.slice(0,10).map(l=>`
+      <div class="log-item">
+        <span class="ts">${fmtTs(l.timestamp)}</span>
+        <span>${esc(l.message)}</span>
+        ${l.xp_earned?`<span class="xp">+${l.xp_earned}</span>`:""}
+      </div>`).join("") + `</div>`;
+  }else{
+    html += `<div class="muted" style="font-size:.66rem">// no activity yet</div>`;
+  }
+
+  html += `
+    <div class="actions">
+      <button class="btn deploy" ${locked?"disabled":""} onclick="doDeploy('${a.id}')">Deploy ↗</button>
+      <button class="btn xp" ${locked?"disabled":""} onclick="doXp('${a.id}')">+XP</button>
+      <button class="btn battle" ${locked?"disabled":""} onclick="doBattle('${a.id}')">⚔ Battle</button>
+      <button class="btn" ${locked?"disabled":""} onclick="doToggle('${a.id}')">Toggle</button>
+    </div>`;
+
+  document.getElementById("detail").innerHTML = html;
+}
+
+// ── Actions ──────────────────────────────────────────────────────────────
+async function doXp(id){
+  try{
+    const r = await apiPost(`/api/agents/${id}/xp`, {amount:50, message:"⚡ Manual XP boost"});
+    toast(r.leveled_up?`${id.toUpperCase()} LEVELED UP!`:"+50 XP");
+    await loadAgents();
+  }catch(e){ toast("FAILED"); }
+}
+async function doDeploy(id){
+  try{
+    const a=AGENTS.find(x=>x.id===id);
+    if(a && a.status==="idle") await apiPost(`/api/agents/${id}/status`,{status:"active"});
+    await apiPost(`/api/agents/${id}/log`, {message:"🚀 Deployed to a task", xp_earned:0});
+    const r = await apiPost(`/api/agents/${id}/xp`, {amount:25, message:"🚀 Deployment complete"});
+    toast(r.leveled_up?`${id.toUpperCase()} LEVELED UP!`:"DEPLOYED +25 XP");
+    await loadAgents();
+  }catch(e){ toast("FAILED"); }
+}
+async function doToggle(id){
+  try{ const a=await apiPost(`/api/agents/${id}/status`,{}); toast("STATUS → "+(a.status||"").toUpperCase()); await loadAgents(); }
+  catch(e){ toast("FAILED"); }
+}
+async function doBattle(id){
+  // pick a random non-locked opponent
+  const opps = AGENTS.filter(a=>a.id!==id && a.status!=="locked");
+  if(!opps.length){ toast("NO OPPONENTS"); return; }
+  const opp = opps[Math.floor(Math.random()*opps.length)];
+  const topics=["code quality","architecture","performance","security posture","test coverage"];
+  const topic=topics[Math.floor(Math.random()*topics.length)];
+  try{
+    const r = await apiPost("/api/battles", {agent1_id:id, agent2_id:opp.id, winner_id:id, topic});
+    toast(`${id.toUpperCase()} BEAT ${opp.id.toUpperCase()} · +${r.xp_awarded} XP`);
+    await loadAgents();
+  }catch(e){ toast("BATTLE FAILED"); }
+}
+
+// ── Missions ─────────────────────────────────────────────────────────────
+function renderMissions(missions){
+  const wrap=document.getElementById("missions");
+  const done = missions.filter(m=>m.completed).length;
+  document.getElementById("mission-count").textContent = `${done}/${missions.length}`;
+  wrap.innerHTML = missions.map(m=>`
+    <div class="mission ${m.completed?"done":""}" onclick="completeMission(${m.id}, ${m.completed?1:0})">
+      <div class="m-check">${m.completed?"✓":""}</div>
+      <div style="min-width:0">
+        <div class="m-title">${esc(m.title)}</div>
+        <div class="m-desc">${esc(m.description||"")}</div>
+      </div>
+      <div class="m-xp">+${m.xp_reward}</div>
+    </div>`).join("") || `<div class="muted" style="font-size:.7rem">// none today</div>`;
+}
+async function completeMission(id, alreadyDone){
+  if(alreadyDone){ toast("ALREADY DONE"); return; }
+  try{
+    const r = await apiPost(`/api/missions/${id}/complete`, {});
+    if(r.award && r.award.leveled_up) toast("MISSION DONE · LEVEL UP!");
+    else toast("MISSION COMPLETE");
+    await loadMissions(); await loadAgents();
+  }catch(e){ toast("FAILED"); }
+}
+
+// ── Util ─────────────────────────────────────────────────────────────────
+function fmtTs(ts){
+  if(!ts) return "—";
+  try{
+    const d=new Date(ts.includes("T")?ts:ts.replace(" ","T")+"Z");
+    if(isNaN(d)) return ts.slice(0,16);
+    const diffM=(Date.now()-d)/60000;
+    if(diffM<1) return "now";
+    if(diffM<60) return Math.floor(diffM)+"m";
+    if(diffM<1440) return Math.floor(diffM/60)+"h";
+    return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short"});
+  }catch(e){ return "—"; }
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────
+loadAgents();
+loadMissions();
+setInterval(loadAgents, 60000); // refresh live data each minute
+</script>
+</body>
+</html>
