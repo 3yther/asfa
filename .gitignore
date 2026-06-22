@@ -13,3 +13,4 @@ env/
 token.json
 credentials.json
 google_token.json
+repomix-output.xml
