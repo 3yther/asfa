@@ -1346,7 +1346,7 @@ async function refreshBriefing() {
 
 // ── HTTP helpers ───────────────────────────────────────────────────────────────
 async function apiGet(url) {
-  const r = await fetch(url);
+  const r = await fetch(url, { credentials: "include" });
   if (!r.ok) throw new Error(r.status);
   return r.json();
 }
@@ -1354,6 +1354,7 @@ async function apiGet(url) {
 async function apiPost(url, body) {
   const r = await fetch(url, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
