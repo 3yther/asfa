@@ -3,1032 +3,1046 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#0f1923">
+<meta name="theme-color" content="#04010a">
 <title>ASFA · MISSION CONTROL</title>
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
 <style>
   :root{
-    --bg:#0f1923; --card:#111827; --border:#1e2a3a;
-    --green:#10b981; --amber:#f59e0b; --purple:#7c3aed;
-    --red:#ef4444; --text:#cbd5e1; --muted:#64748b; --cyan:#22d3ee;
-    --crit:#ef4444; --high:#f59e0b; --med:#eab308; --low:#10b981;
+    --neon-pink:#ff006e; --neon-cyan:#00ffff; --neon-yellow:#ffd60a;
+    --neon-green:#39ff14; --neon-red:#ef4444; --neon-purple:#bf5af2;
+    --neon-emerald:#00ff88; --space-bg:#04010a; --ship-interior:#08021a;
+    --panel:#0d0028; --muted:#7a6a9a;
   }
   *{box-sizing:border-box;margin:0;padding:0;}
   html{color-scheme:dark;}
   body{
-    background:var(--bg); color:var(--text);
-    font-family:'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,monospace;
-    min-height:100vh; padding-bottom:40px; -webkit-font-smoothing:antialiased;
+    background:var(--space-bg); color:var(--neon-cyan);
+    font-family:'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,'Courier New',monospace;
+    overflow:hidden; height:100vh; -webkit-font-smoothing:antialiased;
   }
-  a{color:var(--cyan);text-decoration:none;}
-  .muted{color:var(--muted);}
   .mono{font-variant-numeric:tabular-nums;}
+  .neon-text{color:var(--neon-pink);text-shadow:0 0 10px var(--neon-pink),0 0 20px #ff006e44;}
+  .neon-border{border:1px solid var(--neon-pink);box-shadow:0 0 8px #ff006e44,inset 0 0 8px #ff006e11;}
 
-  /* ── Top bar ────────────────────────────────────────────────────────── */
-  .topbar{
-    display:flex; align-items:center; gap:18px; flex-wrap:wrap;
-    padding:14px 22px; background:#0b131c;
-    border-bottom:1px solid var(--border); position:sticky; top:0; z-index:50;
-  }
-  .topbar .title{font-size:1rem; font-weight:700; letter-spacing:3px; color:#e2e8f0;}
-  .topbar .title b{color:var(--green);}
-  .topbar .spacer{flex:1;}
-  .stat{
-    display:flex; flex-direction:column; align-items:flex-end; line-height:1.2;
-  }
-  .stat .k{font-size:.55rem; letter-spacing:2px; color:var(--muted); text-transform:uppercase;}
-  .stat .v{font-size:.95rem; font-weight:700;}
-  .stat .v.xp{color:var(--purple);}
-  .stat .v.agents{color:var(--green);}
-  .home-link{font-size:.6rem;letter-spacing:2px;border:1px solid var(--border);
-    padding:6px 10px;border-radius:6px;color:var(--muted);}
-  .home-link:hover{border-color:var(--cyan);color:var(--cyan);}
-
-  /* ── Alert banner ───────────────────────────────────────────────────── */
-  .alerts{display:flex; flex-direction:column; gap:6px; padding:12px 22px 0;}
-  .alert{
-    display:flex; align-items:center; gap:10px;
-    padding:9px 14px; border-radius:8px; font-size:.72rem; letter-spacing:.5px;
-    border:1px solid var(--border); background:var(--card);
-  }
-  .alert .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;
-    animation:pulse 1.8s ease-in-out infinite;}
-  .alert.warn{border-color:rgba(245,158,11,.4);} .alert.warn .dot{background:var(--amber);}
-  .alert.crit{border-color:rgba(239,68,68,.45);} .alert.crit .dot{background:var(--red);}
-  .alert.info{border-color:rgba(124,58,237,.45);} .alert.info .dot{background:var(--purple);}
-  .alert .tag{font-size:.55rem;letter-spacing:2px;color:var(--muted);text-transform:uppercase;}
-  @keyframes pulse{50%{opacity:.3;}}
+  ::-webkit-scrollbar{width:5px;height:5px;}
+  ::-webkit-scrollbar-track{background:#0d0028;}
+  ::-webkit-scrollbar-thumb{background:#ff006e55;border-radius:3px;}
 
   /* ── Layout ─────────────────────────────────────────────────────────── */
-  .layout{display:grid; grid-template-columns:1fr 320px; gap:16px; padding:16px 22px;}
-  @media(max-width:920px){ .layout{grid-template-columns:1fr;} }
-
-  .panel{background:var(--card); border:1px solid var(--border); border-radius:12px;}
-  .panel-head{
-    display:flex; align-items:center; justify-content:space-between;
-    padding:12px 16px; border-bottom:1px solid var(--border);
+  .mc-wrapper{display:flex;flex-direction:column;height:100vh;}
+  .mc-topbar{
+    height:48px;flex:0 0 48px;display:flex;align-items:center;gap:16px;
+    padding:0 16px;background:#06010f;border-bottom:1px solid #ff006e44;
+    box-shadow:0 2px 14px #ff006e22;z-index:50;
   }
-  .panel-head h2{font-size:.68rem; letter-spacing:2.5px; color:var(--muted); text-transform:uppercase; font-weight:700;}
-  .panel-head h2::before{content:"▸ "; color:var(--green);}
-
-  /* ── Map ────────────────────────────────────────────────────────────── */
-  .map-wrap{position:relative; width:100%; aspect-ratio:42/23; background:#0c141d;
-    border-radius:0 0 12px 12px; overflow:hidden;}
-  #phaser-map{position:absolute; inset:0; width:100%; height:100%;}
-  #phaser-map canvas{display:block; margin:0 auto;}
-  .map-grid{position:absolute; inset:0;
-    background-image:
-      linear-gradient(rgba(30,42,58,.5) 1px,transparent 1px),
-      linear-gradient(90deg,rgba(30,42,58,.5) 1px,transparent 1px);
-    background-size:34px 34px;}
-  .road{position:absolute; background:#161f2b;}
-  .road.h{left:0; right:0; height:8%; top:46%; border-top:1px solid #1e2a3a; border-bottom:1px solid #1e2a3a;}
-  .road.v{top:0; bottom:0; width:7%; left:46.5%; border-left:1px solid #1e2a3a; border-right:1px solid #1e2a3a;}
-  .road.h::after{content:""; position:absolute; top:50%; left:0; right:0; height:0;
-    border-top:2px dashed #2c3b50; transform:translateY(-50%);}
-  .road.v::after{content:""; position:absolute; left:50%; top:0; bottom:0; width:0;
-    border-left:2px dashed #2c3b50; transform:translateX(-50%);}
-  .tree{position:absolute; font-size:1rem; opacity:.55; filter:grayscale(.3); pointer-events:none; user-select:none;}
-
-  .bldg{
-    position:absolute; transform:translate(-50%,-50%);
-    width:104px; padding:10px 8px 9px; border-radius:10px; cursor:pointer;
-    background:#0e1a26; border:1.5px solid var(--border); text-align:center;
-    transition:transform .12s ease, box-shadow .2s ease, border-color .2s ease;
+  .mc-title{
+    font-size:.82rem;font-weight:700;letter-spacing:3px;color:var(--neon-pink);
+    text-shadow:0 0 10px #ff006e88;white-space:nowrap;
   }
-  @media(max-width:560px){ .bldg{width:84px;padding:8px 5px;} }
-  .bldg:hover{transform:translate(-50%,-50%) scale(1.06); box-shadow:0 8px 26px rgba(0,0,0,.5);}
-  .bldg.sel{box-shadow:0 0 0 2px var(--cyan), 0 8px 26px rgba(0,0,0,.5);}
-  .bldg .ico{line-height:0; margin-bottom:5px;}
-  .bldg .ico .bsvg{width:56px; height:65px; display:block; margin:0 auto;
-    transition:filter .25s ease;}
-  @media(max-width:560px){ .bldg .ico .bsvg{width:46px;height:54px;} }
-  .bldg .nm{font-size:.62rem; letter-spacing:1.5px; font-weight:700; text-transform:uppercase;}
-  .bldg .lvl{font-size:.5rem; color:var(--muted); letter-spacing:1px; margin-top:2px;}
-  .bldg.active{border-color:var(--green);}
-  .bldg.active{animation:bpulse 2.2s ease-in-out infinite;}
-  @keyframes bpulse{0%,100%{border-color:rgba(16,185,129,.55);}50%{border-color:rgba(16,185,129,1);}}
-  .bldg.locked{opacity:.5; cursor:not-allowed; filter:grayscale(.5);}
-  .bldg.locked .nm::after{content:" 🔒"; font-size:.6rem;}
-
-  /* ── Detail panel ───────────────────────────────────────────────────── */
-  .detail-body{padding:16px;}
-  .d-head{display:flex; align-items:center; gap:14px; margin-bottom:14px;}
-  .d-ico{font-size:2.4rem; line-height:0;}
-  .d-ico .bsvg{width:52px; height:60px; display:block;}
-  .d-name{font-size:1.1rem; font-weight:700; letter-spacing:1px;}
-  .d-role{font-size:.66rem; color:var(--muted); letter-spacing:1.5px; text-transform:uppercase;}
-  .d-badge{margin-left:auto; font-size:.55rem; letter-spacing:2px; padding:4px 10px; border-radius:20px; text-transform:uppercase;}
-  .d-badge.active{background:rgba(16,185,129,.15); color:var(--green); border:1px solid rgba(16,185,129,.4);}
-  .d-badge.idle{background:rgba(100,116,139,.12); color:var(--muted); border:1px solid var(--border);}
-  .d-badge.locked{background:rgba(239,68,68,.1); color:var(--red); border:1px solid rgba(239,68,68,.3);}
-
-  .xp-row{display:flex; align-items:center; gap:10px; margin-bottom:6px;}
-  .xp-row .lv{font-size:.7rem; color:var(--purple); font-weight:700; letter-spacing:1px;}
-  .xp-row .pct{margin-left:auto; font-size:.62rem; color:var(--muted);}
-  .xp-bar{height:9px; border-radius:6px; background:#0c141d; border:1px solid var(--border); overflow:hidden;}
-  .xp-fill{height:100%; background:linear-gradient(90deg,var(--purple),var(--cyan)); width:0; transition:width .6s cubic-bezier(.25,1,.35,1);}
-  .xp-sub{font-size:.58rem; color:var(--muted); margin-top:4px;}
-
-  .grid4{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:16px 0;}
-  @media(max-width:560px){ .grid4{grid-template-columns:repeat(2,1fr);} }
-  .cell{background:#0c141d; border:1px solid var(--border); border-radius:8px; padding:10px; text-align:center;}
-  .cell .k{font-size:.5rem; letter-spacing:1.5px; color:var(--muted); text-transform:uppercase;}
-  .cell .v{font-size:1.05rem; font-weight:700; margin-top:3px;}
-
-  .sub-h{font-size:.58rem; letter-spacing:2px; color:var(--muted); text-transform:uppercase; margin:16px 0 8px;}
-  .sub-h::before{content:"// "; color:var(--green);}
-
-  .findings{display:flex; gap:8px; flex-wrap:wrap;}
-  .fbadge{font-size:.55rem; letter-spacing:1px; padding:5px 9px; border-radius:6px; font-weight:700;}
-  .fbadge .n{margin-left:5px;}
-  .fbadge.critical{background:rgba(239,68,68,.14); color:var(--crit); border:1px solid rgba(239,68,68,.4);}
-  .fbadge.high{background:rgba(245,158,11,.14); color:var(--high); border:1px solid rgba(245,158,11,.4);}
-  .fbadge.medium{background:rgba(234,179,8,.12); color:var(--med); border:1px solid rgba(234,179,8,.35);}
-  .fbadge.low{background:rgba(16,185,129,.12); color:var(--low); border:1px solid rgba(16,185,129,.35);}
-
-  .live-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:8px;}
-  .live-cell{background:#0c141d; border:1px solid rgba(34,211,238,.25); border-radius:8px; padding:10px; text-align:center;}
-  .live-cell .k{font-size:.5rem; letter-spacing:1.5px; color:var(--muted); text-transform:uppercase;}
-  .live-cell .v{font-size:1rem; font-weight:700; margin-top:3px;}
-  .pos{color:var(--green);} .neg{color:var(--red);}
-
-  .log{display:flex; flex-direction:column; gap:0; max-height:240px; overflow-y:auto;}
-  .log-item{display:flex; gap:10px; padding:7px 0; border-bottom:1px solid rgba(30,42,58,.5); font-size:.68rem;}
-  .log-item:last-child{border-bottom:none;}
-  .log-item .ts{color:var(--muted); font-size:.58rem; white-space:nowrap;}
-  .log-item .xp{margin-left:auto; color:var(--purple); font-size:.58rem; white-space:nowrap;}
-
-  .actions{display:flex; gap:8px; flex-wrap:wrap; margin-top:16px;}
-  .btn{
-    flex:1; min-width:90px; padding:9px 10px; border-radius:8px; cursor:pointer;
-    font-family:inherit; font-size:.6rem; letter-spacing:1.5px; font-weight:700;
-    text-transform:uppercase; border:1px solid var(--border); background:#0c141d; color:var(--text);
-    transition:transform .1s, border-color .2s, background .2s;
+  .mc-home{color:var(--neon-cyan);text-decoration:none;font-size:.7rem;
+    letter-spacing:2px;padding:4px 8px;border:1px solid #00ffff44;border-radius:4px;}
+  .mc-home:hover{background:#00ffff11;box-shadow:0 0 8px #00ffff44;}
+  .mc-ticker{
+    flex:1;overflow:hidden;white-space:nowrap;position:relative;height:24px;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);
+            mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);
   }
-  .btn:hover{border-color:var(--cyan);} .btn:active{transform:scale(.97);}
-  .btn:disabled{opacity:.4; cursor:not-allowed;}
-  .btn.xp{border-color:rgba(124,58,237,.5); color:#c4b5fd;}
-  .btn.battle{border-color:rgba(245,158,11,.5); color:#fcd34d;}
-  .btn.deploy{border-color:rgba(16,185,129,.5); color:#6ee7b7;}
+  .mc-ticker span{
+    position:absolute;will-change:transform;display:inline-block;padding-top:3px;
+    color:var(--neon-yellow);font-size:.72rem;letter-spacing:1px;
+    text-shadow:0 0 8px #ffd60a55;animation:ticker 26s linear infinite;
+  }
+  @keyframes ticker{from{transform:translateX(100%);}to{transform:translateX(-100%);}}
+  .mc-pills{display:flex;gap:8px;align-items:center;}
+  .pill{
+    display:flex;flex-direction:column;align-items:center;line-height:1.1;
+    padding:4px 10px;background:#11002a;border:1px solid #ff006e33;border-radius:6px;min-width:62px;
+  }
+  .pill .k{font-size:.5rem;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;}
+  .pill .v{font-size:.78rem;font-weight:700;}
+  .pill.c-pink .v{color:var(--neon-pink);}
+  .pill.c-cyan .v{color:var(--neon-cyan);}
+  .pill.c-yellow .v{color:var(--neon-yellow);}
+  .pill.c-green .v{color:var(--neon-emerald);}
+  .pill.c-red .v{color:var(--neon-red);}
 
-  /* ── Missions ───────────────────────────────────────────────────────── */
-  .missions{display:flex; flex-direction:column; gap:10px; padding:14px;}
+  .mc-main{display:flex;flex:1;overflow:hidden;min-height:0;}
+  .mc-canvas{flex:1 1 72%;position:relative;background:var(--space-bg);min-width:0;}
+  #game canvas{display:block;}
+  .mc-reset{
+    position:absolute;top:10px;right:10px;z-index:20;font-size:.62rem;letter-spacing:1px;
+    background:#11002a;color:var(--neon-cyan);border:1px solid #00ffff44;border-radius:5px;
+    padding:5px 9px;cursor:pointer;
+  }
+  .mc-reset:hover{box-shadow:0 0 8px #00ffff55;}
+
+  .mc-sidebar{
+    flex:0 0 28%;max-width:340px;min-width:260px;overflow-y:auto;overflow-x:hidden;
+    background:#06010f;border-left:1px solid #ff006e33;padding:12px;
+  }
+  .sec{margin-bottom:18px;}
+  .sec-h{
+    font-size:.62rem;letter-spacing:2.5px;text-transform:uppercase;color:var(--neon-pink);
+    margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid #ff006e22;
+    display:flex;justify-content:space-between;align-items:center;
+  }
+  .sec-h .count{color:var(--neon-cyan);font-size:.58rem;}
+
+  /* Agents list */
+  .agent-row{
+    display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;
+    padding:7px 8px;margin-bottom:5px;background:#0d0322;border-radius:6px;cursor:pointer;
+    border-left:2px solid transparent;transition:background .15s;
+  }
+  .agent-row:hover{background:#16063a;}
+  .agent-row .dot{width:8px;height:8px;border-radius:50%;}
+  .agent-row .nm{font-size:.72rem;font-weight:700;color:#e9d8ff;}
+  .agent-row .rl{font-size:.55rem;color:var(--muted);}
+  .agent-row .lv{font-size:.6rem;color:var(--neon-yellow);font-weight:700;}
+  .agent-row .xpwrap{grid-column:1 / -1;height:3px;background:#ffffff14;border-radius:2px;overflow:hidden;margin-top:2px;}
+  .agent-row .xpfill{height:100%;border-radius:2px;transition:width .8s ease;}
+
+  /* Missions */
   .mission{
-    display:flex; align-items:flex-start; gap:10px;
-    background:#0c141d; border:1px solid var(--border); border-radius:10px; padding:11px 12px;
-    cursor:pointer; transition:border-color .2s;
+    display:flex;align-items:flex-start;gap:9px;padding:8px;margin-bottom:6px;
+    background:#0d0322;border-radius:6px;border:1px solid #ffffff0a;
   }
-  .mission:hover{border-color:var(--cyan);}
-  .mission.done{opacity:.6;}
-  .mission.done .m-title{text-decoration:line-through; color:var(--muted);}
-  .m-check{width:18px; height:18px; border-radius:5px; border:1.5px solid var(--muted);
-    flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:.7rem; margin-top:1px;}
-  .mission.done .m-check{background:var(--green); border-color:var(--green); color:#04110b;}
-  .m-title{font-size:.72rem; font-weight:700; letter-spacing:.5px;}
-  .m-desc{font-size:.58rem; color:var(--muted); margin-top:3px; line-height:1.4;}
-  .m-xp{margin-left:auto; font-size:.58rem; color:var(--purple); font-weight:700; white-space:nowrap;}
+  .mission .chk{
+    width:18px;height:18px;flex:0 0 18px;border:1.5px solid var(--neon-cyan);border-radius:4px;
+    cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.7rem;color:var(--neon-green);
+  }
+  .mission.done .chk{background:#39ff1422;border-color:var(--neon-green);}
+  .mission.done .m-title{text-decoration:line-through;color:var(--muted);}
+  .mission .m-title{font-size:.7rem;color:#dcd0f5;}
+  .mission .m-desc{font-size:.55rem;color:var(--muted);margin-top:2px;}
+  .mission .m-xp{font-size:.55rem;color:var(--neon-yellow);font-weight:700;margin-left:auto;white-space:nowrap;}
 
-  .live-strip{display:grid; grid-template-columns:repeat(2,1fr); gap:8px; padding:14px;}
-  .live-strip .live-cell{text-align:left;}
+  /* ASFA live grid */
+  .live-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;}
+  .live-card{background:#0d0322;border-radius:7px;padding:8px;border:1px solid #ffffff0a;}
+  .live-card .lk{font-size:.5rem;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;}
+  .live-card .lv{font-size:.92rem;font-weight:700;margin-top:2px;}
+  .live-card.c-blue .lv{color:#4cc9ff;}
+  .live-card.c-green .lv{color:var(--neon-emerald);}
+  .live-bar{height:4px;background:#ffffff14;border-radius:2px;overflow:hidden;margin-top:5px;}
+  .live-bar i{display:block;height:100%;border-radius:2px;transition:width .6s ease;}
+  .supp-dots{display:flex;gap:5px;margin-top:5px;}
+  .supp-dots i{width:9px;height:9px;border-radius:50%;background:#ffffff1f;}
+  .supp-dots i.on{background:var(--neon-emerald);box-shadow:0 0 6px #00ff8888;}
+  .pulse-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
+    animation:pulse 1.6s ease-in-out infinite;vertical-align:middle;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
 
-  /* ── Toast ──────────────────────────────────────────────────────────── */
-  .toast{position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
-    background:#0b131c; border:1px solid var(--cyan); border-radius:8px;
-    padding:10px 18px; font-size:.66rem; letter-spacing:1px; z-index:200;
-    animation:tin .2s ease; text-transform:uppercase; white-space:nowrap;}
-  @keyframes tin{from{opacity:0;transform:translate(-50%,8px);}}
+  /* Activity log */
+  .log-list{font-size:.6rem;line-height:1.7;max-height:160px;overflow-y:auto;}
+  .log-list .ln{color:#b9a8d8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .log-list .ln .t{color:var(--neon-cyan);}
+  .log-list .ln .a{color:var(--neon-pink);font-weight:700;}
+  .sec.flash{animation:flashsec .8s ease;}
+  @keyframes flashsec{0%{background:#ff006e22;}100%{background:transparent;}}
+
+  /* Modal */
+  .modal-overlay{
+    position:fixed;inset:0;background:rgba(2,0,8,.85);z-index:100;
+    display:none;align-items:center;justify-content:center;padding:20px;
+  }
+  .modal-overlay.show{display:flex;}
+  .modal-card{
+    width:min(520px,94vw);max-height:88vh;overflow-y:auto;background:var(--panel);
+    border:1px solid var(--neon-pink);box-shadow:0 0 30px #ff006e55,inset 0 0 30px #ff006e0a;
+    clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px);
+    padding:20px;position:relative;
+  }
+  .modal-close{
+    position:absolute;top:12px;right:14px;font-size:1.3rem;color:var(--neon-pink);cursor:pointer;
+    line-height:1;background:none;border:none;
+  }
+  .modal-close:hover{text-shadow:0 0 10px var(--neon-pink);}
+  .m-head{display:flex;align-items:center;gap:12px;margin-bottom:6px;}
+  .m-icon{font-size:1.8rem;}
+  .m-name{font-size:1.2rem;font-weight:800;text-shadow:0 0 12px;}
+  .m-role{font-size:.64rem;color:var(--muted);letter-spacing:1px;}
+  .m-badge{font-size:.55rem;padding:3px 8px;border-radius:10px;letter-spacing:1px;font-weight:700;text-transform:uppercase;}
+  .m-badge.active{background:#39ff1422;color:var(--neon-green);border:1px solid var(--neon-green);}
+  .m-badge.idle{background:#00ffff1a;color:var(--neon-cyan);border:1px solid #00ffff66;}
+  .m-badge.locked{background:#44446633;color:#94a3b8;border:1px solid #94a3b8;}
+  .m-xpline{display:flex;justify-content:space-between;font-size:.64rem;margin:14px 0 5px;}
+  .m-xpline .lvl{color:var(--neon-yellow);font-weight:700;}
+  .m-xpbar{height:8px;background:#ffffff14;border-radius:4px;overflow:hidden;}
+  .m-xpbar i{display:block;height:100%;width:0;border-radius:4px;transition:width .8s ease;}
+  .m-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:16px 0;}
+  .m-stat{background:#16063a;border-radius:6px;padding:8px 4px;text-align:center;}
+  .m-stat .sv{font-size:1.1rem;font-weight:800;color:#fff;}
+  .m-stat .sk{font-size:.46rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-top:2px;}
+  .m-sub{font-size:.58rem;letter-spacing:2px;color:var(--neon-pink);text-transform:uppercase;margin:14px 0 6px;}
+  .m-log{font-size:.6rem;line-height:1.7;max-height:150px;overflow-y:auto;background:#08021a;border-radius:6px;padding:8px;}
+  .m-log .ln .t{color:var(--neon-cyan);}
+  .m-controls{display:flex;flex-direction:column;gap:9px;margin-top:14px;}
+  .m-ctl-row{display:flex;gap:8px;align-items:center;}
+  .m-ctl-row label{font-size:.55rem;color:var(--muted);letter-spacing:1px;width:74px;text-transform:uppercase;}
+  .m-input,.m-select{
+    background:#08021a;border:1px solid #ff006e44;color:var(--neon-cyan);
+    padding:7px 9px;border-radius:5px;font-family:inherit;font-size:.7rem;flex:1;
+  }
+  .m-btn{
+    background:#ff006e22;border:1px solid var(--neon-pink);color:var(--neon-pink);
+    padding:7px 14px;border-radius:5px;cursor:pointer;font-family:inherit;font-size:.66rem;
+    letter-spacing:1px;font-weight:700;white-space:nowrap;
+  }
+  .m-btn:hover{background:#ff006e44;box-shadow:0 0 10px #ff006e66;}
+
+  .offline-banner{
+    position:fixed;top:48px;left:0;right:0;z-index:90;text-align:center;
+    background:#ef444422;color:var(--neon-red);border-bottom:1px solid var(--neon-red);
+    padding:6px;font-size:.66rem;letter-spacing:2px;display:none;
+  }
+  .offline-banner.show{display:block;}
+
+  @media(max-width:760px){
+    .mc-main{flex-direction:column;}
+    .mc-sidebar{flex:none;max-width:none;width:100%;max-height:42vh;border-left:none;border-top:1px solid #ff006e33;}
+    .mc-pills .pill:nth-child(n+3){display:none;}
+    .mc-ticker{display:none;}
+  }
 </style>
 </head>
 <body>
-
-<div class="topbar">
-  <div class="title">ASFA · <b>MISSION CONTROL</b></div>
-  <div class="spacer"></div>
-  <div class="stat"><span class="k">Active</span><span class="v agents" id="stat-active">0</span></div>
-  <div class="stat"><span class="k">Total XP</span><span class="v xp" id="stat-xp">0</span></div>
-  <div class="stat"><span class="k">Time</span><span class="v mono" id="stat-time">--:--:--</span></div>
-  <a class="home-link" href="/">⌂ DASH</a>
-</div>
-
-<div class="alerts" id="alerts"></div>
-
-<div class="layout">
-  <!-- LEFT: map + detail -->
-  <div style="display:flex; flex-direction:column; gap:16px; min-width:0;">
-    <div class="panel">
-      <div class="panel-head">
-        <h2>Base Map</h2>
-        <span class="muted" style="font-size:.55rem; letter-spacing:1.5px;">CLICK A BUILDING</span>
-      </div>
-      <div class="map-wrap" id="map">
-        <div id="phaser-map"></div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head"><h2>Agent Detail</h2><span class="muted" id="detail-id" style="font-size:.55rem;letter-spacing:1.5px;"></span></div>
-      <div class="detail-body" id="detail">
-        <div class="muted" style="font-size:.7rem;">// SELECT AN AGENT FROM THE MAP</div>
-      </div>
+<div class="mc-wrapper">
+  <!-- ── Top bar ──────────────────────────────────────────────────────── -->
+  <div class="mc-topbar">
+    <a class="mc-home" href="/">⌂ DASH</a>
+    <div class="mc-title">ASFA · MISSION CONTROL</div>
+    <div class="mc-ticker"><span id="ticker">Initializing station systems…</span></div>
+    <div class="mc-pills">
+      <div class="pill c-green"><span class="k">Active</span><span class="v mono" id="pill-active">–/13</span></div>
+      <div class="pill c-yellow"><span class="k">Total XP</span><span class="v mono" id="pill-xp">–</span></div>
+      <div class="pill c-pink"><span class="k">P&amp;L</span><span class="v mono" id="pill-pnl">–</span></div>
+      <div class="pill c-cyan"><span class="k">Time</span><span class="v mono" id="pill-time">--:--:--</span></div>
     </div>
   </div>
 
-  <!-- RIGHT: missions + live -->
-  <div style="display:flex; flex-direction:column; gap:16px; min-width:0;">
-    <div class="panel">
-      <div class="panel-head"><h2>Daily Missions</h2><span class="muted" id="mission-count" style="font-size:.55rem;letter-spacing:1.5px;">0/3</span></div>
-      <div class="missions" id="missions"><div class="muted" style="font-size:.7rem;">// LOADING…</div></div>
+  <div class="offline-banner" id="offline-banner">⚠ TELEMETRY OFFLINE — RETRYING…</div>
+
+  <!-- ── Main ─────────────────────────────────────────────────────────── -->
+  <div class="mc-main">
+    <div class="mc-canvas">
+      <div id="game"></div>
+      <button class="mc-reset" id="reset-view">⟲ RESET VIEW</button>
     </div>
-    <div class="panel">
-      <div class="panel-head"><h2>ASFA Live</h2><span class="muted" id="live-uptime" style="font-size:.55rem;letter-spacing:1.5px;color:var(--green);">●</span></div>
-      <div class="live-strip" id="live-strip"></div>
+
+    <aside class="mc-sidebar">
+      <div class="sec">
+        <div class="sec-h">Agents <span class="count" id="agents-count"></span></div>
+        <div id="agents-list"></div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-h">Daily Missions <span class="count" id="missions-count">0/3</span></div>
+        <div id="missions-list"></div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-h">ASFA Live</div>
+        <div class="live-grid">
+          <div class="live-card c-blue">
+            <div class="lk">Water</div>
+            <div class="lv mono" id="live-water">–</div>
+            <div class="live-bar"><i id="live-water-bar" style="background:#4cc9ff;width:0"></i></div>
+          </div>
+          <div class="live-card c-green">
+            <div class="lk">Supplements</div>
+            <div class="lv mono" id="live-supp">–</div>
+            <div class="supp-dots" id="live-supp-dots"></div>
+          </div>
+          <div class="live-card">
+            <div class="lk">Trading P&amp;L</div>
+            <div class="lv mono" id="live-pnl">–</div>
+          </div>
+          <div class="live-card">
+            <div class="lk">ASFA Status</div>
+            <div class="lv" id="live-status"><span class="pulse-dot" style="background:#39ff14"></span>ONLINE</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec" id="activity-sec">
+        <div class="sec-h">Agent Activity</div>
+        <div class="log-list" id="activity-list"></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- ── Agent detail modal ─────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal">
+  <div class="modal-card" id="modal-card">
+    <button class="modal-close" id="modal-close">×</button>
+    <div class="m-head">
+      <div class="m-icon" id="m-icon">🛰️</div>
+      <div>
+        <div class="m-name" id="m-name">—</div>
+        <div class="m-role" id="m-role">—</div>
+      </div>
+      <span class="m-badge idle" id="m-badge" style="margin-left:auto">idle</span>
+    </div>
+    <div class="m-xpline"><span class="lvl" id="m-level">LV 0</span><span id="m-xptext" class="mono">0 / 100 XP</span></div>
+    <div class="m-xpbar"><i id="m-xpfill"></i></div>
+    <div class="m-stats">
+      <div class="m-stat"><div class="sv mono" id="m-tasks">0</div><div class="sk">Tasks Run</div></div>
+      <div class="m-stat"><div class="sv mono" id="m-findings">0</div><div class="sk">Findings</div></div>
+      <div class="m-stat"><div class="sv mono" id="m-won">0</div><div class="sk">Battles Won</div></div>
+      <div class="m-stat"><div class="sv mono" id="m-lost">0</div><div class="sk">Battles Lost</div></div>
+    </div>
+    <div class="m-sub">Activity Log</div>
+    <div class="m-log" id="m-log">…</div>
+    <div class="m-controls">
+      <div class="m-ctl-row">
+        <label>Award XP</label>
+        <input class="m-input" id="m-xp-input" type="number" value="50" min="1" step="10">
+        <button class="m-btn" id="m-award-btn">AWARD</button>
+      </div>
+      <div class="m-ctl-row">
+        <label>Set Status</label>
+        <select class="m-select" id="m-status-select">
+          <option value="active">active</option>
+          <option value="idle">idle</option>
+          <option value="locked">locked</option>
+        </select>
+        <button class="m-btn" id="m-status-btn">SET</button>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
-"use strict";
+/* ════════════════════════════════════════════════════════════════════════
+   ASFA · MISSION CONTROL — TONKAS-aesthetic cyberpunk spaceship dashboard
+   ════════════════════════════════════════════════════════════════════════ */
 
-// ── State ────────────────────────────────────────────────────────────────
-let AGENTS = [];
-let LIVE = {};
-let SELECTED = null;
-let mapScene = null;          // Phaser scene, set on create()
-let pendingAgents = null;     // agent data that arrived before the scene booted
-let pendingSelected = null;
-const TREES = [
-  {x:24,y:20},{x:50,y:18},{x:74,y:22},{x:18,y:42},{x:90,y:44},
-  {x:24,y:78},{x:48,y:80},{x:72,y:80},{x:90,y:74},{x:50,y:38},{x:50,y:58}
+const W = 1280, H = 800;
+const CENTER = { x: W / 2, y: H / 2 };
+const ROOM_RADIUS = 238;
+const HULL_RADIUS = 372;
+
+const COL = {
+  pink:0xff006e, cyan:0x00ffff, yellow:0xffd60a, green:0x39ff14,
+  red:0xef4444, purple:0xbf5af2, emerald:0x00ff88, gray:0x444466,
+  slate:0x94a3b8, space:0x04010a, nexusFill:0x0d0028,
+};
+function hex(n){ return '#' + n.toString(16).padStart(6,'0'); }
+
+/* Radial clock layout (top → clockwise). NEXUS sits at the centre. */
+const CLOCK = [
+  { id:'auto-docs',          color:COL.yellow  },
+  { id:'sentinel',           color:COL.cyan    },
+  { id:'axiom',              color:COL.cyan    },
+  { id:'ledger',             color:COL.emerald },
+  { id:'quant',              color:COL.emerald },
+  { id:'incident-responder', color:COL.red     },
+  { id:'forge',              color:COL.gray    },
+  { id:'ghost',              color:COL.gray    },
+  { id:'pixel',              color:COL.cyan    },
+  { id:'pyro',               color:COL.yellow  },
+  { id:'warden',             color:COL.slate   },
+  { id:'oracle',             color:COL.purple  },
 ];
+const CLOCK_BY_ID = Object.fromEntries(CLOCK.map((c,i)=>[c.id,{...c,index:i}]));
+const CHAR_FRAMES = [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66];
 
-// ── Pixel-art SVG buildings ───────────────────────────────────────────────
-// Each agent gets a unique ~60x70 inline-SVG building. Three visual states are
-// derived from status (active / idle / locked) via a shared palette so a status
-// toggle just re-renders the SVG — no external images, no CDN.
-const BUILDING_ACCENTS = {
-  nexus:"#22d3ee", sentinel:"#10b981", axiom:"#7c3aed", pyro:"#f59e0b",
-  quant:"#3b82f6", ghost:"#ec4899", pixel:"#14b8a6", forge:"#64748b",
-  // real Claude Code agents
-  oracle:"#818cf8", ledger:"#34d399", "auto-docs":"#fbbf24",
-  warden:"#94a3b8", "incident-responder":"#ef4444"
+/* ── Shared state ──────────────────────────────────────────────────────── */
+const MC = {
+  agents: [], live: null, alerts: [], missions: [],
+  rooms: {}, scene: null, failCount: 0,
 };
 
-function bldgPalette(accent, status){
-  if(status==="locked"){
-    return {wall:"#262b33", wallDark:"#1a1e25", roof:"#3a414b", win:"#14171c",
-            door:"#14171c", line:"#39414c", accent:"#5b6573", glow:""};
-  }
-  if(status==="active"){
-    return {wall:"#1c2b3b", wallDark:"#142433", roof:accent, win:"#ffe6a3",
-            door:"#ffd766", line:accent, accent:accent, glow:accent};
-  }
-  // idle
-  return {wall:"#172230", wallDark:"#101a26", roof:"#3c4a5e", win:"#0c141d",
-          door:"#0c141d", line:"#28384c", accent:"#4a5870", glow:""};
-}
-
-// Per-agent shape builders. Each returns inner SVG markup for a 60x70 viewBox.
-const BUILDING_SHAPES = {
-  // Nexus — central castle/tower with side turrets, battlements + flag
-  nexus:(p)=>`
-    <rect x="5" y="32" width="12" height="34" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="43" y="32" width="12" height="34" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="5" y="29" width="3" height="4" fill="${p.roof}"/><rect x="11" y="29" width="3" height="4" fill="${p.roof}"/>
-    <rect x="43" y="29" width="3" height="4" fill="${p.roof}"/><rect x="49" y="29" width="3" height="4" fill="${p.roof}"/>
-    <rect x="20" y="16" width="20" height="50" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="20" y="12" width="4" height="4" fill="${p.roof}"/><rect x="28" y="12" width="4" height="4" fill="${p.roof}"/><rect x="36" y="12" width="4" height="4" fill="${p.roof}"/>
-    <rect x="29" y="2" width="2" height="10" fill="${p.accent}"/>
-    <polygon points="31,3 31,9 38,6" fill="${p.accent}"/>
-    <rect x="27" y="24" width="6" height="6" fill="${p.win}"/><rect x="27" y="36" width="6" height="6" fill="${p.win}"/>
-    <rect x="8" y="40" width="6" height="6" fill="${p.win}"/><rect x="46" y="40" width="6" height="6" fill="${p.win}"/>
-    <rect x="26" y="52" width="8" height="14" fill="${p.door}"/>`,
-
-  // Sentinel — fortified guard tower, battlements, arrow-slits + shield
-  sentinel:(p)=>`
-    <rect x="10" y="58" width="40" height="8" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="14" y="22" width="32" height="40" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="13" y="17" width="5" height="5" fill="${p.roof}"/><rect x="22" y="17" width="5" height="5" fill="${p.roof}"/>
-    <rect x="33" y="17" width="5" height="5" fill="${p.roof}"/><rect x="42" y="17" width="5" height="5" fill="${p.roof}"/>
-    <rect x="22" y="28" width="4" height="9" fill="${p.win}"/><rect x="34" y="28" width="4" height="9" fill="${p.win}"/>
-    <polygon points="30,40 36,42 36,48 30,52 24,48 24,42" fill="${p.wallDark}" stroke="${p.accent}" stroke-width="1"/>
-    <rect x="26" y="56" width="8" height="10" fill="${p.door}"/>`,
-
-  // Axiom — library/archive with columns + pediment
-  axiom:(p)=>`
-    <polygon points="6,30 30,16 54,30" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="8" y="30" width="44" height="6" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="10" y="36" width="40" height="24" fill="${p.wall}"/>
-    <rect x="13" y="36" width="4" height="24" fill="${p.wallDark}"/><rect x="21" y="36" width="4" height="24" fill="${p.wallDark}"/>
-    <rect x="29" y="36" width="4" height="24" fill="${p.wallDark}"/><rect x="37" y="36" width="4" height="24" fill="${p.wallDark}"/>
-    <rect x="45" y="36" width="4" height="24" fill="${p.wallDark}"/>
-    <rect x="17" y="40" width="4" height="16" fill="${p.win}"/><rect x="33" y="40" width="4" height="16" fill="${p.win}"/>
-    <rect x="6" y="60" width="48" height="3" fill="${p.wallDark}"/><rect x="3" y="63" width="54" height="3" fill="${p.line}"/>`,
-
-  // Pyro — workshop/forge with chimney + glowing forge door
-  pyro:(p)=>`
-    <rect x="40" y="10" width="8" height="20" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
-    <circle cx="44" cy="8" r="2" fill="${p.accent}" opacity=".5"/><circle cx="46" cy="4" r="2.5" fill="${p.accent}" opacity=".3"/>
-    <polygon points="6,30 30,18 54,30" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="10" y="30" width="40" height="36" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="14" y="36" width="7" height="7" fill="${p.win}"/><rect x="39" y="36" width="7" height="7" fill="${p.win}"/>
-    <rect x="22" y="44" width="16" height="22" fill="${p.door}"/>
-    <rect x="24" y="48" width="12" height="16" fill="${p.win}"/>`,
-
-  // Quant — observatory with dome + telescope slit
-  quant:(p)=>`
-    <path d="M16 30 A14 14 0 0 1 44 30 Z" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="28" y="16" width="4" height="14" fill="${p.win}"/>
-    <rect x="14" y="30" width="32" height="36" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="19" y="36" width="6" height="6" fill="${p.win}"/><rect x="35" y="36" width="6" height="6" fill="${p.win}"/>
-    <rect x="19" y="48" width="6" height="6" fill="${p.win}"/><rect x="35" y="48" width="6" height="6" fill="${p.win}"/>
-    <rect x="26" y="54" width="8" height="12" fill="${p.door}"/>`,
-
-  // Ghost — dark spooky manor with pointed gables + round window
-  ghost:(p)=>`
-    <polygon points="10,34 20,16 30,34" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
-    <polygon points="28,36 40,20 52,36" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="10" y="34" width="42" height="32" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="15" y="26" width="6" height="8" fill="${p.win}"/><rect x="34" y="28" width="6" height="8" fill="${p.win}"/>
-    <rect x="14" y="42" width="6" height="7" fill="${p.win}"/><rect x="42" y="42" width="6" height="7" fill="${p.win}"/>
-    <circle cx="30" cy="46" r="3.5" fill="${p.win}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="26" y="54" width="8" height="12" fill="${p.door}"/>`,
-
-  // Pixel — arcade/studio cabinet with marquee + screen
-  pixel:(p)=>`
-    <rect x="14" y="20" width="32" height="46" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="12" y="16" width="36" height="8" fill="${p.roof}"/>
-    <rect x="18" y="28" width="24" height="16" fill="${p.win}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="21" y="31" width="4" height="4" fill="${p.accent}"/><rect x="29" y="35" width="4" height="4" fill="${p.accent}"/><rect x="35" y="31" width="4" height="4" fill="${p.accent}"/>
-    <rect x="18" y="48" width="24" height="6" fill="${p.wallDark}"/>
-    <circle cx="23" cy="51" r="2" fill="${p.accent}"/><rect x="30" y="49" width="3" height="4" fill="${p.accent}"/>
-    <rect x="27" y="58" width="6" height="6" fill="${p.door}"/>`,
-
-  // Forge — crumbling ruins / locked vault
-  forge:(p)=>`
-    <polygon points="8,40 8,66 20,66 20,30 14,34 14,40" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <polygon points="40,66 40,32 46,28 52,34 52,66" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="20" y="40" width="20" height="26" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
-    <circle cx="30" cy="52" r="8" fill="${p.win}" stroke="${p.accent}" stroke-width="1.5"/>
-    <circle cx="30" cy="52" r="3" fill="${p.wallDark}" stroke="${p.accent}" stroke-width="1"/>
-    <line x1="30" y1="44" x2="30" y2="60" stroke="${p.accent}" stroke-width="1"/>
-    <line x1="22" y1="52" x2="38" y2="52" stroke="${p.accent}" stroke-width="1"/>
-    <polyline points="24,42 26,48 23,54 27,60" fill="none" stroke="${p.line}" stroke-width="1"/>
-    <rect x="26" y="64" width="8" height="2" fill="${p.accent}"/>`,
-
-  // Oracle — research observatory with domed roof + telescope eye-slit
-  oracle:(p)=>`
-    <path d="M14 32 A16 16 0 0 1 46 32 Z" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="27" y="14" width="6" height="18" fill="${p.win}"/>
-    <line x1="30" y1="16" x2="46" y2="6" stroke="${p.accent}" stroke-width="2"/>
-    <circle cx="47" cy="5" r="2.5" fill="${p.accent}"/>
-    <rect x="14" y="32" width="32" height="34" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="19" y="38" width="6" height="6" fill="${p.win}"/><rect x="35" y="38" width="6" height="6" fill="${p.win}"/>
-    <rect x="19" y="50" width="6" height="6" fill="${p.win}"/><rect x="35" y="50" width="6" height="6" fill="${p.win}"/>
-    <rect x="26" y="54" width="8" height="12" fill="${p.door}"/>`,
-
-  // Ledger — stone counting-house / bank with portico columns + coin sign
-  ledger:(p)=>`
-    <polygon points="6,32 30,18 54,32" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="9" y="32" width="42" height="5" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="10" y="37" width="40" height="29" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="14" y="40" width="4" height="22" fill="${p.wallDark}"/><rect x="22" y="40" width="4" height="22" fill="${p.wallDark}"/>
-    <rect x="34" y="40" width="4" height="22" fill="${p.wallDark}"/><rect x="42" y="40" width="4" height="22" fill="${p.wallDark}"/>
-    <circle cx="30" cy="26" r="4" fill="${p.win}" stroke="${p.accent}" stroke-width="1"/>
-    <rect x="27" y="50" width="6" height="12" fill="${p.door}"/>`,
-
-  // Auto-Docs — library annex with tall arched windows + book gable
-  "auto-docs":(p)=>`
-    <polygon points="8,30 30,16 52,30" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="10" y="30" width="40" height="36" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <path d="M16 50 A5 5 0 0 1 26 50 L26 60 L16 60 Z" fill="${p.win}" stroke="${p.line}" stroke-width="1"/>
-    <path d="M34 50 A5 5 0 0 1 44 50 L44 60 L34 60 Z" fill="${p.win}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="24" y="36" width="12" height="9" fill="${p.win}"/>
-    <line x1="30" y1="36" x2="30" y2="45" stroke="${p.line}" stroke-width="1"/>
-    <rect x="6" y="62" width="48" height="4" fill="${p.accent}"/>`,
-
-  // Warden — tall watchtower, crenellations, beacon + arrow-slits
-  warden:(p)=>`
-    <rect x="29" y="4" width="2" height="8" fill="${p.accent}"/>
-    <circle cx="30" cy="4" r="2.5" fill="${p.accent}"/>
-    <rect x="18" y="14" width="24" height="8" fill="${p.wallDark}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="18" y="11" width="4" height="4" fill="${p.roof}"/><rect x="26" y="11" width="4" height="4" fill="${p.roof}"/>
-    <rect x="34" y="11" width="4" height="4" fill="${p.roof}"/>
-    <rect x="22" y="22" width="16" height="44" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="28" y="28" width="4" height="9" fill="${p.win}"/>
-    <rect x="28" y="42" width="4" height="9" fill="${p.win}"/>
-    <rect x="26" y="56" width="8" height="10" fill="${p.door}"/>`,
-
-  // Incident Responder — alert station, siren light + warning stripes
-  "incident-responder":(p)=>`
-    <rect x="26" y="8" width="8" height="6" fill="${p.accent}"/>
-    <circle cx="30" cy="8" r="3" fill="${p.accent}"/>
-    <polygon points="6,32 30,18 54,32" fill="${p.roof}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="10" y="32" width="40" height="34" fill="${p.wall}" stroke="${p.line}" stroke-width="1"/>
-    <rect x="10" y="32" width="40" height="4" fill="${p.accent}"/>
-    <polygon points="30,38 36,50 24,50" fill="none" stroke="${p.accent}" stroke-width="1.5"/>
-    <rect x="29" y="43" width="2" height="4" fill="${p.accent}"/><rect x="29" y="48" width="2" height="2" fill="${p.accent}"/>
-    <rect x="14" y="40" width="6" height="6" fill="${p.win}"/><rect x="40" y="40" width="6" height="6" fill="${p.win}"/>
-    <rect x="24" y="54" width="12" height="12" fill="${p.door}"/>`
+/* ── API helpers (session-cookie auth gate → credentials:include) ──────── */
+const J = { 'Content-Type':'application/json' };
+const API = {
+  agents:        ()        => fetch('/api/agents',{credentials:'include'}).then(r=>r.json()),
+  log:           (id)      => fetch('/api/agents/'+encodeURIComponent(id)+'/log',{credentials:'include'}).then(r=>r.json()),
+  awardXp:       (id,amt)  => fetch('/api/agents/'+encodeURIComponent(id)+'/xp',{method:'POST',credentials:'include',headers:J,body:JSON.stringify({amount:amt})}).then(r=>r.json()),
+  setStatus:     (id,st)   => fetch('/api/agents/'+encodeURIComponent(id)+'/status',{method:'POST',credentials:'include',headers:J,body:JSON.stringify({status:st})}).then(r=>r.json()),
+  missions:      ()        => fetch('/api/missions/today',{credentials:'include'}).then(r=>r.json()),
+  completeMission:(id)     => fetch('/api/missions/'+id+'/complete',{method:'POST',credentials:'include',headers:J}).then(r=>r.json()),
 };
 
-function buildingSVG(id, status){
-  const accent = BUILDING_ACCENTS[id] || "#22d3ee";
-  // Forge is always a locked ruin regardless of stored status.
-  const st = (id==="forge") ? "locked" : status;
-  const p = bldgPalette(accent, st);
-  const shape = BUILDING_SHAPES[id] || BUILDING_SHAPES.nexus;
-  const glow = p.glow ? `filter:drop-shadow(0 0 4px ${p.glow})` : "";
-  return `<svg class="bsvg" viewBox="0 0 60 70" width="60" height="70" `+
-         `xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" `+
-         `style="${glow}">${shape(p)}</svg>`;
+function agentColor(a){
+  const c = CLOCK_BY_ID[a.id];
+  if (c) return c.color;
+  return a.status==='locked' ? COL.gray : COL.pink;
 }
 
-// Swap a single building's state when its status changes (no full reload).
-// The detail panel still uses the inline SVG; the map is repainted by Phaser.
-function swapBuildingState(id, status){
-  const a = AGENTS.find(x=>x.id===id);
-  if(a) a.status = status;
-  if(mapScene) mapScene.setAgents(AGENTS, SELECTED);
-}
-
-// ── HTTP helpers (session-cookie auth gate) ──────────────────────────────
-async function apiGet(url){
-  const r = await fetch(url, {credentials:"include"});
-  if(!r.ok) throw new Error(r.status);
-  return r.json();
-}
-async function apiPost(url, body){
-  const r = await fetch(url, {
-    method:"POST", credentials:"include",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify(body||{})
-  });
-  if(!r.ok) throw new Error(r.status);
-  return r.json();
-}
-function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
-function toast(msg){
-  const t=document.createElement("div"); t.className="toast"; t.textContent=msg;
-  document.body.appendChild(t); setTimeout(()=>t.remove(),2200);
-}
-
-// ── Clock ────────────────────────────────────────────────────────────────
-function tickClock(){
-  const el=document.getElementById("stat-time");
-  if(el) el.textContent=new Date().toLocaleTimeString("en-GB",{hour12:false});
-}
-setInterval(tickClock,1000); tickClock();
-
-// ── Load ─────────────────────────────────────────────────────────────────
-async function loadAgents(){
-  try{
-    const d = await apiGet("/api/agents");
-    AGENTS = d.agents||[]; LIVE = d.live||{};
-    renderTopBar(); renderAlerts(d.alerts||[]); renderMap(); renderLiveStrip();
-    if(!SELECTED && AGENTS.length) SELECTED = AGENTS[0].id;
-    if(SELECTED) selectAgent(SELECTED, false);
-  }catch(e){ toast("LINK DOWN"); }
-}
-
-async function loadMissions(){
-  try{ renderMissions(await apiGet("/api/missions/today")); }
-  catch(e){ /* silent */ }
-}
-
-// ── Top bar ──────────────────────────────────────────────────────────────
-function renderTopBar(){
-  const active = AGENTS.filter(a=>a.status==="active").length;
-  const totalXp = AGENTS.reduce((s,a)=>s + (a.level*1000) + (a.xp||0), 0);
-  document.getElementById("stat-active").textContent = active + "/" + AGENTS.length;
-  document.getElementById("stat-xp").textContent = totalXp.toLocaleString();
-}
-
-// ── Alerts ───────────────────────────────────────────────────────────────
-function renderAlerts(alerts){
-  const wrap=document.getElementById("alerts");
-  if(!alerts.length){ wrap.innerHTML=""; return; }
-  wrap.innerHTML = alerts.map(a=>`
-    <div class="alert ${esc(a.level)}">
-      <span class="dot"></span>
-      <span class="tag">${a.level==="crit"?"Critical":a.level==="warn"?"Attention":"Info"}</span>
-      <span>${esc(a.text)}</span>
-    </div>`).join("");
-}
-
-// ── Map ──────────────────────────────────────────────────────────────────
-// The map is rendered by the Phaser scene (see MapScene below). renderMap()
-// just hands the current agent roster to the scene — or stashes it if the
-// scene hasn't finished booting yet.
-function renderMap(){
-  if(mapScene){ mapScene.setAgents(AGENTS, SELECTED); }
-  else { pendingAgents = AGENTS.slice(); pendingSelected = SELECTED; }
-}
-
-// ── Live strip (sidebar) ─────────────────────────────────────────────────
-function renderLiveStrip(){
-  const t = LIVE.trading||{};
-  const pnl = t.pnl;
-  const pnlClass = (pnl==null)?"":(parseFloat(pnl)>=0?"pos":"neg");
-  const pnlTxt = (pnl==null)?"—":("$"+pnl+(t.pnl_pct!=null?" ("+t.pnl_pct+"%)":""))+(t.cached?" ·c":"");
-  document.getElementById("live-strip").innerHTML = `
-    <div class="live-cell"><div class="k">Water</div><div class="v">${LIVE.water_ml||0}<span class="muted" style="font-size:.6rem">/${LIVE.water_target||2000}ml</span></div></div>
-    <div class="live-cell"><div class="k">Supplements</div><div class="v">${LIVE.supplements_taken||0}<span class="muted" style="font-size:.6rem">/${LIVE.supplements_total||3}</span></div></div>
-    <div class="live-cell"><div class="k">Trading P&amp;L</div><div class="v ${pnlClass}" style="font-size:.8rem">${esc(pnlTxt)}</div></div>
-    <div class="live-cell"><div class="k">ASFA</div><div class="v pos" style="font-size:.8rem">${esc(LIVE.uptime||"ONLINE")}</div></div>`;
-}
-
-// ── Findings synthesis (Sentinel / Axiom) ────────────────────────────────
-function severityBreakdown(n){
-  n=n||0;
-  const crit=Math.round(n*0.12), high=Math.round(n*0.23), med=Math.round(n*0.32);
-  const low=Math.max(0, n-crit-high-med);
-  return {critical:crit, high:high, medium:med, low:low};
-}
-
-// ── Detail panel ─────────────────────────────────────────────────────────
-async function selectAgent(id, refreshLog){
-  SELECTED=id;
-  document.querySelectorAll(".bldg").forEach(b=>b.classList.remove("sel"));
-  const a=AGENTS.find(x=>x.id===id);
-  if(!a) return;
-  // re-highlight building on the map
-  if(mapScene) mapScene.setSelected(id);
-  document.getElementById("detail-id").textContent = "#"+a.id;
-
-  let logs=[];
-  try{ logs = await apiGet(`/api/agents/${a.id}/log`); }catch(e){ logs=[]; }
-
-  const pct = a.xp_max? Math.min(100, Math.round((a.xp/a.xp_max)*100)) : 0;
-  const showFindings = (a.id==="sentinel"||a.id==="axiom");
-  const showLive = (a.id==="quant");
-  const sev = severityBreakdown(a.findings);
-  const t = LIVE.trading||{};
-  const locked = a.status==="locked";
-
-  let html = `
-    <div class="d-head">
-      <div class="d-ico">${buildingSVG(a.id, a.status)}</div>
-      <div>
-        <div class="d-name">${esc(a.name)}</div>
-        <div class="d-role">${esc(a.role||"")}</div>
-      </div>
-      <div class="d-badge ${a.status}">${a.status}</div>
-    </div>
-
-    <div class="xp-row">
-      <span class="lv">LEVEL ${a.level}</span>
-      <span class="pct">${pct}%</span>
-    </div>
-    <div class="xp-bar"><div class="xp-fill" style="width:${pct}%"></div></div>
-    <div class="xp-sub">${a.xp} / ${a.xp_max} XP to next level</div>
-
-    <div class="grid4">
-      <div class="cell"><div class="k">Tasks Run</div><div class="v">${a.tasks_run||0}</div></div>
-      <div class="cell"><div class="k">Findings</div><div class="v">${a.findings||0}</div></div>
-      <div class="cell"><div class="k">Uptime</div><div class="v pos" style="font-size:.7rem">${esc(LIVE.uptime||"ONLINE")}</div></div>
-      <div class="cell"><div class="k">Battles</div><div class="v" style="font-size:.85rem"><span class="pos">${a.battles_won||0}</span>·<span class="neg">${a.battles_lost||0}</span></div></div>
-    </div>`;
-
-  if(showFindings){
-    html += `
-      <div class="sub-h">Findings by Severity</div>
-      <div class="findings">
-        <span class="fbadge critical">CRITICAL<span class="n">${sev.critical}</span></span>
-        <span class="fbadge high">HIGH<span class="n">${sev.high}</span></span>
-        <span class="fbadge medium">MEDIUM<span class="n">${sev.medium}</span></span>
-        <span class="fbadge low">LOW<span class="n">${sev.low}</span></span>
-      </div>`;
-  }
-
-  if(showLive){
-    const pnl=t.pnl, pnlClass=(pnl==null)?"":(parseFloat(pnl)>=0?"pos":"neg");
-    html += `
-      <div class="sub-h">Live Trading Data ${t.cached?'<span class="muted" style="font-size:.5rem">(cached)</span>':''}</div>
-      <div class="live-grid">
-        <div class="live-cell"><div class="k">P&amp;L</div><div class="v ${pnlClass}">${pnl==null?"—":"$"+esc(pnl)}</div></div>
-        <div class="live-cell"><div class="k">Equity</div><div class="v">${t.equity==null?"—":"$"+esc(t.equity)}</div></div>
-        <div class="live-cell"><div class="k">Signals</div><div class="v">${t.signals||0}</div></div>
-      </div>`;
-  }
-
-  html += `<div class="sub-h">Activity Log</div>`;
-  if(logs.length){
-    html += `<div class="log">` + logs.slice(0,10).map(l=>`
-      <div class="log-item">
-        <span class="ts">${fmtTs(l.timestamp)}</span>
-        <span>${esc(l.message)}</span>
-        ${l.xp_earned?`<span class="xp">+${l.xp_earned}</span>`:""}
-      </div>`).join("") + `</div>`;
-  }else{
-    html += `<div class="muted" style="font-size:.66rem">// no activity yet</div>`;
-  }
-
-  html += `
-    <div class="actions">
-      <button class="btn deploy" ${locked?"disabled":""} onclick="doDeploy('${a.id}')">Deploy ↗</button>
-      <button class="btn xp" ${locked?"disabled":""} onclick="doXp('${a.id}')">+XP</button>
-      <button class="btn battle" ${locked?"disabled":""} onclick="doBattle('${a.id}')">⚔ Battle</button>
-      <button class="btn" ${locked?"disabled":""} onclick="doToggle('${a.id}')">Toggle</button>
-    </div>`;
-
-  document.getElementById("detail").innerHTML = html;
-}
-
-// ── Actions ──────────────────────────────────────────────────────────────
-async function doXp(id){
-  try{
-    const r = await apiPost(`/api/agents/${id}/xp`, {amount:50, message:"⚡ Manual XP boost"});
-    toast(r.leveled_up?`${id.toUpperCase()} LEVELED UP!`:"+50 XP");
-    await loadAgents();
-  }catch(e){ toast("FAILED"); }
-}
-async function doDeploy(id){
-  try{
-    const a=AGENTS.find(x=>x.id===id);
-    if(a && a.status==="idle") await apiPost(`/api/agents/${id}/status`,{status:"active"});
-    await apiPost(`/api/agents/${id}/log`, {message:"🚀 Deployed to a task", xp_earned:0});
-    const r = await apiPost(`/api/agents/${id}/xp`, {amount:25, message:"🚀 Deployment complete"});
-    toast(r.leveled_up?`${id.toUpperCase()} LEVELED UP!`:"DEPLOYED +25 XP");
-    await loadAgents();
-  }catch(e){ toast("FAILED"); }
-}
-async function doToggle(id){
-  try{
-    const a=await apiPost(`/api/agents/${id}/status`,{});
-    if(a.status) swapBuildingState(id, a.status); // instant SVG state swap
-    toast("STATUS → "+(a.status||"").toUpperCase());
-    await loadAgents();
-  }
-  catch(e){ toast("FAILED"); }
-}
-async function doBattle(id){
-  // pick a random non-locked opponent
-  const opps = AGENTS.filter(a=>a.id!==id && a.status!=="locked");
-  if(!opps.length){ toast("NO OPPONENTS"); return; }
-  const opp = opps[Math.floor(Math.random()*opps.length)];
-  const topics=["code quality","architecture","performance","security posture","test coverage"];
-  const topic=topics[Math.floor(Math.random()*topics.length)];
-  try{
-    const r = await apiPost("/api/battles", {agent1_id:id, agent2_id:opp.id, winner_id:id, topic});
-    toast(`${id.toUpperCase()} BEAT ${opp.id.toUpperCase()} · +${r.xp_awarded} XP`);
-    await loadAgents();
-  }catch(e){ toast("BATTLE FAILED"); }
-}
-
-// ── Missions ─────────────────────────────────────────────────────────────
-function renderMissions(missions){
-  const wrap=document.getElementById("missions");
-  const done = missions.filter(m=>m.completed).length;
-  document.getElementById("mission-count").textContent = `${done}/${missions.length}`;
-  wrap.innerHTML = missions.map(m=>`
-    <div class="mission ${m.completed?"done":""}" onclick="completeMission(${m.id}, ${m.completed?1:0})">
-      <div class="m-check">${m.completed?"✓":""}</div>
-      <div style="min-width:0">
-        <div class="m-title">${esc(m.title)}</div>
-        <div class="m-desc">${esc(m.description||"")}</div>
-      </div>
-      <div class="m-xp">+${m.xp_reward}</div>
-    </div>`).join("") || `<div class="muted" style="font-size:.7rem">// none today</div>`;
-}
-async function completeMission(id, alreadyDone){
-  if(alreadyDone){ toast("ALREADY DONE"); return; }
-  try{
-    const r = await apiPost(`/api/missions/${id}/complete`, {});
-    if(r.award && r.award.leveled_up) toast("MISSION DONE · LEVEL UP!");
-    else toast("MISSION COMPLETE");
-    await loadMissions(); await loadAgents();
-  }catch(e){ toast("FAILED"); }
-}
-
-// ── Util ─────────────────────────────────────────────────────────────────
-function fmtTs(ts){
-  if(!ts) return "—";
-  try{
-    const d=new Date(ts.includes("T")?ts:ts.replace(" ","T")+"Z");
-    if(isNaN(d)) return ts.slice(0,16);
-    const diffM=(Date.now()-d)/60000;
-    if(diffM<1) return "now";
-    if(diffM<60) return Math.floor(diffM)+"m";
-    if(diffM<1440) return Math.floor(diffM/60)+"h";
-    return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short"});
-  }catch(e){ return "—"; }
-}
-
-// ── Phaser map scene ──────────────────────────────────────────────────────
-// Top-down pixel-art town stamped from the real RPG tileset assets in /static
-// (tiles-map.png = 11×9 grid of 32px frames, seamless grass tiles, hero sprite).
-// Each agent owns one building built from tileset frames; its visual state
-// (active / idle / locked) tracks agent.status.
-
-const TILE = 32;
-const MAP_COLS = 26, MAP_ROWS = 14;        // 832×448 play area on the 840×460 canvas
-
-// frameIndex = row*11 + col within tiles-map.png. Each building is stamped as a
-// cols×rows grid of 32px frames anchored at its top-left (x, y).
-const BUILDING_DEFS = {
-  nexus:    {x:370, y:80,  cols:3, rows:3, frames:[3,4,5,14,15,16,25,26,27], accent:0x22d3ee, feat:"nexus"},
-  sentinel: {x:60,  y:60,  cols:2, rows:2, frames:[0,1,11,12],                accent:0x10b981, feat:"sentinel"},
-  axiom:    {x:560, y:60,  cols:3, rows:3, frames:[8,9,10,19,20,21,30,31,32], accent:0xa78bfa, feat:"axiom"},
-  pixel:    {x:720, y:60,  cols:2, rows:2, frames:[0,1,11,12],                accent:0x2dd4bf, feat:"pixel"},
-  pyro:     {x:60,  y:280, cols:2, rows:2, frames:[33,34,44,45],              accent:0xf59e0b, feat:"pyro"},
-  quant:    {x:560, y:280, cols:2, rows:2, frames:[66,67,77,78],              accent:0x3b82f6, feat:"quant"},
-  ghost:    {x:720, y:280, cols:2, rows:2, frames:[68,69,79,80],              accent:0xec4899, feat:"ghost"},
-  forge:    {x:260, y:280, cols:2, rows:2, frames:[71,72,82,83],              accent:0x374151, feat:"locked"},
-  // ── Real Claude Code agents ──────────────────────────────────────────────
-  oracle:               {x:60,  y:230, cols:2, rows:2, frames:[8,9,19,20],     accent:0x818cf8, feat:"oracle"},
-  ledger:               {x:720, y:230, cols:2, rows:2, frames:[66,67,77,78],   accent:0x34d399, feat:"ledger"},
-  "auto-docs":          {x:300, y:60,  cols:2, rows:2, frames:[3,4,14,15],     accent:0xfbbf24, feat:"auto-docs"},
-  warden:               {x:580, y:230, cols:2, rows:2, frames:[0,1,11,12],     accent:0x94a3b8, feat:"warden"},
-  "incident-responder": {x:180, y:340, cols:2, rows:2, frames:[68,69,79,80],   accent:0xef4444, feat:"incident-responder"}
-};
-
-// 16px dirt stubs linking each building to the trunk road (#2d1f0e).
-const PATH_RECTS = [
-  {x:84,  y:124, w:16, h:68},   // sentinel ↓ road
-  {x:600, y:156, w:16, h:36},   // axiom    ↓ road
-  {x:744, y:124, w:16, h:68},   // pixel    ↓ road
-  {x:410, y:176, w:16, h:16},   // nexus    ↓ road
-  {x:84,  y:224, w:16, h:56},   // pyro     ↑ road
-  {x:284, y:224, w:16, h:56},   // forge    ↑ road
-  {x:584, y:224, w:16, h:56},   // quant    ↑ road
-  {x:744, y:224, w:16, h:56}    // ghost    ↑ road
-];
-
-// Scattered cypress trees (tileset frame 0). Pixel positions dodge roads/buildings.
-const TREE_POS = [
-  {x:140,y:80},{x:220,y:80},{x:140,y:340},{x:220,y:340},{x:480,y:80},{x:480,y:340},
-  {x:640,y:80},{x:640,y:340},{x:80,y:160},{x:750,y:160},{x:80,y:400},{x:750,y:400}
-];
-
-function cssHex(n){ return "#" + (n >>> 0 & 0xffffff).toString(16).padStart(6,"0"); }
-
-class MapScene extends Phaser.Scene {
-  constructor(){ super("map"); }
-
+/* ════════════════════════════════════════════════════════════════════════
+   BOOT SCENE — asset loading with a pink progress bar
+   ════════════════════════════════════════════════════════════════════════ */
+class BootScene extends Phaser.Scene {
+  constructor(){ super('Boot'); }
   preload(){
-    this.load.image("grass",  "/static/grass-tile.png");
-    this.load.image("grass2", "/static/grass-tile-2.png");
-    this.load.image("grass3", "/static/grass-tile-3.png");
-    this.load.spritesheet("tiles", "/static/tiles-map.png", {frameWidth:32, frameHeight:32});
-    this.load.spritesheet("hero",  "/static/hero.png",      {frameWidth:32, frameHeight:48});
+    const g = this.add.graphics();
+    const bw = 360, bh = 14, bx = (W-bw)/2, by = H/2;
+    this.add.text(W/2, by-34, 'A.S.F.A  STATION  BOOT', {
+      fontFamily:'monospace', fontSize:'18px', color:hex(COL.pink),
+    }).setOrigin(0.5).setShadow(0,0,hex(COL.pink),12);
+    g.lineStyle(1, COL.pink, 0.6).strokeRect(bx, by, bw, bh);
+    this.load.on('progress', (p)=>{
+      g.clear();
+      g.lineStyle(1, COL.pink, 0.6).strokeRect(bx, by, bw, bh);
+      g.fillStyle(COL.pink, 1).fillRect(bx+2, by+2, (bw-4)*p, bh-4);
+    });
+
+    this.load.spritesheet('tiles', '/static/neo_zero_tiles_and_buildings_01.png', {frameWidth:16, frameHeight:16});
+    this.load.spritesheet('props', '/static/neo_zero_props_and_items_01.png',      {frameWidth:16, frameHeight:16});
+    this.load.spritesheet('chars', '/static/neo_zero_char_01.png',                 {frameWidth:16, frameHeight:24});
   }
+  create(){
+    // tiny round spark used for particles + corridor energy pulses
+    const s = this.add.graphics();
+    s.fillStyle(0xffffff,1).fillCircle(4,4,4);
+    s.generateTexture('spark', 8, 8); s.destroy();
+    this.scene.start('Spaceship');
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   SPACESHIP SCENE — the ship map
+   ════════════════════════════════════════════════════════════════════════ */
+class SpaceshipScene extends Phaser.Scene {
+  constructor(){ super('Spaceship'); }
 
   create(){
-    mapScene = this;
-    window.mapScene = this;          // external JS (selectAgent / state swaps) hooks in here
-    this.buildings = {};
-    this.drawGround();
-    this.drawRoads();
-    this.drawDecor();
-    this.placeHero();
-    this.selGfx = this.add.graphics().setDepth(20);
-    if(pendingAgents){ this.setAgents(pendingAgents, pendingSelected); pendingAgents = null; }
+    MC.scene = this;
+    this.cameras.main.setBackgroundColor(COL.space);
+
+    this.drawSpace();
+    this.drawHull();
+    this.corridorLayer = this.add.graphics().setDepth(2);
+    this.pulseLayer    = this.add.container(0,0).setDepth(3);
+    this.roomLayer     = this.add.container(0,0).setDepth(5);
+    this.drawNexus();
+
+    this.setupCamera();
+    this.scheduleShootingStars();
+
+    // first data load + 30s poll loop
+    this.refresh(true);
+    this.time.addEvent({ delay:30000, loop:true, callback:()=>this.refresh(false) });
   }
 
-  // ── Ground: seamless grass tiles, seeded per position + dirt stubs ──────
-  drawGround(){
-    const keys = ["grass","grass2","grass3"];
-    for(let col=0; col<=MAP_COLS; col++){
-      for(let row=0; row<=MAP_ROWS; row++){
-        const k = keys[(col*31 + row*7) % 3];   // seeded so the layout is stable
-        this.add.image(col*TILE, row*TILE, k)
-          .setOrigin(0,0).setDisplaySize(TILE, TILE).setDepth(0);
+  /* ── 1. Space background ──────────────────────────────────────────── */
+  drawSpace(){
+    const g = this.add.graphics().setDepth(0);
+    // nebula clouds
+    const nebs = [
+      {x:280,y:180,rx:340,ry:240,c:0x2d0050},
+      {x:980,y:240,rx:300,ry:220,c:0x001840},
+      {x:760,y:640,rx:380,ry:260,c:0x003020},
+      {x:200,y:620,rx:260,ry:200,c:0x2d0050},
+    ];
+    nebs.forEach(n=>{ g.fillStyle(n.c, 0.08); g.fillEllipse(n.x,n.y,n.rx,n.ry); });
+
+    // faint galaxy spiral (slow rotation, pure texture)
+    const spiral = this.add.graphics({x:W*0.72, y:H*0.3}).setDepth(0);
+    spiral.lineStyle(1, 0x6a4aa0, 0.06);
+    for (let a=0; a<Math.PI*6; a+=0.12){
+      const r = a*7;
+      spiral.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+    }
+    spiral.strokePath();
+    this.tweens.add({ targets:spiral, angle:360, duration:120000, repeat:-1 });
+
+    // 320 stars
+    const palette = [0xffffff, 0xbfdfff, 0xfff3c0];
+    for (let i=0;i<320;i++){
+      const x = Phaser.Math.Between(0,W), y = Phaser.Math.Between(0,H);
+      const sz = Phaser.Math.FloatBetween(0.6, 2.6);
+      const col = Phaser.Utils.Array.GetRandom(palette);
+      g.fillStyle(col, Phaser.Math.FloatBetween(0.4,1));
+      g.fillCircle(x, y, sz);
+      // cross-flare on the brightest few
+      if (sz > 2.1){
+        g.lineStyle(1, col, 0.5);
+        g.lineBetween(x-5,y,x+5,y); g.lineBetween(x,y-5,x,y+5);
       }
     }
-    const g = this.add.graphics().setDepth(1);
-    g.fillStyle(0x2d1f0e, 1);
-    PATH_RECTS.forEach(p=> g.fillRect(p.x, p.y, p.w, p.h));
+    // a layer of twinkling stars (alpha tween)
+    for (let i=0;i<40;i++){
+      const st = this.add.circle(Phaser.Math.Between(0,W),Phaser.Math.Between(0,H),
+        Phaser.Math.FloatBetween(0.8,1.8), 0xffffff).setDepth(0);
+      this.tweens.add({ targets:st, alpha:{from:0.2,to:1},
+        duration:Phaser.Math.Between(900,2200), yoyo:true, repeat:-1, delay:Phaser.Math.Between(0,2000) });
+    }
   }
 
-  // ── Roads: trunk H+V, lighter crossroad, dashed centre lines ───────────
-  drawRoads(){
-    const g = this.add.graphics().setDepth(2);
-    g.fillStyle(0x1a2332, 1);
-    g.fillRect(0, 192, 840, 32);     // horizontal (rows 6–7)
-    g.fillRect(400, 0, 32, 460);     // vertical (cols 12–13)
-    g.fillStyle(0x222d3d, 1);
-    g.fillRect(400, 192, 32, 32);    // crossroad (lighter)
-    g.fillStyle(0x374151, 1);
-    for(let x=0; x<840; x+=24){ g.fillRect(x, 207, 12, 2); }   // H dashes @ y=208
-    for(let y=0; y<460; y+=24){ g.fillRect(415, y, 2, 12); }   // V dashes @ x=416
-  }
-
-  // ── Decor: cypress trees + well at the crossroad ───────────────────────
-  drawDecor(){
-    TREE_POS.forEach(t=>
-      this.add.sprite(t.x, t.y, "tiles", 0).setOrigin(0,0).setDepth(3));
-    // well (frame 71) centred on the intersection
-    this.add.sprite(416, 208, "tiles", 71).setOrigin(0.5).setDepth(3);
-  }
-
-  // ── Hero idles at the HQ crossroad ─────────────────────────────────────
-  placeHero(){
-    this.hero = this.add.sprite(416, 200, "hero", 0).setOrigin(0.5, 1).setDepth(16);
-    const frameCount = this.textures.get("hero").frameTotal - 1;   // minus __BASE
-    if(frameCount >= 3 && !this.anims.exists("hero-idle")){
-      this.anims.create({
-        key:"hero-idle",
-        frames:this.anims.generateFrameNumbers("hero", {start:0, end:2}),
-        frameRate:4, repeat:-1
+  scheduleShootingStars(){
+    const fire = ()=>{
+      const sx = Phaser.Math.Between(0, W*0.6), sy = Phaser.Math.Between(0, H*0.4);
+      const star = this.add.image(sx, sy, 'spark').setDepth(1).setScale(0.8).setAlpha(0.9).setTint(0xbfdfff);
+      const trail = this.add.graphics().setDepth(1);
+      const dx = Phaser.Math.Between(220,420), dy = Phaser.Math.Between(120,260);
+      this.tweens.add({
+        targets:star, x:sx+dx, y:sy+dy, alpha:0, duration:700, ease:'Quad.easeIn',
+        onUpdate:()=>{ trail.clear(); trail.lineStyle(2, 0xbfdfff, star.alpha*0.5);
+          trail.lineBetween(sx, sy, star.x, star.y); },
+        onComplete:()=>{ star.destroy(); trail.destroy(); },
       });
-      this.hero.play("hero-idle");
+      this.time.delayedCall(Phaser.Math.Between(5000,9000), fire);
+    };
+    this.time.delayedCall(Phaser.Math.Between(2000,4000), fire);
+  }
+
+  /* ── 2. Ship hull (octagon) ───────────────────────────────────────── */
+  octagonPoints(cx, cy, r){
+    const pts = [];
+    for (let i=0;i<8;i++){
+      const a = Math.PI/8 + i*(Math.PI/4); // flat-top-ish octagon
+      pts.push(new Phaser.Geom.Point(cx + Math.cos(a)*r, cy + Math.sin(a)*r));
+    }
+    return pts;
+  }
+  glowStroke(g, pts, color, baseWidth){
+    g.lineStyle(baseWidth+5, color, 0.15); g.strokePoints(pts, true, true);
+    g.lineStyle(baseWidth+2, color, 0.30); g.strokePoints(pts, true, true);
+    g.lineStyle(baseWidth,   color, 1.00); g.strokePoints(pts, true, true);
+  }
+  drawHull(){
+    const g = this.add.graphics().setDepth(1);
+    const outer = this.octagonPoints(CENTER.x, CENTER.y, HULL_RADIUS);
+    const inner = this.octagonPoints(CENTER.x, CENTER.y, HULL_RADIUS-12);
+    this.glowStroke(g, outer, COL.pink, 3);
+    g.lineStyle(1, COL.pink, 0.2); g.strokePoints(inner, true, true);
+
+    // thrusters at the 4 diagonal vertices
+    [1,3,5,7].forEach(i=>{
+      const a = Math.PI/8 + i*(Math.PI/4);
+      const tx = CENTER.x + Math.cos(a)*(HULL_RADIUS+10), ty = CENTER.y + Math.sin(a)*(HULL_RADIUS+10);
+      const noz = this.add.graphics().setDepth(1);
+      noz.lineStyle(2, COL.pink, 1).strokeRect(tx-7, ty-5, 14, 10);
+      this.tweens.add({ targets:noz, alpha:{from:0.4,to:1}, duration:800, yoyo:true, repeat:-1 });
+    });
+
+    // docking clamps (port / starboard) — cyan T-shapes
+    [[CENTER.x-HULL_RADIUS-6, CENTER.y],[CENTER.x+HULL_RADIUS+6, CENTER.y]].forEach(([cx,cy])=>{
+      const c = this.add.graphics().setDepth(1);
+      c.lineStyle(2, COL.cyan, 0.9);
+      c.lineBetween(cx, cy-10, cx, cy+10); c.lineBetween(cx-7, cy, cx+7, cy);
+    });
+
+    // antenna array + blinking tip
+    const ax = CENTER.x, ayTop = CENTER.y - HULL_RADIUS;
+    const ant = this.add.graphics().setDepth(1);
+    ant.lineStyle(1.5, COL.cyan, 0.8);
+    ant.lineBetween(ax, ayTop, ax, ayTop-26);
+    ant.lineBetween(ax-8, ayTop-22, ax+8, ayTop-22);
+    const tip = this.add.circle(ax, ayTop-28, 2.5, COL.cyan).setDepth(1);
+    this.tweens.add({ targets:tip, alpha:0.1, duration:1000, yoyo:true, repeat:-1, hold:600 });
+
+    // nameplate
+    this.add.text(CENTER.x, ayTop+16, 'A.S.F.A', {
+      fontFamily:'monospace', fontSize:'13px', color:hex(COL.pink), fontStyle:'bold',
+    }).setOrigin(0.5).setDepth(1).setShadow(0,0,hex(COL.pink),8);
+  }
+
+  /* ── 4. Central command hub (NEXUS) ───────────────────────────────── */
+  hexPoints(r){
+    const pts=[];
+    for (let i=0;i<6;i++){ const a=-Math.PI/2 + i*(Math.PI/3); pts.push(new Phaser.Geom.Point(Math.cos(a)*r, Math.sin(a)*r)); }
+    return pts;
+  }
+  drawNexus(){
+    const c = this.add.container(CENTER.x, CENTER.y).setDepth(6);
+    const R = 60;
+
+    // 3 pulsing concentric rings
+    for (let i=0;i<3;i++){
+      const ring = this.add.circle(0,0, R+18+i*16, 0x000000, 0).setStrokeStyle(1, COL.pink, 0.25);
+      c.add(ring);
+      this.tweens.add({ targets:ring, alpha:{from:0.05,to:0.4}, scale:{from:0.95,to:1.05},
+        duration:2200, yoyo:true, repeat:-1, delay:i*500 });
+    }
+    // slow rotating outer ring (dashed look via short arcs)
+    const rot = this.add.graphics();
+    rot.lineStyle(2, COL.pink, 0.5);
+    for (let a=0;a<Math.PI*2;a+=0.5){ rot.beginPath(); rot.arc(0,0,R+30,a,a+0.28); rot.strokePath(); }
+    c.add(rot);
+    this.tweens.add({ targets:rot, angle:360, duration:20000, repeat:-1 });
+
+    // hexagon body
+    const hg = this.add.graphics();
+    const hp = this.hexPoints(R);
+    hg.fillStyle(COL.nexusFill, 1); hg.fillPoints(hp, true);
+    this.glowStroke(hg, hp, COL.pink, 2.5);
+    c.add(hg);
+
+    c.add(this.add.text(0,-22,'COMMAND',{fontFamily:'monospace',fontSize:'7px',color:hex(COL.pink)}).setOrigin(0.5).setAlpha(0.4));
+    c.add(this.add.text(0,-2,'NEXUS',{fontFamily:'monospace',fontSize:'18px',color:hex(COL.pink),fontStyle:'bold'}).setOrigin(0.5).setShadow(0,0,hex(COL.pink),10));
+    this.nexusLevelTxt = this.add.text(R-6,-R+6,'LV 8',{fontFamily:'monospace',fontSize:'9px',color:hex(COL.yellow),fontStyle:'bold'}).setOrigin(1,0);
+    c.add(this.nexusLevelTxt);
+    this.nexusContainer = c;
+  }
+
+  /* ── Camera: fit, wheel zoom, right-drag pan ──────────────────────── */
+  setupCamera(){
+    const cam = this.cameras.main;
+    cam.setBounds(-200,-200,W+400,H+400);
+    this.input.on('wheel',(p,o,dx,dy)=>{
+      const z = Phaser.Math.Clamp(cam.zoom - dy*0.001, 0.5, 2.0);
+      cam.zoomTo(z, 120);
+    });
+    this.input.on('pointermove',(p)=>{
+      if (p.rightButtonDown()){
+        cam.scrollX -= (p.x - p.prevPosition.x)/cam.zoom;
+        cam.scrollY -= (p.y - p.prevPosition.y)/cam.zoom;
+      }
+    });
+    this.input.mouse.disableContextMenu();
+  }
+  resetView(){ this.cameras.main.pan(W/2, H/2, 600, 'Power2'); this.cameras.main.zoomTo(1, 600); }
+  panTo(id){
+    const r = MC.rooms[id];
+    if (r) this.cameras.main.pan(r.cx, r.cy, 800, 'Power2');
+  }
+
+  /* ── Rooms ─────────────────────────────────────────────────────────── */
+  roomPos(index){
+    const a = -Math.PI/2 + index*(Math.PI/6); // 30° steps from top
+    return { x: CENTER.x + Math.cos(a)*ROOM_RADIUS, y: CENTER.y + Math.sin(a)*ROOM_RADIUS };
+  }
+  chamferPoints(w,h,c){
+    return [
+      new Phaser.Geom.Point(-w/2+c,-h/2), new Phaser.Geom.Point(w/2-c,-h/2),
+      new Phaser.Geom.Point(w/2,-h/2+c),  new Phaser.Geom.Point(w/2,h/2-c),
+      new Phaser.Geom.Point(w/2-c,h/2),   new Phaser.Geom.Point(-w/2+c,h/2),
+      new Phaser.Geom.Point(-w/2,h/2-c),  new Phaser.Geom.Point(-w/2,-h/2+c),
+    ];
+  }
+
+  buildRoom(agent){
+    const meta = CLOCK_BY_ID[agent.id];
+    if (!meta) return; // nexus / unknown handled elsewhere
+    const pos = this.roomPos(meta.index);
+    const w = 96, h = 66, color = meta.color;
+    const c = this.add.container(pos.x, pos.y);
+    this.roomLayer.add(c);
+
+    // glow (behind)
+    const glow = this.add.graphics(); c.add(glow);
+    // floor tile decoration
+    const floorFrame = (meta.index % 5);
+    const floor = this.add.image(0, 6, 'tiles', floorFrame).setScale(2).setAlpha(0.45); c.add(floor);
+    // body + border
+    const body = this.add.graphics(); c.add(body);
+    // prop
+    const prop = this.add.image(w/2-15, h/2-15, 'props', (meta.index % 8)).setScale(1.4).setAlpha(0.7); c.add(prop);
+    // character (only shown when active)
+    const charSprite = this.add.sprite(-w/2+18, -2, 'chars', CHAR_FRAMES[meta.index]).setScale(2).setVisible(false); c.add(charSprite);
+    this.tweens.add({ targets:charSprite, y:'-=3', duration:1500, yoyo:true, repeat:-1, ease:'Sine.easeInOut' });
+    // texts
+    const nameTxt = this.add.text(6,-12, agent.name, {fontFamily:'monospace',fontSize:'11px',color:hex(color),fontStyle:'bold'}).setOrigin(0.5); c.add(nameTxt);
+    const roleTxt = this.add.text(6, 2, agent.role||'', {fontFamily:'monospace',fontSize:'8px',color:hex(color)}).setOrigin(0.5).setAlpha(0.55); c.add(roleTxt);
+    // level badge
+    const badge = this.add.graphics(); c.add(badge);
+    const lvTxt = this.add.text(w/2-6,-h/2+4,'LV '+agent.level,{fontFamily:'monospace',fontSize:'8px',color:hex(COL.yellow),fontStyle:'bold'}).setOrigin(1,0); c.add(lvTxt);
+    // status dot
+    const dot = this.add.circle(-w/2+9, h/2-9, 4, COL.green); c.add(dot);
+    // xp bar (track + fill)
+    const xpTrack = this.add.graphics(); c.add(xpTrack);
+    const xpFill = this.add.graphics(); c.add(xpFill);
+
+    c.setSize(w,h);
+    c.setInteractive(new Phaser.Geom.Rectangle(-w/2,-h/2,w,h), Phaser.Geom.Rectangle.Contains);
+
+    const room = {
+      id:agent.id, cx:pos.x, cy:pos.y, w, h, color, container:c,
+      glow, body, badge, dot, xpFill, xpTrack, nameTxt, roleTxt, lvTxt, charSprite,
+      xpRatio:0, breathe:null, pulseTween:null, dotTween:null,
+    };
+    MC.rooms[agent.id] = room;
+
+    c.on('pointerover', ()=>{ this.tweens.add({targets:c, scale:1.05, duration:120}); this.input.setDefaultCursor('pointer'); });
+    c.on('pointerout',  ()=>{ this.tweens.add({targets:c, scale:1.0, duration:120}); this.input.setDefaultCursor('default'); });
+    c.on('pointerdown', (p)=>{
+      if (p.rightButtonDown && p.rightButtonDown()) return;
+      const flash = this.add.graphics(); c.add(flash);
+      flash.fillStyle(0xffffff, 0.5); flash.fillPoints(this.chamferPoints(w,h,8), true);
+      this.time.delayedCall(60, ()=>flash.destroy());
+      openModal(agent.id);
+    });
+
+    this.styleRoom(room, agent, true);
+    this.drawCorridor(room);
+    this.addCorridorPulse(room);
+    return room;
+  }
+
+  styleRoom(room, agent, immediate){
+    const { glow, body, badge, dot, container } = room;
+    const w = room.w, h = room.h, color = room.color;
+    const cp = this.chamferPoints(w,h,8);
+    const active = agent.status==='active', locked = agent.status==='locked';
+    const strokeAlpha = active ? 1 : (locked ? 0.18 : 0.4);
+
+    glow.clear();
+    if (active){
+      glow.lineStyle(9, color, 0.10); glow.strokePoints(cp, true, true);
+      glow.lineStyle(5, color, 0.22); glow.strokePoints(cp, true, true);
+    }
+    body.clear();
+    body.fillStyle(color, 0.08); body.fillPoints(cp, true);
+    body.lineStyle(locked?1:1.6, color, strokeAlpha); body.strokePoints(cp, true, true);
+
+    badge.clear();
+    badge.fillStyle(COL.yellow, 0.18); badge.fillRect(w/2-40, -h/2+2, 36, 14);
+    badge.lineStyle(1, COL.yellow, 0.8); badge.strokeRect(w/2-40, -h/2+2, 36, 14);
+    room.lvTxt.setText('LV '+agent.level);
+
+    dot.setFillStyle(active?COL.green:(locked?COL.gray:COL.cyan));
+    room.charSprite.setVisible(active);
+
+    // breathe tween for active rooms
+    if (room.breathe){ room.breathe.stop(); room.breathe=null; glow.setAlpha(1); }
+    if (active){
+      room.breathe = this.tweens.add({ targets:glow, alpha:{from:0.6,to:1}, duration:2000, yoyo:true, repeat:-1 });
+      if (room.pulseTween){ room.pulseTween.stop(); }
+      room.pulseTween = this.tweens.add({ targets:container, scale:{from:1,to:1.02}, duration:2000, yoyo:true, repeat:-1 });
+    } else if (room.pulseTween){ room.pulseTween.stop(); room.pulseTween=null; container.setScale(1); }
+
+    // status-driven dot pulse
+    if (room.dotTween){ room.dotTween.stop(); dot.setAlpha(1); room.dotTween=null; }
+    if (active){ room.dotTween = this.tweens.add({targets:dot, alpha:0.3, duration:700, yoyo:true, repeat:-1}); }
+
+    // xp bar
+    const ratio = Phaser.Math.Clamp((agent.xp||0)/((agent.xp_max||1)), 0, 1);
+    this.setXpBar(room, ratio, immediate);
+  }
+
+  setXpBar(room, ratio, immediate){
+    const { xpTrack, xpFill } = room, w = room.w, h = room.h, color = room.color;
+    const barW = w-14, bx = -barW/2, by = h/2-5;
+    xpTrack.clear(); xpTrack.fillStyle(0xffffff, 0.06); xpTrack.fillRect(bx, by, barW, 3);
+    const draw = (rt)=>{ xpFill.clear(); xpFill.fillStyle(color, 0.7); xpFill.fillRect(bx, by, barW*rt, 3); };
+    if (immediate){ room.xpRatio = ratio; draw(ratio); return; }
+    const proxy = { v: room.xpRatio };
+    this.tweens.add({ targets:proxy, v:ratio, duration:800, ease:'Cubic.easeOut',
+      onUpdate:()=>draw(proxy.v), onComplete:()=>{ room.xpRatio = ratio; } });
+  }
+
+  /* ── 3. Corridors + energy pulses ─────────────────────────────────── */
+  drawCorridor(room){
+    const g = this.corridorLayer;
+    g.lineStyle(9, COL.pink, 0.13); g.lineBetween(CENTER.x, CENTER.y, room.cx, room.cy);
+    g.lineStyle(1, COL.cyan, 0.25); g.lineBetween(CENTER.x, CENTER.y, room.cx, room.cy);
+    // junction dot near the room
+    const jx = CENTER.x + (room.cx-CENTER.x)*0.82, jy = CENTER.y + (room.cy-CENTER.y)*0.82;
+    g.fillStyle(COL.pink, 0.6); g.fillCircle(jx, jy, 2.5);
+  }
+  addCorridorPulse(room){
+    const dot = this.add.image(CENTER.x, CENTER.y, 'spark').setScale(0.5).setTint(COL.cyan);
+    this.pulseLayer.add(dot);
+    this.tweens.add({
+      targets:dot, x:room.cx, y:room.cy, duration:3000, repeat:-1,
+      delay:Phaser.Math.Between(0,3000), ease:'Sine.easeInOut',
+      onRepeat:()=>{ dot.setAlpha(1); }, onUpdate:(tw)=>{ dot.setAlpha(1-tw.progress*0.4); },
+    });
+  }
+
+  /* ── Particle / juice effects ─────────────────────────────────────── */
+  levelUpBurst(room){
+    const colors = [COL.pink, COL.cyan, COL.yellow];
+    const em = this.add.particles(room.cx, room.cy, 'spark', {
+      speed:{min:60,max:200}, angle:{min:0,max:360}, scale:{start:0.7,end:0},
+      lifespan:1200, blendMode:'ADD', tint:colors, emitting:false,
+    }).setDepth(11);
+    em.explode(30);
+    this.time.delayedCall(1500, ()=>em.destroy());
+    // badge bounce
+    if (room.lvTxt){ this.tweens.add({targets:room.lvTxt, scale:{from:1.6,to:1}, duration:500, ease:'Back.easeOut'}); }
+  }
+  floatXp(room, amount){
+    const n = Math.min(8, Math.max(4, Math.round(amount/15)));
+    for (let i=0;i<n;i++){
+      const t = this.add.text(room.cx + Phaser.Math.Between(-20,20), room.cy,
+        '+XP', {fontFamily:'monospace',fontSize:'11px',color:hex(COL.yellow),fontStyle:'bold'}).setDepth(12).setOrigin(0.5);
+      this.tweens.add({ targets:t, y:t.y-40-Phaser.Math.Between(0,20), alpha:0,
+        duration:1200, delay:i*60, ease:'Quad.easeOut', onComplete:()=>t.destroy() });
     }
   }
-
-  // ── Buildings ──────────────────────────────────────────────────────────
-  setAgents(agents, selected){
-    this.clearBuildings();
-    agents.forEach(a=>{
-      const def = BUILDING_DEFS[a.id];
-      if(!def) return;
-      const status = (a.id === "forge") ? "locked" : a.status;
-      this.buildings[a.id] = this.buildBuilding(a, def, status);
-    });
-    this.setSelected(selected != null ? selected : SELECTED);
+  activateBurst(room){
+    const em = this.add.particles(CENTER.x, CENTER.y, 'spark', {
+      speed:120, lifespan:700, scale:{start:0.5,end:0}, quantity:1, frequency:40,
+      tint:COL.cyan, blendMode:'ADD',
+      moveToX:room.cx, moveToY:room.cy, emitting:true,
+    }).setDepth(4);
+    this.time.delayedCall(700, ()=>em.destroy());
+  }
+  offlineShake(){
+    this.cameras.main.shake(400, 0.008);
+    const flash = this.add.rectangle(W/2,H/2,W,H,COL.red,0.25).setDepth(40);
+    this.tweens.add({targets:flash, alpha:0, duration:500, onComplete:()=>flash.destroy()});
   }
 
-  clearBuildings(){
-    Object.values(this.buildings).forEach(c=>{
-      if(c._stateTween) c._stateTween.stop();
-      if(c._flicker) c._flicker.remove();
-      if(c._smoke) c._smoke.remove();
-      this.tweens.killTweensOf(c);
-      c.list.slice().forEach(ch=> this.tweens.killTweensOf(ch));
-      c.destroy();
-    });
-    this.buildings = {};
-    if(this.selGfx) this.selGfx.clear();
-  }
+  /* ── Data refresh ─────────────────────────────────────────────────── */
+  async refresh(first){
+    let data;
+    try { data = await API.agents(); }
+    catch(e){ this.onFetchFail(); return; }
+    if (!data || !data.agents){ this.onFetchFail(); return; }
+    MC.failCount = 0; setOffline(false);
 
-  buildBuilding(a, def, status){
-    const w = def.cols*TILE, h = def.rows*TILE;
-    const hw = w/2, hh = h/2;
-    const c = this.add.container(def.x + hw, def.y + hh).setDepth(10);
-    c._def = def; c._w = w; c._h = h; c._name = (a.name || a.id);
+    const prev = Object.fromEntries(MC.agents.map(a=>[a.id, a]));
+    MC.agents = data.agents; MC.live = data.live; MC.alerts = data.alerts||[];
+    const nexus = data.agents.find(a=>a.id==='nexus');
+    if (nexus && this.nexusLevelTxt){ this.nexusLevelTxt.setText('LV '+nexus.level); }
 
-    // tileset body (frames stamped left→right, top→bottom)
-    const tiles = [];
-    def.frames.forEach((fr, i)=>{
-      const col = i % def.cols, row = Math.floor(i / def.cols);
-      const sp = this.add.sprite(col*TILE - hw, row*TILE - hh, "tiles", fr).setOrigin(0,0);
-      tiles.push(sp); c.add(sp);
-    });
-    c._tiles = tiles;
-
-    // status overlay (border + tint fill) and lock icon
-    c._overlay = this.add.graphics(); c.add(c._overlay);
-    c._lock = this.add.graphics(); c.add(c._lock);
-
-    // nexus transmission antenna (always pulsing above HQ)
-    if(def.feat === "nexus"){
-      const ant = this.add.container(0, -hh);
-      const ag = this.add.graphics();
-      ag.fillStyle(0x9ca3af, 1); ag.fillRect(-1, -16, 2, 16);
-      ag.fillStyle(def.accent, 1); ag.fillCircle(0, -16, 3);
-      ant.add(ag); c.add(ant);
-      this.tweens.add({targets:ant, scaleY:{from:0.95, to:1.05},
-        duration:1600, yoyo:true, repeat:-1, ease:"Sine.easeInOut"});
-    }
-
-    // level badge (top-right)
-    const bw = 26;
-    const badge = this.add.graphics();
-    badge.fillStyle(status === "locked" ? 0x374151 : def.accent, 1);
-    badge.fillRect(hw - bw, -hh, bw, 12);
-    c.add(badge);
-    c.add(this.add.text(hw - bw/2, -hh + 6, "LV " + (a.level||0),
-      {fontFamily:"monospace", fontSize:"8px", color:"#0b131c"}).setOrigin(0.5));
-
-    // name label (below building)
-    c._label = this.add.text(0, hh + 4, (a.name||a.id).toUpperCase(),
-      {fontFamily:"monospace", fontSize:"11px", color:"#e2e8f0"}).setOrigin(0.5, 0);
-    c.add(c._label);
-
-    // hover brighten overlay (top of stack)
-    c._hoverOv = this.add.graphics(); c.add(c._hoverOv);
-
-    // interactivity (hit area covers building + label)
-    c.setInteractive(new Phaser.Geom.Rectangle(-hw, -hh, w, h + 18),
-      Phaser.Geom.Rectangle.Contains);
-    c.on("pointerover", ()=>{
-      this.input.setDefaultCursor(c._locked ? "not-allowed" : "pointer");
-      this.tweens.add({targets:c, scaleX:1.05, scaleY:1.05, duration:120});
-      c._hoverOv.clear();
-      c._hoverOv.fillStyle(0xffffff, 0.1); c._hoverOv.fillRect(-hw, -hh, w, h);
-    });
-    c.on("pointerout", ()=>{
-      this.input.setDefaultCursor("default");
-      this.tweens.add({targets:c, scaleX:1, scaleY:1, duration:120});
-      c._hoverOv.clear();
-    });
-    c.on("pointerdown", ()=>{
-      if(c._locked){ toast(c._name.toUpperCase() + " is locked"); return; }
-      selectAgent(a.id, true);
-      this.setSelected(a.id);
+    data.agents.forEach(a=>{
+      if (a.id==='nexus' || !CLOCK_BY_ID[a.id]) return;
+      const room = MC.rooms[a.id];
+      const before = prev[a.id];
+      if (!room){ this.buildRoom(a); return; }
+      // status transition → activate burst
+      if (before && before.status!=='active' && a.status==='active'){ this.activateBurst(room); }
+      this.styleRoom(room, a, first);
+      // level-up detection
+      if (before && a.level > before.level){ this.levelUpBurst(room); }
     });
 
-    this.applyState(c, status);
-    return c;
+    renderSidebar();
+    if (!first) flashSection('activity-sec');
   }
 
-  // ── Per-status overlay / glow / tint / animation ───────────────────────
-  applyState(c, status){
-    const def = c._def, hw = c._w/2, hh = c._h/2;
-    const locked = status === "locked";
-    const active = status === "active";
-    c._locked = locked;
-
-    // tear down any prior state animation
-    if(c._stateTween){ c._stateTween.stop(); c._stateTween = null; }
-    if(c._flicker){ c._flicker.remove(); c._flicker = null; }
-    if(c._smoke){ c._smoke.remove(); c._smoke = null; }
-
-    // tint tiles when locked
-    c._tiles.forEach(t=> locked ? t.setTint(0x333333) : t.clearTint());
-
-    // border + subtle fill
-    const ov = c._overlay; ov.clear(); ov.alpha = 1;
-    if(active){
-      ov.fillStyle(def.accent, 0.08); ov.fillRect(-hw, -hh, c._w, c._h);
-      ov.lineStyle(2, def.accent, 1.0); ov.strokeRect(-hw, -hh, c._w, c._h);
-    } else if(!locked){
-      ov.lineStyle(1, 0x374151, 0.5); ov.strokeRect(-hw, -hh, c._w, c._h);
-    }
-
-    // lock icon (body 8×6 + arc shackle)
-    const lg = c._lock; lg.clear();
-    if(locked){
-      lg.fillStyle(0xffffff, 1); lg.fillRect(-4, 0, 8, 6);
-      lg.lineStyle(2, 0xffffff, 1);
-      lg.beginPath();
-      lg.arc(0, 0, 4, Phaser.Math.DegToRad(180), Phaser.Math.DegToRad(360), false);
-      lg.strokePath();
-    }
-
-    // label colour by state
-    c._label.setColor(locked ? "#64748b" : active ? cssHex(def.accent) : "#94a3b8");
-
-    // active: pulsing border + occasional flicker (+ smoke for pyro)
-    if(active){
-      c._stateTween = this.tweens.add({targets:ov, alpha:{from:0.6, to:1.0},
-        duration:2000, yoyo:true, repeat:-1, ease:"Sine.easeInOut"});
-      c._flicker = this.time.addEvent({delay:Phaser.Math.Between(3000,8000), loop:true,
-        callback:()=>{
-          if(!c.active || !c._overlay) return;
-          if(c._stateTween) c._stateTween.pause();
-          this.tweens.add({targets:ov, alpha:0.3, duration:70, yoyo:true,
-            onComplete:()=>{ if(c._stateTween) c._stateTween.resume(); }});
-        }});
-      if(def.feat === "pyro") this.startSmoke(c);
-    }
-  }
-
-  startSmoke(c){
-    const sx = -c._w/2 + 48, sy = -c._h/2 + 8;   // chimney, relative to building
-    c._smoke = this.time.addEvent({delay:550, loop:true, callback:()=>{
-      if(!c.active) return;
-      const puff = this.add.circle(sx, sy, 2 + Math.random()*2, 0xb0b7c3, 0.5);
-      c.add(puff);
-      this.tweens.add({targets:puff, y:sy - 30, x:sx + (Math.random()*12 - 6),
-        alpha:0, scale:2, duration:1700, ease:"Sine.easeOut",
-        onComplete:()=> puff.destroy()});
-    }});
-  }
-
-  // Update a single building's state without rebuilding the map.
-  setBuildingState(id, status){
-    const c = this.buildings[id];
-    if(!c) return;
-    this.applyState(c, id === "forge" ? "locked" : status);
-  }
-
-  setSelected(id){
-    if(!this.selGfx) return;
-    this.selGfx.clear();
-    const c = this.buildings[id];
-    if(!c) return;
-    const d = c._def;
-    this.selGfx.lineStyle(2, 0xffffff, 0.8);
-    this.selGfx.strokeRect(d.x - 3, d.y - 3, c._w + 6, c._h + 6);
+  onFetchFail(){
+    MC.failCount++; setOffline(true);
+    if (MC.failCount===1) this.offlineShake();
+    this.time.delayedCall(10000, ()=>this.refresh(false));
   }
 }
 
-new Phaser.Game({
+/* ════════════════════════════════════════════════════════════════════════
+   PHASER GAME
+   ════════════════════════════════════════════════════════════════════════ */
+const game = new Phaser.Game({
   type: Phaser.AUTO,
-  parent: "phaser-map",
-  width: 840, height: 460,
-  backgroundColor: "#0c141d",
-  pixelArt: true,
+  parent: 'game',
+  width: W, height: H,
+  backgroundColor: hex(COL.space),
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
-  scene: MapScene
+  scene: [BootScene, SpaceshipScene],
 });
 
-// ── Boot ─────────────────────────────────────────────────────────────────
-loadAgents();
+/* ════════════════════════════════════════════════════════════════════════
+   HTML SIDEBAR + TOP BAR
+   ════════════════════════════════════════════════════════════════════════ */
+const $ = (id)=>document.getElementById(id);
+
+function statusColor(st){ return st==='active'?'#39ff14':(st==='locked'?'#444466':'#00ffff'); }
+function fmtMoney(v){ if(v==null) return '–'; const s=v>=0?'+':'-'; return s+'$'+Math.abs(v).toFixed(2); }
+
+function renderSidebar(){
+  renderTopbar();
+  renderAgents();
+  renderLive();
+  renderActivity();
+  renderTicker();
+}
+
+function renderTopbar(){
+  const active = MC.agents.filter(a=>a.status==='active').length;
+  $('pill-active').textContent = active+'/'+MC.agents.length;
+  const totalXp = MC.agents.reduce((s,a)=>s + (a.level*1000) + (a.xp||0), 0);
+  $('pill-xp').textContent = totalXp.toLocaleString();
+  const tr = MC.live && MC.live.trading;
+  const pnlPill = $('pill-pnl');
+  if (tr && tr.pnl!=null){
+    pnlPill.textContent = fmtMoney(tr.pnl);
+    pnlPill.parentElement.className = 'pill ' + (tr.pnl>=0?'c-green':'c-red');
+  } else { pnlPill.textContent='–'; }
+}
+
+function renderAgents(){
+  const order = { active:0, idle:1, locked:2 };
+  const sorted = [...MC.agents].sort((a,b)=>((order[a.status]??3)-(order[b.status]??3)) || a.name.localeCompare(b.name));
+  $('agents-count').textContent = MC.agents.filter(a=>a.status==='active').length + ' active';
+  $('agents-list').innerHTML = sorted.map(a=>{
+    const col = hex(agentColor(a));
+    const ratio = Math.round(((a.xp||0)/((a.xp_max||1)))*100);
+    const sc = statusColor(a.status);
+    return `<div class="agent-row" data-id="${a.id}" style="border-left-color:${a.status==='active'?col:'transparent'}">
+      <span class="dot" style="background:${sc};box-shadow:0 0 6px ${sc}"></span>
+      <div><div class="nm">${a.icon||''} ${a.name}</div><div class="rl">${a.role||''}</div></div>
+      <div class="lv">LV ${a.level}</div>
+      <div class="xpwrap"><div class="xpfill" style="width:${ratio}%;background:${col}"></div></div>
+    </div>`;
+  }).join('');
+  document.querySelectorAll('.agent-row').forEach(el=>{
+    el.onclick = ()=>{ if (MC.scene) MC.scene.panTo(el.dataset.id); openModal(el.dataset.id); };
+  });
+}
+
+function renderLive(){
+  const L = MC.live; if (!L) return;
+  $('live-water').textContent = (L.water_ml||0)+'/'+(L.water_target||2000)+'ml';
+  $('live-water-bar').style.width = Math.min(100, ((L.water_ml||0)/(L.water_target||2000))*100)+'%';
+  $('live-supp').textContent = (L.supplements_taken||0)+'/'+(L.supplements_total||3);
+  $('live-supp-dots').innerHTML = Array.from({length:L.supplements_total||3},
+    (_,i)=>`<i class="${i<(L.supplements_taken||0)?'on':''}"></i>`).join('');
+  const tr = L.trading||{};
+  const pnlEl = $('live-pnl');
+  if (tr.pnl!=null){
+    const pct = tr.pnl_pct!=null ? ' ('+(tr.pnl_pct>=0?'+':'')+Number(tr.pnl_pct).toFixed(2)+'%)' : '';
+    pnlEl.textContent = fmtMoney(tr.pnl)+pct;
+    pnlEl.style.color = tr.pnl>=0 ? '#00ff88' : '#ef4444';
+  } else { pnlEl.textContent='offline'; pnlEl.style.color='#7a6a9a'; }
+  const online = tr.online !== false;
+  $('live-status').innerHTML = `<span class="pulse-dot" style="background:${online?'#39ff14':'#ef4444'}"></span>${online?'ONLINE':'OFFLINE'}`;
+}
+
+function renderActivity(){
+  // pull recent log entries from active agents
+  Promise.all(MC.agents.filter(a=>a.status==='active').slice(0,4).map(a=>
+    API.log(a.id).then(rows=>(rows||[]).slice(0,2).map(r=>({...r, agent:a.name}))).catch(()=>[])
+  )).then(chunks=>{
+    const rows = [].concat(...chunks).sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,5);
+    $('activity-list').innerHTML = rows.length ? rows.map(r=>{
+      const t = (r.timestamp||'').slice(11,16);
+      return `<div class="ln"><span class="t">[${t}]</span> <span class="a">${(r.agent||'').toUpperCase()}</span> — ${r.message||''}</div>`;
+    }).join('') : '<div class="ln" style="color:#7a6a9a">No recent activity.</div>';
+  });
+}
+
+function renderTicker(){
+  const items = (MC.alerts||[]).map(a=>{
+    const icon = a.level==='crit'?'🔴':(a.level==='warn'?'🟡':'🔵');
+    return icon+' '+a.text;
+  });
+  $('ticker').textContent = items.length ? items.join('     ·     ') + '     ·     ' + items.join('     ·     ')
+    : 'All systems nominal · Station holding orbit · Agents standing by';
+}
+
+let missionsLoaded = false;
+function renderMissions(){
+  $('missions-count').textContent = MC.missions.filter(m=>m.completed).length + '/' + MC.missions.length;
+  $('missions-list').innerHTML = MC.missions.map(m=>`
+    <div class="mission ${m.completed?'done':''}" data-id="${m.id}">
+      <div class="chk">${m.completed?'✓':''}</div>
+      <div><div class="m-title">${m.title}</div><div class="m-desc">${m.description||''}</div></div>
+      <div class="m-xp">+${m.xp_reward} XP</div>
+    </div>`).join('');
+  document.querySelectorAll('.mission .chk').forEach(el=>{
+    el.onclick = async ()=>{
+      const id = el.closest('.mission').dataset.id;
+      const m = MC.missions.find(x=>String(x.id)===String(id));
+      if (!m || m.completed) return;
+      m.completed = 1; renderMissions();              // optimistic
+      try { await API.completeMission(id); } catch(e){}
+      loadMissions(); if (MC.scene) MC.scene.refresh(false);
+    };
+  });
+}
+async function loadMissions(){
+  try { MC.missions = await API.missions() || []; renderMissions(); missionsLoaded = true; }
+  catch(e){ if(!missionsLoaded) $('missions-list').innerHTML='<div class="m-desc">Missions unavailable.</div>'; }
+}
+
+function flashSection(id){ const el=$(id); if(!el) return; el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+function setOffline(on){ $('offline-banner').classList.toggle('show', on); }
+
+/* ── live clock ──────────────────────────────────────────────────────── */
+setInterval(()=>{ $('pill-time').textContent = new Date().toLocaleTimeString('en-GB'); }, 1000);
+
+/* ════════════════════════════════════════════════════════════════════════
+   AGENT DETAIL MODAL
+   ════════════════════════════════════════════════════════════════════════ */
+let modalAgentId = null;
+function openModal(id){
+  const a = MC.agents.find(x=>x.id===id);
+  if (!a) return;
+  modalAgentId = id;
+  const col = hex(agentColor(a));
+  $('m-icon').textContent = a.icon||'🛰️';
+  $('m-name').textContent = a.name;
+  $('m-name').style.color = col; $('m-name').style.textShadow = '0 0 12px '+col;
+  $('m-role').textContent = a.role||'';
+  const badge = $('m-badge'); badge.textContent = a.status; badge.className = 'm-badge '+a.status;
+  $('m-level').textContent = 'LV '+a.level;
+  $('m-xptext').textContent = (a.xp||0)+' / '+(a.xp_max||100)+' XP';
+  $('m-tasks').textContent = a.tasks_run||0;
+  $('m-findings').textContent = a.findings||0;
+  $('m-won').textContent = a.battles_won||0;
+  $('m-lost').textContent = a.battles_lost||0;
+  $('m-status-select').value = a.status;
+  $('m-xp-input').value = 50;
+
+  const overlay = $('modal'), card = $('modal-card');
+  card.style.borderColor = col; card.style.boxShadow = '0 0 30px '+col+'88';
+  overlay.classList.add('show');
+  // scale-in
+  card.style.transition='none'; card.style.transform = 'scale(0.8)'; card.style.opacity = '0';
+  requestAnimationFrame(()=>{ card.style.transition='transform .2s ease,opacity .2s ease';
+    card.style.transform='scale(1)'; card.style.opacity='1'; });
+
+  // animate xp bar fill
+  const fill = $('m-xpfill'); fill.style.background = col; fill.style.transition='none'; fill.style.width='0';
+  const ratio = Math.min(100, ((a.xp||0)/((a.xp_max||1)))*100);
+  requestAnimationFrame(()=>{ fill.style.transition='width .8s ease'; fill.style.width = ratio+'%'; });
+
+  // load log
+  $('m-log').textContent = 'Loading…';
+  API.log(id).then(rows=>{
+    $('m-log').innerHTML = (rows&&rows.length) ? rows.slice(0,10).map(r=>{
+      const t=(r.timestamp||'').slice(11,16);
+      const xp = r.xp_earned? ` <span style="color:#ffd60a">+${r.xp_earned}</span>`:'';
+      return `<div class="ln"><span class="t">[${t}]</span> ${r.message||''}${xp}</div>`;
+    }).join('') : '<div class="ln" style="color:#7a6a9a">No log entries yet.</div>';
+  }).catch(()=>{ $('m-log').textContent='Log unavailable.'; });
+}
+function closeModal(){ $('modal').classList.remove('show'); modalAgentId=null; }
+
+$('modal-close').onclick = closeModal;
+$('modal').onclick = (e)=>{ if (e.target===$('modal')) closeModal(); };
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
+
+$('m-award-btn').onclick = async ()=>{
+  if (!modalAgentId) return;
+  const amt = parseInt($('m-xp-input').value,10) || 0;
+  if (amt<=0) return;
+  const room = MC.rooms[modalAgentId];
+  if (room && MC.scene) MC.scene.floatXp(room, amt);
+  try {
+    const res = await API.awardXp(modalAgentId, amt);
+    if (res && res.agent){
+      const i = MC.agents.findIndex(x=>x.id===modalAgentId);
+      if (i>=0) MC.agents[i] = res.agent;
+      if (room && MC.scene){ MC.scene.styleRoom(room, res.agent, false);
+        if (res.leveled_up) MC.scene.levelUpBurst(room); }
+      renderSidebar(); openModal(modalAgentId);
+    }
+  } catch(e){}
+};
+
+$('m-status-btn').onclick = async ()=>{
+  if (!modalAgentId) return;
+  const st = $('m-status-select').value;
+  try {
+    const res = await API.setStatus(modalAgentId, st);
+    if (res && res.id){
+      const i = MC.agents.findIndex(x=>x.id===modalAgentId);
+      if (i>=0) MC.agents[i] = res;
+      const room = MC.rooms[modalAgentId];
+      if (room && MC.scene){
+        // fade out → restyle → fade in
+        MC.scene.tweens.add({targets:room.container, alpha:0, duration:150, yoyo:true,
+          onYoyo:()=>MC.scene.styleRoom(room, res, false)});
+      }
+      renderSidebar(); openModal(modalAgentId);
+    }
+  } catch(e){}
+};
+
+$('reset-view').onclick = ()=>{ if (MC.scene) MC.scene.resetView(); };
+
+/* missions load independently of the Phaser scene */
 loadMissions();
-setInterval(loadAgents, 60000); // refresh live data each minute
+setInterval(loadMissions, 60000);
 </script>
 </body>
 </html>
