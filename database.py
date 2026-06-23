@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, date, timedelta
@@ -699,16 +700,39 @@ _AGENT_SEED = [
      {"x": 82, "y": 8},  22,  3,  1,  2),
     ("forge",    "Forge",    "POD studio agent",         "⚒️", 0, 0,   "locked",
      {"x": 36, "y": 62}, 0,   0,  0,  0),
+    # ── Real Claude Code agents (oracle / ledger / auto-docs / warden /
+    #    incident-responder). xp_max is derived from level by _xp_max_for_level,
+    #    so the level-up maths stays consistent. ──────────────────────────────
+    ("oracle",   "Oracle",   "Research analyst",         "🔭", 2, 0,   "idle",
+     {"x": 8,  "y": 36}, 0,   0,  0,  0),
+    ("ledger",   "Ledger",   "Trading analyst",          "📊", 3, 0,   "idle",
+     {"x": 82, "y": 36}, 0,   0,  0,  0),
+    ("auto-docs","Auto-Docs","Documentation writer",     "📝", 1, 0,   "idle",
+     {"x": 36, "y": 8},  0,   0,  0,  0),
+    ("warden",   "Warden",   "Deployment monitor",       "🗼", 4, 0,   "active",
+     {"x": 60, "y": 36}, 0,   0,  0,  0),
+    ("incident-responder", "Incident Responder", "Crisis handler", "🚨", 5, 0, "idle",
+     {"x": 36, "y": 62}, 0,   0,  0,  0),
 ]
 
-# Default daily missions. (title, description, xp_reward, target_agent_id)
+# Daily mission pool. (title, description, xp_reward, target_agent_id)
+# get_today_missions() draws 3 of these at random per day so they rotate.
 _MISSION_TEMPLATES = [
     ("Run a security audit", "Have Sentinel sweep the codebase for vulnerabilities.",
      100, "sentinel"),
     ("Deploy 2 agents in parallel", "Coordinate a parallel multi-agent run via Nexus.",
      150, "nexus"),
     ("Win a battle", "Have any agent win a head-to-head battle.", 200, None),
+    ("Research before you build", "Use Oracle to research a topic before writing code.",
+     100, "oracle"),
+    ("Check deployment health", "Use Warden to verify ASFA is online.",
+     75, "warden"),
+    ("Document a project", "Use Auto-Docs to generate docs for a project.",
+     100, "auto-docs"),
 ]
+
+# How many missions to surface per day (drawn from _MISSION_TEMPLATES).
+DAILY_MISSION_COUNT = 3
 
 BATTLE_XP = 75  # XP awarded to the winner of a battle
 
@@ -976,7 +1000,13 @@ def get_today_missions() -> list:
         row = cur.fetchone()
         count = (row["n"] if row else 0) or 0
         if count == 0:
-            for title, desc, reward, agent_id in _MISSION_TEMPLATES:
+            # Draw a fresh, stable set of missions for the day. Seeding by date
+            # keeps the same 3 for the whole day across workers/restarts while
+            # still rotating day-to-day.
+            pool = list(_MISSION_TEMPLATES)
+            rng = random.Random(today)
+            picks = rng.sample(pool, min(DAILY_MISSION_COUNT, len(pool)))
+            for title, desc, reward, agent_id in picks:
                 cur.execute(
                     f"INSERT INTO daily_missions (title, description, xp_reward, date, agent_id) "
                     f"VALUES ({ph},{ph},{ph},{ph},{ph})",
