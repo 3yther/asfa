@@ -22,78 +22,45 @@
     overflow:hidden; height:100vh; -webkit-font-smoothing:antialiased;
   }
   .mono{font-variant-numeric:tabular-nums;}
-
   ::-webkit-scrollbar{width:5px;height:5px;}
   ::-webkit-scrollbar-track{background:#0d0028;}
   ::-webkit-scrollbar-thumb{background:#ff006e55;border-radius:3px;}
 
-  /* ── Layout ─────────────────────────────────────────────────────────── */
   .mc-wrapper{display:flex;flex-direction:column;height:100vh;}
   .mc-topbar{
     height:48px;flex:0 0 48px;display:flex;align-items:center;gap:14px;
     padding:0 14px;background:#06010f;border-bottom:1px solid #ff006e44;
     box-shadow:0 2px 14px #ff006e22;z-index:50;
   }
-  .mc-title{
-    font-size:.8rem;font-weight:700;letter-spacing:3px;color:var(--neon-pink);
-    text-shadow:0 0 10px #ff006e88;white-space:nowrap;
-  }
-  .mc-home{color:var(--neon-cyan);text-decoration:none;font-size:.7rem;
-    letter-spacing:2px;padding:4px 8px;border:1px solid #00ffff44;border-radius:4px;}
+  .mc-title{font-size:.8rem;font-weight:700;letter-spacing:3px;color:var(--neon-pink);text-shadow:0 0 10px #ff006e88;white-space:nowrap;}
+  .mc-home{color:var(--neon-cyan);text-decoration:none;font-size:.7rem;letter-spacing:2px;padding:4px 8px;border:1px solid #00ffff44;border-radius:4px;}
   .mc-home:hover{background:#00ffff11;box-shadow:0 0 8px #00ffff44;}
-  .mc-ticker{
-    flex:1;overflow:hidden;white-space:nowrap;position:relative;height:24px;
-    -webkit-mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);
-            mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);
-  }
-  .mc-ticker span{
-    position:absolute;will-change:transform;display:inline-block;padding-top:3px;
-    color:var(--neon-yellow);font-size:.72rem;letter-spacing:1px;
-    text-shadow:0 0 8px #ffd60a55;animation:ticker 28s linear infinite;
-  }
+  .mc-ticker{flex:1;overflow:hidden;white-space:nowrap;position:relative;height:24px;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);}
+  .mc-ticker span{position:absolute;will-change:transform;display:inline-block;padding-top:3px;color:var(--neon-yellow);font-size:.72rem;letter-spacing:1px;text-shadow:0 0 8px #ffd60a55;animation:ticker 28s linear infinite;}
   .mc-ticker.crit span{color:var(--neon-red);text-shadow:0 0 8px #ef444488;animation:ticker 28s linear infinite, critpulse 1s ease-in-out infinite;}
   @keyframes ticker{from{transform:translateX(100%);}to{transform:translateX(-100%);}}
   @keyframes critpulse{0%,100%{opacity:1;}50%{opacity:.45;}}
   .mc-pills{display:flex;gap:7px;align-items:center;}
-  .pill{
-    display:flex;flex-direction:column;align-items:center;line-height:1.1;
-    padding:4px 9px;background:#11002a;border:1px solid #ff006e33;border-radius:6px;min-width:58px;
-  }
+  .pill{display:flex;flex-direction:column;align-items:center;line-height:1.1;padding:4px 9px;background:#11002a;border:1px solid #ff006e33;border-radius:6px;min-width:58px;}
   .pill .k{font-size:.48rem;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;}
   .pill .v{font-size:.76rem;font-weight:700;}
   .pill.c-pink .v{color:var(--neon-pink);} .pill.c-cyan .v{color:var(--neon-cyan);}
-  .pill.c-yellow .v{color:var(--neon-yellow);} .pill.c-green .v{color:var(--neon-emerald);}
-  .pill.c-red .v{color:var(--neon-red);}
+  .pill.c-yellow .v{color:var(--neon-yellow);} .pill.c-green .v{color:var(--neon-emerald);} .pill.c-red .v{color:var(--neon-red);}
 
   .mc-main{display:flex;flex:1;overflow:hidden;min-height:0;}
   .mc-canvas{flex:1;position:relative;background:var(--space-bg);min-width:0;}
   #game-container{width:100%;height:100%;}
   #game-container canvas{display:block;}
-  .mc-reset{
-    position:absolute;top:10px;right:10px;z-index:20;font-size:.62rem;letter-spacing:1px;
-    background:#11002a;color:var(--neon-cyan);border:1px solid #00ffff44;border-radius:5px;
-    padding:5px 9px;cursor:pointer;
-  }
+  .mc-reset{position:absolute;top:10px;right:10px;z-index:20;font-size:.62rem;letter-spacing:1px;background:#11002a;color:var(--neon-cyan);border:1px solid #00ffff44;border-radius:5px;padding:5px 9px;cursor:pointer;}
   .mc-reset:hover{box-shadow:0 0 8px #00ffff55;}
 
-  .mc-sidebar{
-    flex:0 0 270px;overflow-y:auto;overflow-x:hidden;
-    background:var(--ship-interior);border-left:1px solid var(--neon-pink);padding:12px;
-  }
+  .mc-sidebar{flex:0 0 270px;overflow-y:auto;overflow-x:hidden;background:var(--ship-interior);border-left:1px solid var(--neon-pink);padding:12px;}
   .sec{margin-bottom:18px;}
-  .sec-h{
-    font-size:.6rem;letter-spacing:2.5px;text-transform:uppercase;color:var(--neon-pink);
-    margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid #ff006e22;
-    display:flex;justify-content:space-between;align-items:center;
-  }
+  .sec-h{font-size:.6rem;letter-spacing:2.5px;text-transform:uppercase;color:var(--neon-pink);margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid #ff006e22;display:flex;justify-content:space-between;align-items:center;}
   .sec-h .count{color:var(--neon-cyan);font-size:.56rem;}
 
-  /* Agents list */
-  .agent-row{
-    display:grid;grid-template-columns:13px 1fr auto;gap:8px;align-items:center;
-    padding:6px 8px;margin-bottom:5px;background:#0d0322;border-radius:6px;cursor:pointer;
-    border-left:2px solid transparent;transition:background .15s;
-  }
+  .agent-row{display:grid;grid-template-columns:13px 1fr auto;gap:8px;align-items:center;padding:6px 8px;margin-bottom:5px;background:#0d0322;border-radius:6px;cursor:pointer;border-left:2px solid transparent;transition:background .15s;}
   .agent-row:hover{background:#16063a;}
   .agent-row .dot{width:8px;height:8px;border-radius:50%;}
   .agent-row .dot.on{animation:pulse 1.5s ease-in-out infinite;}
@@ -103,22 +70,14 @@
   .agent-row .xpwrap{grid-column:1 / -1;height:3px;background:#ffffff14;border-radius:2px;overflow:hidden;margin-top:2px;}
   .agent-row .xpfill{height:100%;border-radius:2px;transition:width .8s ease;}
 
-  /* Missions */
-  .mission{
-    display:flex;align-items:flex-start;gap:9px;padding:8px;margin-bottom:6px;
-    background:#0d0322;border-radius:6px;border:1px solid #ffffff0a;
-  }
-  .mission .chk{
-    width:17px;height:17px;flex:0 0 17px;border:1.5px solid var(--neon-pink);border-radius:4px;
-    cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.68rem;color:#fff;
-  }
+  .mission{display:flex;align-items:flex-start;gap:9px;padding:8px;margin-bottom:6px;background:#0d0322;border-radius:6px;border:1px solid #ffffff0a;}
+  .mission .chk{width:17px;height:17px;flex:0 0 17px;border:1.5px solid var(--neon-pink);border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.68rem;color:#fff;}
   .mission.done .chk{background:var(--neon-pink);border-color:var(--neon-pink);box-shadow:0 0 7px #ff006e88;}
   .mission.done .m-title{text-decoration:line-through;color:var(--muted);}
   .mission .m-title{font-size:.68rem;color:#dcd0f5;}
   .mission .m-desc{font-size:.53rem;color:var(--muted);margin-top:2px;}
   .mission .m-xp{font-size:.53rem;color:var(--neon-yellow);font-weight:700;margin-left:auto;white-space:nowrap;}
 
-  /* ASFA live grid */
   .live-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;}
   .live-card{background:#0d0322;border-radius:7px;padding:8px;border:1px solid #ffffff0a;}
   .live-card .lk{font-size:.48rem;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;}
@@ -129,36 +88,22 @@
   .supp-dots{display:flex;gap:5px;margin-top:6px;}
   .supp-dots i{width:9px;height:9px;border-radius:50%;background:#ffffff1f;}
   .supp-dots i.on{background:var(--neon-emerald);box-shadow:0 0 6px #00ff8888;}
-  .pulse-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
-    animation:pulse 1.6s ease-in-out infinite;vertical-align:middle;}
+  .pulse-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;animation:pulse 1.6s ease-in-out infinite;vertical-align:middle;}
   @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
 
-  /* Activity log */
   .log-list{font-size:.58rem;line-height:1.7;max-height:150px;overflow-y:auto;}
   .log-list .ln{color:#b9a8d8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .log-list .ln .t{color:var(--neon-cyan);}
-  .log-list .ln .a{color:var(--neon-pink);font-weight:700;}
+  .log-list .ln .t{color:var(--neon-cyan);} .log-list .ln .a{color:var(--neon-pink);font-weight:700;}
   .sec.flash{animation:flashsec .8s ease;}
   @keyframes flashsec{0%{background:#ff006e22;}100%{background:transparent;}}
 
-  /* Modal */
-  .modal-overlay{
-    position:fixed;inset:0;background:rgba(4,1,10,.9);z-index:100;
-    display:none;align-items:center;justify-content:center;padding:20px;
-  }
+  .modal-overlay{position:fixed;inset:0;background:rgba(4,1,10,.92);z-index:100;display:none;align-items:center;justify-content:center;padding:20px;}
   .modal-overlay.show{display:flex;}
-  .modal-card{
-    width:min(420px,94vw);max-height:88vh;overflow-y:auto;background:var(--panel);
-    border:1px solid var(--neon-pink);box-shadow:0 0 30px #ff006e55,inset 0 0 30px #ff006e0a;
-    clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px);
-    padding:20px;position:relative;
-    transform:scale(.85);opacity:0;transition:transform .2s cubic-bezier(.2,.9,.3,1.2),opacity .2s ease;
-  }
+  .modal-card{width:min(420px,94vw);max-height:88vh;overflow-y:auto;background:var(--panel);border:1px solid var(--neon-pink);box-shadow:0 0 30px #ff006e55,inset 0 0 30px #ff006e0a;
+    clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px);padding:20px;position:relative;
+    transform:scale(.85);opacity:0;transition:transform .2s cubic-bezier(.2,.9,.3,1.2),opacity .2s ease;}
   .modal-overlay.show .modal-card{transform:scale(1);opacity:1;}
-  .modal-close{
-    position:absolute;top:10px;right:14px;font-size:1.3rem;color:var(--neon-pink);cursor:pointer;
-    line-height:1;background:none;border:none;
-  }
+  .modal-close{position:absolute;top:10px;right:14px;font-size:1.3rem;color:var(--neon-pink);cursor:pointer;line-height:1;background:none;border:none;}
   .modal-close:hover{text-shadow:0 0 10px var(--neon-pink);}
   .m-head{display:flex;align-items:center;gap:12px;margin-bottom:6px;}
   .m-icon{font-size:1.7rem;}
@@ -182,28 +127,16 @@
   .m-controls{display:flex;flex-direction:column;gap:10px;margin-top:14px;}
   .m-ctl-row{display:flex;gap:8px;align-items:center;}
   .m-ctl-row label{font-size:.53rem;color:var(--muted);letter-spacing:1px;width:70px;text-transform:uppercase;}
-  .m-input{
-    background:#08021a;border:1px solid #ff006e44;color:var(--neon-cyan);
-    padding:7px 9px;border-radius:5px;font-family:inherit;font-size:.7rem;flex:1;
-  }
-  .m-btn{
-    background:#ff006e22;border:1px solid var(--neon-pink);color:var(--neon-pink);
-    padding:7px 12px;border-radius:5px;cursor:pointer;font-family:inherit;font-size:.62rem;
-    letter-spacing:1px;font-weight:700;white-space:nowrap;
-  }
+  .m-input{background:#08021a;border:1px solid #ff006e44;color:var(--neon-cyan);padding:7px 9px;border-radius:5px;font-family:inherit;font-size:.7rem;flex:1;}
+  .m-btn{background:#ff006e22;border:1px solid var(--neon-pink);color:var(--neon-pink);padding:7px 12px;border-radius:5px;cursor:pointer;font-family:inherit;font-size:.62rem;letter-spacing:1px;font-weight:700;white-space:nowrap;}
   .m-btn:hover{background:#ff006e44;box-shadow:0 0 10px #ff006e66;}
   .m-statusgrp{display:flex;gap:6px;flex:1;}
-  .m-sbtn{flex:1;padding:7px 4px;border-radius:5px;cursor:pointer;font-family:inherit;
-    font-size:.56rem;letter-spacing:1px;font-weight:700;background:#08021a;color:var(--muted);border:1px solid #ffffff14;}
+  .m-sbtn{flex:1;padding:7px 4px;border-radius:5px;cursor:pointer;font-family:inherit;font-size:.56rem;letter-spacing:1px;font-weight:700;background:#08021a;color:var(--muted);border:1px solid #ffffff14;}
   .m-sbtn.sel.active{color:var(--neon-green);border-color:var(--neon-green);background:#39ff1418;}
   .m-sbtn.sel.idle{color:var(--neon-cyan);border-color:var(--neon-cyan);background:#00ffff14;}
   .m-sbtn.sel.locked{color:var(--slate);border-color:var(--slate);background:#94a3b822;}
 
-  .offline-banner{
-    position:fixed;top:48px;left:0;right:0;z-index:90;text-align:center;
-    background:#ef444422;color:var(--neon-red);border-bottom:1px solid var(--neon-red);
-    padding:6px;font-size:.66rem;letter-spacing:2px;display:none;
-  }
+  .offline-banner{position:fixed;top:48px;left:0;right:0;z-index:90;text-align:center;background:#ef444422;color:var(--neon-red);border-bottom:1px solid var(--neon-red);padding:6px;font-size:.66rem;letter-spacing:2px;display:none;}
   .offline-banner.show{display:block;}
 
   @media(max-width:760px){
@@ -227,53 +160,29 @@
       <div class="pill c-cyan"><span class="k">Time</span><span class="v mono" id="pill-time">--:--:--</span></div>
     </div>
   </div>
-
   <div class="offline-banner" id="offline-banner">⚠ TELEMETRY OFFLINE — RETRYING…</div>
-
   <div class="mc-main">
     <div class="mc-canvas">
       <div id="game-container"></div>
       <button class="mc-reset" id="reset-view">⟲ RESET VIEW</button>
     </div>
-
     <aside class="mc-sidebar">
-      <div class="sec">
-        <div class="sec-h">Agents <span class="count" id="agents-count"></span></div>
-        <div id="agents-list"></div>
-      </div>
-      <div class="sec">
-        <div class="sec-h">Daily Missions <span class="count" id="missions-count">0/3</span></div>
-        <div id="missions-list"></div>
-      </div>
+      <div class="sec"><div class="sec-h">Agents <span class="count" id="agents-count"></span></div><div id="agents-list"></div></div>
+      <div class="sec"><div class="sec-h">Daily Missions <span class="count" id="missions-count">0/3</span></div><div id="missions-list"></div></div>
       <div class="sec">
         <div class="sec-h">ASFA Live</div>
         <div class="live-grid">
-          <div class="live-card c-blue">
-            <div class="lk">Water</div><div class="lv mono" id="live-water">–</div>
-            <div class="live-bar"><i id="live-water-bar" style="background:#4cc9ff;width:0"></i></div>
-          </div>
-          <div class="live-card">
-            <div class="lk">Supplements</div><div class="lv mono" id="live-supp" style="color:#00ff88">–</div>
-            <div class="supp-dots" id="live-supp-dots"></div>
-          </div>
-          <div class="live-card">
-            <div class="lk">Trading P&amp;L</div><div class="lv mono" id="live-pnl">–</div>
-          </div>
-          <div class="live-card">
-            <div class="lk">Status</div>
-            <div class="lv" id="live-status"><span class="pulse-dot" style="background:#39ff14"></span>ONLINE</div>
-          </div>
+          <div class="live-card c-blue"><div class="lk">Water</div><div class="lv mono" id="live-water">–</div><div class="live-bar"><i id="live-water-bar" style="background:#4cc9ff;width:0"></i></div></div>
+          <div class="live-card"><div class="lk">Supplements</div><div class="lv mono" id="live-supp" style="color:#00ff88">–</div><div class="supp-dots" id="live-supp-dots"></div></div>
+          <div class="live-card"><div class="lk">Trading P&amp;L</div><div class="lv mono" id="live-pnl">–</div></div>
+          <div class="live-card"><div class="lk">Status</div><div class="lv" id="live-status"><span class="pulse-dot" style="background:#39ff14"></span>ONLINE</div></div>
         </div>
       </div>
-      <div class="sec" id="activity-sec">
-        <div class="sec-h">Activity Log</div>
-        <div class="log-list" id="activity-list"></div>
-      </div>
+      <div class="sec" id="activity-sec"><div class="sec-h">Activity Log</div><div class="log-list" id="activity-list"></div></div>
     </aside>
   </div>
 </div>
 
-<!-- ── Agent detail modal ─────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal">
   <div class="modal-card" id="modal-card">
     <button class="modal-close" id="modal-close">×</button>
@@ -293,64 +202,53 @@
     <div class="m-sub">Activity Log</div>
     <div class="m-log" id="m-log">…</div>
     <div class="m-controls">
-      <div class="m-ctl-row">
-        <label>Award XP</label>
-        <input class="m-input" id="m-xp-input" type="number" value="50" min="1" step="10">
-        <button class="m-btn" id="m-award-btn">AWARD</button>
-      </div>
-      <div class="m-ctl-row">
-        <label>Status</label>
-        <div class="m-statusgrp">
-          <button class="m-sbtn" data-st="active">ACTIVE</button>
-          <button class="m-sbtn" data-st="idle">IDLE</button>
-          <button class="m-sbtn" data-st="locked">LOCKED</button>
-        </div>
-      </div>
+      <div class="m-ctl-row"><label>Award XP</label><input class="m-input" id="m-xp-input" type="number" value="50" min="1" step="10"><button class="m-btn" id="m-award-btn">AWARD</button></div>
+      <div class="m-ctl-row"><label>Status</label><div class="m-statusgrp">
+        <button class="m-sbtn" data-st="active">ACTIVE</button>
+        <button class="m-sbtn" data-st="idle">IDLE</button>
+        <button class="m-sbtn" data-st="locked">LOCKED</button>
+      </div></div>
     </div>
   </div>
 </div>
 
 <script>
 /* ════════════════════════════════════════════════════════════════════════
-   ASFA · MISSION CONTROL v3 — north-facing cyberpunk station, moving agents
+   ASFA · MISSION CONTROL v4 — solid filled hull + Neo Zero interior tiling
    ════════════════════════════════════════════════════════════════════════ */
-
-/* Fixed design space; ship faces NORTH (bow up). Scale.FIT keeps it responsive. */
-const DW = 1000, DH = 760;
-const SHIP = { x: DW/2, y: DH/2 + 10 };   // cx, cy
+const DW = 1100, DH = 820;
+const SHIP = { x: DW/2, y: DH/2 + 4 };   // cx, cy
 
 const COL = {
-  pink:0xff006e, cyan:0x00ffff, yellow:0xffd60a, green:0x39ff14,
-  red:0xef4444, purple:0xbf5af2, emerald:0x00ff88, slate:0x94a3b8,
-  space:0x04010a, interior:0x08021a, nexusFill:0x0d0028,
+  pink:0xff006e, cyan:0x00ffff, yellow:0xffd60a, green:0x39ff14, red:0xef4444,
+  purple:0xbf5af2, emerald:0x00ff88, slate:0x94a3b8, space:0x04010a,
+  hull:0x0d1520, bow:0x111825, wing:0x0a1018, dark:0x080e14, nexusFill:0x0d0028,
 };
 function hex(n){ return '#' + (n>>>0 & 0xffffff).toString(16).padStart(6,'0'); }
 
-/* Room layout relative to ship centre (north-facing). NEXUS is the hub. */
+/* Rooms relative to ship centre (north-facing). NEXUS = central hub. */
 const ROOM_DEF = {
-  'auto-docs':          { dx:-50,  dy:-220, color:COL.yellow  },
-  'sentinel':           { dx: 10,  dy:-220, color:COL.cyan    },
-  'oracle':             { dx:-170, dy:-130, color:COL.purple  },
-  'axiom':              { dx: 90,  dy:-130, color:COL.cyan    },
-  'warden':             { dx:-190, dy:-30,  color:COL.slate   },
-  'nexus':              { dx:-40,  dy:-30,  color:COL.pink, big:true },
-  'ledger':             { dx: 110, dy:-30,  color:COL.emerald },
-  'pyro':               { dx:-170, dy: 80,  color:COL.yellow  },
-  'quant':              { dx: 90,  dy: 80,  color:COL.emerald },
-  'pixel':              { dx:-140, dy: 180, color:COL.cyan    },
-  'ghost':              { dx:-40,  dy: 180, color:0x444488    },
-  'incident-responder': { dx: 60,  dy: 180, color:COL.red     },
-  'forge':              { dx:-40,  dy: 260, color:0x222244    },
+  'auto-docs':          { dx:-44,  dy:-235, color:COL.yellow  },
+  'sentinel':           { dx: 16,  dy:-220, color:COL.cyan    },
+  'oracle':             { dx:-185, dy:-130, color:COL.purple  },
+  'axiom':              { dx: 100, dy:-130, color:COL.cyan    },
+  'warden':             { dx:-200, dy:-20,  color:COL.slate   },
+  'nexus':              { dx:-40,  dy:-20,  color:COL.pink, big:true },
+  'ledger':             { dx: 116, dy:-20,  color:COL.emerald },
+  'pyro':               { dx:-185, dy: 95,  color:COL.yellow  },
+  'quant':              { dx: 100, dy: 95,  color:COL.emerald },
+  'pixel':              { dx:-150, dy: 195, color:COL.cyan    },
+  'ghost':              { dx:-44,  dy: 195, color:0x444488    },
+  'incident-responder': { dx: 66,  dy: 195, color:COL.red     },
+  'forge':              { dx:-44,  dy: 270, color:0x222244    },
 };
+const ROOM_IDS = Object.keys(ROOM_DEF);
 const NEXUS = { x: SHIP.x + ROOM_DEF.nexus.dx, y: SHIP.y + ROOM_DEF.nexus.dy };
 function roomCenter(id){ const d=ROOM_DEF[id]; return { x:SHIP.x+d.dx, y:SHIP.y+d.dy }; }
+const WALK_SPEED = 80;
 
-const WALK_SPEED = 80; // px/sec
-
-/* ── Shared state ──────────────────────────────────────────────────────── */
 const MC = { agents:[], live:null, alerts:[], missions:[], rooms:{}, chars:{}, scene:null, failCount:0 };
 
-/* ── API (session-cookie auth gate → credentials:include) ──────────────── */
 const J = { 'Content-Type':'application/json' };
 const API = {
   agents:         ()       => fetch('/api/agents',{credentials:'include'}).then(r=>r.json()),
@@ -368,24 +266,17 @@ function agentColor(a){ const d=ROOM_DEF[a.id]; return d ? d.color : (a.status==
 class BootScene extends Phaser.Scene {
   constructor(){ super('Boot'); }
   preload(){
-    const cw = this.scale.width, ch = this.scale.height;
-    const g = this.add.graphics();
-    const bw = Math.min(360, cw-60), bx = (cw-bw)/2, by = ch/2;
-    this.add.text(cw/2, by-30, 'A.S.F.A  STATION  BOOT', {
-      fontFamily:'monospace', fontSize:'18px', color:hex(COL.pink),
-    }).setOrigin(0.5).setShadow(0,0,hex(COL.pink),12);
-    g.lineStyle(1, COL.pink, 0.6).strokeRect(bx, by, bw, 14);
-    this.load.on('progress', p=>{
-      g.clear(); g.lineStyle(1, COL.pink, 0.6).strokeRect(bx, by, bw, 14);
-      g.fillStyle(COL.pink, 1).fillRect(bx+2, by+2, (bw-4)*p, 10);
-    });
-    this.load.spritesheet('chars', '/static/neo_zero_char_01.png',                 {frameWidth:16, frameHeight:24});
-    this.load.spritesheet('tiles', '/static/neo_zero_tiles_and_buildings_01.png',  {frameWidth:16, frameHeight:16});
-    this.load.spritesheet('props', '/static/neo_zero_props_and_items_01.png',      {frameWidth:16, frameHeight:16});
+    const cw=this.scale.width, ch=this.scale.height;
+    const g=this.add.graphics(); const bw=Math.min(360,cw-60), bx=(cw-bw)/2, by=ch/2;
+    this.add.text(cw/2, by-30, 'A.S.F.A  STATION  BOOT', {fontFamily:'monospace',fontSize:'18px',color:hex(COL.pink)}).setOrigin(0.5).setShadow(0,0,hex(COL.pink),12);
+    g.lineStyle(1,COL.pink,0.6).strokeRect(bx,by,bw,14);
+    this.load.on('progress', p=>{ g.clear(); g.lineStyle(1,COL.pink,0.6).strokeRect(bx,by,bw,14); g.fillStyle(COL.pink,1).fillRect(bx+2,by+2,(bw-4)*p,10); });
+    this.load.spritesheet('chars', '/static/neo_zero_char_01.png',                {frameWidth:16, frameHeight:24});
+    this.load.spritesheet('tiles', '/static/neo_zero_tiles_and_buildings_01.png', {frameWidth:16, frameHeight:16});
+    this.load.spritesheet('props', '/static/neo_zero_props_and_items_01.png',     {frameWidth:16, frameHeight:16});
   }
   create(){
-    const s = this.add.graphics(); s.fillStyle(0xffffff,1).fillCircle(4,4,4);
-    s.generateTexture('spark', 8, 8); s.destroy();
+    const s=this.add.graphics(); s.fillStyle(0xffffff,1).fillCircle(4,4,4); s.generateTexture('spark',8,8); s.destroy();
     this.scene.start('Spaceship');
   }
 }
@@ -397,18 +288,20 @@ class SpaceshipScene extends Phaser.Scene {
   constructor(){ super('Spaceship'); }
 
   create(){
-    MC.scene = this;
+    MC.scene=this;
     this.cameras.main.setBackgroundColor(COL.space);
     this.cameras.main.setBounds(-300,-300, DW+600, DH+600);
     this.fitCamera();
 
     this.buildCharAnims();
     this.drawSpace();
-    this.drawHull();
-    this.corridorLayer = this.add.graphics().setDepth(2);
-    this.pulseLayer    = this.add.container(0,0).setDepth(3);
-    this.roomLayer     = this.add.container(0,0).setDepth(5);
-    this.charLayer     = this.add.container(0,0).setDepth(6);
+    this.drawHull();        // solid filled hull (Option A)
+    this.tileInterior();    // Neo Zero floor tiling (Option B)
+    this.scatterProps();
+    this.corridorLayer=this.add.graphics().setDepth(3);
+    this.pulseLayer=this.add.container(0,0).setDepth(3.5);
+    this.roomLayer=this.add.container(0,0).setDepth(5);
+    this.charLayer=this.add.container(0,0).setDepth(7);
     this.drawCorridors();
     this.drawNexus();
 
@@ -417,484 +310,417 @@ class SpaceshipScene extends Phaser.Scene {
     this.scale.on('resize', ()=>this.fitCamera());
 
     this.refresh(true);
-    this.time.addEvent({ delay:30000, loop:true, callback:()=>this.refresh(false) });
+    this.time.addEvent({delay:30000, loop:true, callback:()=>this.refresh(false)});
   }
-
   fitCamera(){
-    const z = Math.min(this.scale.width/DW, this.scale.height/DH) * 0.96;
-    const cam = this.cameras.main;
-    cam.setZoom(Phaser.Math.Clamp(z, 0.4, 2.5));
-    cam.centerOn(SHIP.x, SHIP.y);
+    const z=Math.min(this.scale.width/DW, this.scale.height/DH)*0.96;
+    const cam=this.cameras.main; cam.setZoom(Phaser.Math.Clamp(z,0.35,2.5)); cam.centerOn(SHIP.x, SHIP.y);
   }
 
-  /* ── Character animations (frame size discovered dynamically) ─────── */
   buildCharAnims(){
-    const src = this.textures.get('chars').getSourceImage();
-    const cols = Math.max(1, Math.floor(src.width / 16));   // 96/16 = 6
-    const rows = Math.max(1, Math.floor(src.height / 24));  // 288/24 = 12
-    this.charCols = cols;
-    // 3 character "kits" mapped to evenly-spaced rows of the sheet
-    const kitRows = [0, Math.floor(rows/3), Math.floor(2*rows/3)];
-    this.kitCount = kitRows.length;
-    kitRows.forEach((row, k)=>{
-      const base = row * cols;
-      const walk = [base, base+1, base+2 % cols, base+3 % cols].map(f=>Math.min(f, cols*rows-1));
-      const idle = [base, base + Math.min(1, cols-1)];
-      this.anims.create({ key:'walk'+k, frames:this.anims.generateFrameNumbers('chars',{frames:walk}), frameRate:8,  repeat:-1 });
-      this.anims.create({ key:'idle'+k, frames:this.anims.generateFrameNumbers('chars',{frames:idle}), frameRate:2.2, repeat:-1 });
+    const src=this.textures.get('chars').getSourceImage();
+    const cols=Math.max(1, Math.floor(src.width/16)), rows=Math.max(1, Math.floor(src.height/24));
+    this.charCols=cols;
+    const kitRows=[0, Math.floor(rows/3), Math.floor(2*rows/3)];
+    this.kitCount=kitRows.length; this.kitFrame=kitRows.map(r=>r*cols);
+    kitRows.forEach((row,k)=>{
+      const base=row*cols, last=cols*rows-1;
+      const walk=[base,base+1,base+2,base+3].map(f=>Math.min(f,last));
+      const idle=[base, Math.min(base+1,last)];
+      this.anims.create({key:'walk'+k, frames:this.anims.generateFrameNumbers('chars',{frames:walk}), frameRate:8, repeat:-1});
+      this.anims.create({key:'idle'+k, frames:this.anims.generateFrameNumbers('chars',{frames:idle}), frameRate:2.2, repeat:-1});
     });
-    this.kitFrame = kitRows.map(r=>r*cols);
   }
 
   /* ── Space background ─────────────────────────────────────────────── */
   drawSpace(){
-    const g = this.add.graphics().setDepth(0);
-    [{x:120,y:120,rx:340,ry:240,c:0x1a0040},
-     {x:DW-120,y:160,rx:300,ry:220,c:0x001830},
-     {x:90,y:DH-120,rx:280,ry:220,c:0x0a0020},
-     {x:DW-110,y:DH-120,rx:320,ry:240,c:0x003020}
-    ].forEach(n=>{ g.fillStyle(n.c, 0.09); g.fillEllipse(n.x,n.y,n.rx,n.ry); });
-
-    // distant galaxy (very faint, far corner)
-    const gal = this.add.graphics({x:DW-90, y:90}).setDepth(0);
-    gal.lineStyle(1, 0x6a4aa0, 0.045);
-    for (let t=0;t<3;t++){ gal.beginPath();
-      for (let a=0;a<Math.PI*2.4;a+=0.15){ const r=a*6+t*4; const x=Math.cos(a+t*2)*r, y=Math.sin(a+t*2)*r; a===0?gal.moveTo(x,y):gal.lineTo(x,y);} gal.strokePath(); }
-
-    const palette=[0xffffff,0xffffff,0xffffff,0xffffff,0xffffff,0xffffff,0xffffff,0xb4d4ff,0xb4d4ff,0xfff8e8];
-    for (let i=0;i<300;i++){
-      const x=Phaser.Math.Between(0,DW), y=Phaser.Math.Between(0,DH);
-      const r=Phaser.Math.FloatBetween(0.5,2.5), col=Phaser.Utils.Array.GetRandom(palette);
-      g.fillStyle(col, Phaser.Math.FloatBetween(0.2,0.9)); g.fillCircle(x,y,r);
-      if (r>1.5){ g.lineStyle(1,col,0.3); g.lineBetween(x-4,y,x+4,y); g.lineBetween(x,y-4,x,y+4); }
+    const g=this.add.graphics().setDepth(0);
+    [{x:100,y:100,rx:160,ry:100,c:0x1a0040,a:0.08},
+     {x:900,y:600,rx:200,ry:120,c:0x001830,a:0.07},
+     {x:950,y:150,rx:140,ry:90,c:0x0a0020,a:0.06},
+     {x:150,y:650,rx:180,ry:100,c:0x003020,a:0.05}
+    ].forEach(n=>{ g.fillStyle(n.c,n.a); g.fillEllipse(n.x,n.y,n.rx*2,n.ry*2); });
+    const pal=[0xffffff,0xffffff,0xffffff,0xffffff,0xffffff,0xffffff,0xffffff,0xb4d4ff,0xb4d4ff,0xb4d4ff,0xfff8e8,0xfff8e8];
+    for(let i=0;i<300;i++){
+      const x=Phaser.Math.Between(0,DW), y=Phaser.Math.Between(0,DH), r=Phaser.Math.FloatBetween(0.4,2.2), col=Phaser.Utils.Array.GetRandom(pal);
+      g.fillStyle(col, Phaser.Math.FloatBetween(0.15,0.9)); g.fillCircle(x,y,r);
+      if(r>1.4){ g.lineStyle(1,col,0.25); g.lineBetween(x-6,y,x+6,y); g.lineBetween(x,y-6,x,y+6); }
     }
-    for (let i=0;i<46;i++){
-      const st=this.add.circle(Phaser.Math.Between(0,DW),Phaser.Math.Between(0,DH),Phaser.Math.FloatBetween(0.7,1.8),0xffffff).setDepth(0);
-      this.tweens.add({targets:st, alpha:{from:0.15,to:0.9}, duration:Phaser.Math.Between(2000,6000), yoyo:true, repeat:-1, delay:Phaser.Math.Between(0,3000)});
+    for(let i=0;i<48;i++){
+      const st=this.add.circle(Phaser.Math.Between(0,DW),Phaser.Math.Between(0,DH),Phaser.Math.FloatBetween(0.6,1.6),0xffffff).setDepth(0);
+      this.tweens.add({targets:st, alpha:{from:0.15,to:0.9}, duration:Phaser.Math.Between(2000,5000), yoyo:true, repeat:-1, delay:Phaser.Math.Between(0,3000)});
     }
   }
-
   scheduleShootingStars(){
-    this.shootCount = 0;
+    this.shootCount=0;
     const fire=()=>{
-      if (this.shootCount < 2){
-        this.shootCount++;
-        const fromTop = Math.random()<0.5;
-        const sx = fromTop ? Phaser.Math.Between(0,DW) : 0;
-        const sy = fromTop ? 0 : Phaser.Math.Between(0,DH*0.5);
-        const star=this.add.image(sx,sy,'spark').setDepth(1).setScale(0.8).setAlpha(0.9).setTint(0xffffff);
+      if(this.shootCount<2){ this.shootCount++;
+        const top=Math.random()<0.5;
+        const sx=top?Phaser.Math.Between(0,DW):0, sy=top?0:Phaser.Math.Between(0,DH*0.5);
+        const ex=Phaser.Math.Between(DW*0.4,DW), ey=Phaser.Math.Between(DH*0.5,DH);
+        const star=this.add.image(sx,sy,'spark').setDepth(1).setScale(0.8).setAlpha(0.9);
         const trail=this.add.graphics().setDepth(1);
-        const dx=Phaser.Math.Between(260,460), dy=Phaser.Math.Between(180,340);
-        this.tweens.add({ targets:star, x:sx+dx, y:sy+dy, alpha:0, duration:800, ease:'Quad.easeIn',
+        this.tweens.add({targets:star, x:ex, y:ey, alpha:0, duration:700, ease:'Quad.easeIn',
           onUpdate:()=>{ trail.clear(); trail.lineStyle(2,0xffffff,star.alpha*0.8); trail.lineBetween(sx,sy,star.x,star.y); },
-          onComplete:()=>{ star.destroy(); trail.destroy(); this.shootCount--; } });
+          onComplete:()=>{ star.destroy(); trail.destroy(); this.shootCount--; }});
       }
-      this.time.delayedCall(Phaser.Math.Between(6000,12000), fire);
+      this.time.delayedCall(Phaser.Math.Between(7000,14000), fire);
     };
-    this.time.delayedCall(Phaser.Math.Between(2500,5000), fire);
+    this.time.delayedCall(Phaser.Math.Between(3000,5000), fire);
   }
 
-  /* ── Ship hull (north-facing, hollow outline) ─────────────────────── */
-  hullPoints(){
-    const c = SHIP;
-    return [
-      {x:c.x,     y:c.y-300}, // bow tip
-      {x:c.x+120, y:c.y-180}, // bow shoulder R
-      {x:c.x+160, y:c.y-60},  // wing root R
-      {x:c.x+280, y:c.y-20},  // wing tip R
-      {x:c.x+160, y:c.y+60},  // wing taper R
-      {x:c.x+100, y:c.y+200}, // stern shoulder R
-      {x:c.x+60,  y:c.y+300}, // stern base R
-      {x:c.x-60,  y:c.y+300}, // stern base L
-      {x:c.x-100, y:c.y+200}, // stern shoulder L
-      {x:c.x-160, y:c.y+60},  // wing taper L
-      {x:c.x-280, y:c.y-20},  // wing tip L
-      {x:c.x-160, y:c.y-60},  // wing root L
-      {x:c.x-120, y:c.y-180}, // bow shoulder L
-    ].map(p=>new Phaser.Geom.Point(p.x,p.y));
+  /* ── Hull geometry ────────────────────────────────────────────────── */
+  P(x,y){ return new Phaser.Geom.Point(SHIP.x+x, SHIP.y+y); }
+  mainBodyPts(){
+    return [ this.P(-130,-180), this.P(130,-180), this.P(160,-60), this.P(180,20),
+      this.P(160,100), this.P(80,240), this.P(50,300), this.P(-50,300),
+      this.P(-80,240), this.P(-160,100), this.P(-180,20), this.P(-160,-60) ];
   }
-  glowStroke(g, pts, color, base, closed){
-    g.lineStyle(base+6, color, 0.10); g.strokePoints(pts, closed, closed);
-    g.lineStyle(base+2, color, 0.25); g.strokePoints(pts, closed, closed);
-    g.lineStyle(base,   color, 1.00); g.strokePoints(pts, closed, closed);
+  bodyBBox(){ return { x:SHIP.x-180, y:SHIP.y-180, w:360, h:480 }; }
+  fillPoly(g, pts, fill, fa, stroke, sw){
+    if(fill!=null){ g.fillStyle(fill, fa==null?1:fa); g.fillPoints(pts,true); }
+    if(stroke!=null){ g.lineStyle(sw||1.5, stroke, 1); g.strokePoints(pts,true,true); }
   }
+  glowOutline(g, pts, color){
+    g.lineStyle(8,color,0.08); g.strokePoints(pts,true,true);
+    g.lineStyle(4,color,0.20); g.strokePoints(pts,true,true);
+    g.lineStyle(1.5,color,1.0); g.strokePoints(pts,true,true);
+  }
+  hexPts(cx,cy,r){ const p=[]; for(let i=0;i<6;i++){const a=i*Math.PI/3 - Math.PI/2; p.push(new Phaser.Geom.Point(cx+Math.cos(a)*r, cy+Math.sin(a)*r));} return p; }
+
   drawHull(){
-    const c = SHIP, pts = this.hullPoints();
+    const c=SHIP, g=this.add.graphics().setDepth(1);
 
-    // faint interior fill
-    const fill = this.add.graphics().setDepth(1);
-    fill.fillStyle(COL.interior, 0.55); fill.fillPoints(pts, true);
+    // 1. engine glow behind ship
+    const eg=this.add.graphics().setDepth(0.5);
+    [-40,0,40].forEach(off=>{ eg.fillStyle(COL.red,0.08); eg.fillCircle(c.x+off, c.y+300, 40); });
 
-    // interior grid + bulkheads + dorsal ridge, clipped to hull via geometry mask
-    const maskShape = this.make.graphics(); maskShape.fillStyle(0xffffff,1); maskShape.fillPoints(pts, true);
-    const mask = maskShape.createGeometryMask();
-    const inner = this.add.graphics().setDepth(1); inner.setMask(mask);
-    inner.lineStyle(0.5, COL.pink, 0.05);
-    for (let y=c.y-300; y<=c.y+300; y+=40){ inner.lineBetween(c.x-300, y, c.x+300, y); }
-    for (let x=c.x-300; x<=c.x+300; x+=40){ inner.lineBetween(x, c.y-300, x, c.y+300); }
-    // dorsal ridge
-    inner.lineStyle(1, COL.pink, 0.30); inner.lineBetween(c.x, c.y-300, c.x, c.y+300);
-    // 2 bulkheads → 3 sections
-    inner.lineStyle(1, COL.pink, 0.22);
-    inner.lineBetween(c.x-300, c.y-100, c.x+300, c.y-100);
-    inner.lineBetween(c.x-300, c.y+100, c.x+300, c.y+100);
+    // 2. main hull body
+    const body=this.mainBodyPts();
+    this.fillPoly(g, body, COL.hull, 1);
+    // 3. bow
+    this.fillPoly(g, [this.P(0,-320), this.P(130,-180), this.P(-130,-180)], COL.bow, 1);
+    // 4/5. wings
+    const portWing=[this.P(-160,-60), this.P(-280,-10), this.P(-300,10), this.P(-280,30), this.P(-160,100)];
+    const stbdWing=[this.P(160,-60),  this.P(280,-10),  this.P(300,10),  this.P(280,30),  this.P(160,100)];
+    this.fillPoly(g, portWing, COL.wing, 1, COL.pink, 1.5);
+    this.fillPoly(g, stbdWing, COL.wing, 1, COL.pink, 1.5);
+    // 8. stern panel
+    this.fillPoly(g, [this.P(-80,240), this.P(80,240), this.P(50,300), this.P(-50,300)], COL.dark, 1, COL.pink, 1);
 
-    // hull outline (golden bow accent drawn over the pink, near the tip)
-    const g = this.add.graphics().setDepth(1);
-    this.glowStroke(g, pts, COL.pink, 1.5, true);
-    const bow = [pts[12], pts[0], pts[1]]; // bow shoulders + tip
-    this.glowStroke(g, bow, COL.yellow, 1.5, false);
+    // bow stroke (golden) drawn over fills
+    this.glowOutlineColored(g, [this.P(-130,-180), this.P(0,-320), this.P(130,-180)], COL.yellow, false);
 
-    // bow sensor array — 3 thin cyan lines from the tip
-    const sg = this.add.graphics().setDepth(1); sg.lineStyle(0.5, COL.cyan, 0.8);
-    sg.lineBetween(c.x, c.y-300, c.x, c.y-340);
-    sg.lineBetween(c.x, c.y-300, c.x-16, c.y-330);
-    sg.lineBetween(c.x, c.y-300, c.x+16, c.y-330);
-
-    // wing engine pods (hexagons) on wing tips
-    [[c.x-280,c.y-20],[c.x+280,c.y-20]].forEach(([px,py])=>{
-      const hg=this.add.graphics().setDepth(1); const hp=[];
-      for(let i=0;i<6;i++){const a=i*Math.PI/3; hp.push(new Phaser.Geom.Point(px+Math.cos(a)*11, py+Math.sin(a)*11));}
-      hg.lineStyle(1.5, COL.pink, 0.9); hg.strokePoints(hp, true, true);
+    // 6/7. engine pods (hexagons) on far wing tips
+    [[-310,10],[310,10]].forEach(([px,py])=>{
+      const hp=this.hexPts(c.x+px, c.y+py, 22);
+      g.fillStyle(COL.dark,1); g.fillPoints(hp,true);
+      g.lineStyle(2,COL.pink,1); g.strokePoints(hp,true,true);
+      g.fillStyle(COL.red,0.2); g.fillCircle(c.x+px, c.y+py, 10);
+      g.lineStyle(1,COL.red,0.9); g.strokeCircle(c.x+px, c.y+py, 10);
     });
 
-    // port/starboard running lights — alternating red/green blink
-    const rl=this.add.circle(c.x-280, c.y-20, 3, COL.red).setDepth(2);
-    const gl=this.add.circle(c.x+280, c.y-20, 3, COL.green).setDepth(2);
-    this.tweens.add({targets:rl, alpha:0.1, duration:700, yoyo:true, repeat:-1});
-    this.tweens.add({targets:gl, alpha:0.1, duration:700, yoyo:true, repeat:-1, delay:700});
+    // 10. hull panel lines (over fill)
+    const pl=this.add.graphics().setDepth(2);
+    const seams=[[-110,110,-120],[-150,150,-10],[-130,130,110],[-70,70,200]];
+    seams.forEach(([x1,x2,y],i)=>{ const col=i%2?COL.cyan:COL.pink, al=i%2?0.06:0.08; pl.lineStyle(0.5,col,al); pl.lineBetween(c.x+x1, c.y+y, c.x+x2, c.y+y); });
+    pl.lineStyle(0.5,COL.pink,0.08); pl.lineBetween(c.x, c.y-180, c.x, c.y+240); // spine
+    // wing panel lines (2 each side, following wing)
+    pl.lineStyle(0.5,COL.pink,0.07);
+    [[-160,-40,-265,5],[-160,10,-265,28]].forEach(([x1,y1,x2,y2])=>{ pl.lineBetween(c.x+x1,c.y+y1,c.x+x2,c.y+y2); pl.lineBetween(c.x-x1,c.y+y1,c.x-x2,c.y+y2); });
 
-    // stern engine nozzles (3) with pulsing red glow
-    [-34,0,34].forEach((off,i)=>{
-      const nz=this.add.graphics().setDepth(1);
-      nz.lineStyle(2, COL.red, 0.9); nz.strokeCircle(c.x+off, c.y+300, 11);
-      const glow=this.add.circle(c.x+off, c.y+300, 9, COL.red, 0.5).setDepth(1);
-      this.tweens.add({targets:glow, alpha:{from:0.2,to:0.7}, scale:{from:0.9,to:1.25}, duration:800, yoyo:true, repeat:-1, delay:i*200});
+    // 11. surface details
+    const sd=this.add.graphics().setDepth(2);
+    [[-90,-90],[70,-60],[120,40],[-120,40],[-40,160],[60,150],[-100,-150],[90,-150]].forEach(([x,y])=>{ sd.fillStyle(COL.cyan,0.15); sd.fillRect(c.x+x-4, c.y+y-2, 8, 4); });
+    [[-150,-50],[150,-50],[-140,90],[140,90]].forEach(([x,y])=>{ sd.fillStyle(COL.yellow,0.4); sd.fillCircle(c.x+x, c.y+y, 3); });
+    // bow sensor array
+    sd.lineStyle(1,COL.cyan,0.6);
+    sd.lineBetween(c.x, c.y-320, c.x, c.y-340); sd.lineBetween(c.x, c.y-320, c.x-14, c.y-336); sd.lineBetween(c.x, c.y-320, c.x+14, c.y-336);
+    // antenna (blinking)
+    const ant=this.add.graphics().setDepth(2); ant.lineStyle(1,COL.cyan,0.9); ant.lineBetween(c.x, c.y-320, c.x, c.y-350);
+    const tip=this.add.circle(c.x, c.y-352, 2.5, COL.cyan).setDepth(2);
+    this.tweens.add({targets:tip, alpha:0.1, duration:1000, yoyo:true, repeat:-1, hold:500});
+
+    // 9. stern engine nozzles (3) with pulse
+    [[-36,310],[0,318],[36,310]].forEach(([x,y],i)=>{
+      const nz=this.add.graphics().setDepth(2);
+      nz.fillStyle(0x0a0005,1); nz.fillCircle(c.x+x, c.y+y, 14); nz.lineStyle(2,COL.red,1); nz.strokeCircle(c.x+x, c.y+y, 14);
+      nz.fillStyle(COL.red,0.3); nz.fillCircle(c.x+x, c.y+y, 8);
+      const core=this.add.circle(c.x+x, c.y+y, 4, COL.red, 0.8).setDepth(2);
+      this.tweens.add({targets:core, alpha:{from:0.5,to:1}, scale:{from:0.8,to:1.3}, duration:1200, yoyo:true, repeat:-1, delay:i*250});
     });
+
+    // 12. hull outer glow (outline only, over everything)
+    const og=this.add.graphics().setDepth(2.5);
+    this.glowOutline(og, body, COL.pink);
 
     // nameplate
-    this.add.text(c.x, c.y-262, 'A.S.F.A', {fontFamily:'monospace', fontSize:'12px', color:hex(COL.yellow), fontStyle:'bold'})
-      .setOrigin(0.5).setDepth(2).setShadow(0,0,hex(COL.yellow),8);
+    this.add.text(c.x, c.y-262, 'A.S.F.A', {fontFamily:'monospace',fontSize:'12px',color:hex(COL.yellow),fontStyle:'bold'}).setOrigin(0.5).setDepth(2.6).setShadow(0,0,hex(COL.yellow),8);
+  }
+  glowOutlineColored(g, pts, color, closed){
+    g.lineStyle(7,color,0.08); g.strokePoints(pts,closed,closed);
+    g.lineStyle(3,color,0.22); g.strokePoints(pts,closed,closed);
+    g.lineStyle(1.5,color,1.0); g.strokePoints(pts,closed,closed);
   }
 
-  /* ── Corridor paths ───────────────────────────────────────────────── */
+  /* ── Interior tiling (masked to hull body) ────────────────────────── */
+  tileInterior(){
+    const bb=this.bodyBBox();
+    const floor=this.add.tileSprite(SHIP.x, SHIP.y+60, bb.w, bb.h, 'tiles', 1).setOrigin(0.5).setTileScale(2,2).setAlpha(0.35).setDepth(1.5);
+    const mShape=this.make.graphics(); mShape.fillStyle(0xffffff,1); mShape.fillPoints(this.mainBodyPts(), true);
+    floor.setMask(mShape.createGeometryMask());
+  }
+  scatterProps(){
+    // [dx,dy,frame,scale] — machinery near stern, consoles near bow, crates near wings
+    const props=[
+      [-30,250,4],[30,250,5],[0,210,6],            // engine room machinery
+      [-30,-150,0],[35,-150,1],[0,-110,2],          // bow consoles
+      [-150,30,7],[150,30,8],[-120,120,9],[120,120,7] // wing crates
+    ];
+    props.forEach(([dx,dy,f])=>{ this.add.image(SHIP.x+dx, SHIP.y+dy, 'props', f).setScale(1.5).setAlpha(0.7).setDepth(2.2); });
+  }
+
+  /* ── Corridors + energy pulses ────────────────────────────────────── */
   pathToNexus(id){
-    const r = roomCenter(id);
-    const pts = [ {x:r.x,y:r.y}, {x:SHIP.x,y:r.y}, {x:SHIP.x,y:NEXUS.y}, {x:NEXUS.x,y:NEXUS.y} ];
-    // de-dupe consecutive identical points
-    return pts.filter((p,i)=> i===0 || p.x!==pts[i-1].x || p.y!==pts[i-1].y);
+    const r=roomCenter(id);
+    const pts=[{x:r.x,y:r.y},{x:SHIP.x,y:r.y},{x:SHIP.x,y:NEXUS.y},{x:NEXUS.x,y:NEXUS.y}];
+    return pts.filter((p,i)=>i===0||p.x!==pts[i-1].x||p.y!==pts[i-1].y);
   }
   drawCorridors(){
-    const g = this.corridorLayer; const c = SHIP;
-    // main spine + horizontal bar (faint pink wide + cyan thin)
-    const lines = [
-      [c.x, c.y-280, c.x, c.y+280],
-      [c.x-280, NEXUS.y, c.x+280, NEXUS.y],
+    const g=this.corridorLayer, c=SHIP;
+    const lines=[
+      [c.x, c.y-280, c.x, c.y+300],   // spine
+      [c.x-200, c.y, c.x+200, c.y],   // cross
+      [c.x-185, c.y-130, c.x+185, c.y-130], // upper cross
+      [c.x-185, c.y+95, c.x+185, c.y+95],   // lower cross
     ];
     lines.forEach(([x1,y1,x2,y2])=>{
-      g.lineStyle(8, COL.pink, 0.10); g.lineBetween(x1,y1,x2,y2);
-      g.lineStyle(1, COL.cyan, 0.22); g.lineBetween(x1,y1,x2,y2);
+      g.lineStyle(10,COL.pink,0.06); g.lineBetween(x1,y1,x2,y2);
+      g.lineStyle(0.5,COL.pink,0.25); g.lineBetween(x1,y1-5,x2,y2-5); g.lineBetween(x1,y1+5,x2,y2+5);
+      g.lineStyle(1,COL.cyan,0.2); g.lineBetween(x1,y1,x2,y2);
     });
-    // branch from each room to the spine
-    Object.keys(ROOM_DEF).forEach(id=>{
-      if (id==='nexus') return;
-      const r = roomCenter(id);
-      g.lineStyle(6, COL.pink, 0.07); g.lineBetween(r.x, r.y, c.x, r.y);
-      g.lineStyle(1, COL.cyan, 0.14); g.lineBetween(r.x, r.y, c.x, r.y);
+    // branch from each room to spine
+    ROOM_IDS.forEach(id=>{ if(id==='nexus') return; const r=roomCenter(id);
+      g.lineStyle(8,COL.pink,0.05); g.lineBetween(r.x,r.y,c.x,r.y);
+      g.lineStyle(1,COL.cyan,0.12); g.lineBetween(r.x,r.y,c.x,r.y);
     });
-    // ambient energy pulses from Nexus out to each room every ~4s
-    Object.keys(ROOM_DEF).forEach((id,i)=>{
-      if (id==='nexus') return;
-      this.time.delayedCall(i*350, ()=> this.spawnPulse(id, true) );
-    });
+    ROOM_IDS.forEach((id,i)=>{ if(id==='nexus') return; this.time.delayedCall(i*400, ()=>this.spawnPulse(id)); });
   }
-  spawnPulse(id, loop){
-    const path = this.pathToNexus(id).slice().reverse(); // nexus → room
-    const dot = this.add.image(path[0].x, path[0].y, 'spark').setScale(0.45).setTint(COL.cyan).setAlpha(0.9);
+  spawnPulse(id){
+    const path=this.pathToNexus(id).slice().reverse();
+    const dot=this.add.image(path[0].x, path[0].y, 'spark').setScale(0.45).setTint(COL.cyan).setAlpha(0.9);
     this.pulseLayer.add(dot);
-    const tweens = this.segmentTweens(dot, path);
-    this.tweens.chain({ targets:dot, tweens, onComplete:()=>{
-      dot.destroy();
-      if (loop) this.time.delayedCall(Phaser.Math.Between(2500,4500), ()=>this.spawnPulse(id, true));
-    }});
+    this.tweens.chain({targets:dot, tweens:this.segTweens(dot,path), onComplete:()=>{ dot.destroy(); this.time.delayedCall(Phaser.Math.Between(2500,4500), ()=>this.spawnPulse(id)); }});
   }
-  segmentTweens(obj, pts){
+  segTweens(obj, pts){
     const out=[]; let px=pts[0].x, py=pts[0].y;
-    for (let i=1;i<pts.length;i++){
-      const tx=pts[i].x, ty=pts[i].y;
-      const dur = Math.max(120, Math.hypot(tx-px,ty-py)/WALK_SPEED*1000);
-      out.push({ x:tx, y:ty, duration:dur, ease:'Linear' });
-      px=tx; py=ty;
-    }
+    for(let i=1;i<pts.length;i++){ const tx=pts[i].x, ty=pts[i].y;
+      out.push({x:tx, y:ty, duration:Math.max(120, Math.hypot(tx-px,ty-py)/WALK_SPEED*1000), ease:'Linear'}); px=tx; py=ty; }
     return out;
   }
 
-  /* ── Central NEXUS hub ────────────────────────────────────────────── */
-  chamfer(w,h,c){
-    return [
-      new Phaser.Geom.Point(-w/2+c,-h/2), new Phaser.Geom.Point(w/2-c,-h/2),
-      new Phaser.Geom.Point(w/2,-h/2+c),  new Phaser.Geom.Point(w/2,h/2-c),
-      new Phaser.Geom.Point(w/2-c,h/2),   new Phaser.Geom.Point(-w/2+c,h/2),
-      new Phaser.Geom.Point(-w/2,h/2-c),  new Phaser.Geom.Point(-w/2,-h/2+c),
-    ];
-  }
+  /* ── Nexus hub ─────────────────────────────────────────────────────── */
+  chamfer(w,h,c){ return [
+    new Phaser.Geom.Point(-w/2+c,-h/2), new Phaser.Geom.Point(w/2-c,-h/2), new Phaser.Geom.Point(w/2,-h/2+c), new Phaser.Geom.Point(w/2,h/2-c),
+    new Phaser.Geom.Point(w/2-c,h/2), new Phaser.Geom.Point(-w/2+c,h/2), new Phaser.Geom.Point(-w/2,h/2-c), new Phaser.Geom.Point(-w/2,-h/2+c) ]; }
   drawNexus(){
-    const c = this.add.container(NEXUS.x, NEXUS.y).setDepth(7);
-    for (let i=0;i<3;i++){
-      const ring=this.add.circle(0,0, 55+i*15, 0x000000,0).setStrokeStyle(1, COL.pink, 0.25); c.add(ring);
-      this.tweens.add({targets:ring, alpha:{from:0.05,to:0.4}, scale:{from:0.95,to:1.06}, duration:2400, yoyo:true, repeat:-1, delay:i*500});
-    }
-    const rot=this.add.graphics(); rot.lineStyle(2, COL.pink, 0.5);
-    const hp=[]; for(let i=0;i<6;i++){const a=-Math.PI/2+i*Math.PI/3; hp.push(new Phaser.Geom.Point(Math.cos(a)*64, Math.sin(a)*64));}
-    rot.strokePoints(hp, true, true); c.add(rot);
+    const c=this.add.container(NEXUS.x, NEXUS.y).setDepth(6.5);
+    [45,55,65].forEach((r,i)=>{ const ring=this.add.circle(0,0,r,0x000000,0).setStrokeStyle(1,COL.pink,0.25); c.add(ring);
+      this.tweens.add({targets:ring, alpha:{from:0.08,to:0.4}, scale:{from:0.95,to:1.06}, duration:2400, yoyo:true, repeat:-1, delay:i*450}); });
+    const rot=this.add.graphics(); rot.lineStyle(2,COL.pink,0.3); rot.strokePoints(this.hexPts(0,0,60),true,true); c.add(rot);
     this.tweens.add({targets:rot, angle:360, duration:20000, repeat:-1});
-
-    const cp=this.chamfer(110,75,9); const body=this.add.graphics();
-    body.fillStyle(COL.nexusFill,0.15); body.fillPoints(cp,true);
-    this.glowStroke(body, cp, COL.pink, 2, true); c.add(body);
-
-    c.add(this.add.text(0,-20,'COMMAND HUB',{fontFamily:'monospace',fontSize:'8px',color:hex(COL.pink)}).setOrigin(0.5).setAlpha(0.5));
-    c.add(this.add.text(0,0,'NEXUS',{fontFamily:'monospace',fontSize:'14px',color:hex(COL.pink),fontStyle:'bold'}).setOrigin(0.5).setShadow(0,0,hex(COL.pink),10));
-    this.nexusLevelTxt=this.add.text(46,-30,'LV 8',{fontFamily:'monospace',fontSize:'9px',color:hex(COL.yellow),fontStyle:'bold'}).setOrigin(1,0);
-    c.add(this.nexusLevelTxt);
+    const cp=this.chamfer(115,78,9), body=this.add.graphics();
+    body.fillStyle(COL.nexusFill,0.18); body.fillPoints(cp,true);
+    body.lineStyle(8,COL.pink,0.08); body.strokePoints(cp,true,true); body.lineStyle(4,COL.pink,0.2); body.strokePoints(cp,true,true); body.lineStyle(2.5,COL.pink,1); body.strokePoints(cp,true,true);
+    c.add(body);
+    c.add(this.add.text(0,-20,'COMMAND HUB',{fontFamily:'monospace',fontSize:'8px',color:hex(COL.pink)}).setOrigin(0.5).setAlpha(0.45));
+    c.add(this.add.text(0,0,'NEXUS',{fontFamily:'monospace',fontSize:'15px',color:hex(COL.pink),fontStyle:'bold'}).setOrigin(0.5).setShadow(0,0,hex(COL.pink),10));
+    this.nexusLevelTxt=this.add.text(48,-32,'LV 8',{fontFamily:'monospace',fontSize:'9px',color:hex(COL.yellow),fontStyle:'bold'}).setOrigin(1,0); c.add(this.nexusLevelTxt);
   }
 
   /* ── Agent rooms ──────────────────────────────────────────────────── */
   buildRoom(agent){
-    const d = ROOM_DEF[agent.id]; if (!d || agent.id==='nexus') return;
-    const pos = roomCenter(agent.id);
-    const w=80, h=52, color=d.color;
-    const c = this.add.container(pos.x, pos.y); this.roomLayer.add(c);
-
+    const d=ROOM_DEF[agent.id]; if(!d||agent.id==='nexus') return;
+    const pos=roomCenter(agent.id); const w=84, h=56, color=d.color;
+    const c=this.add.container(pos.x,pos.y); this.roomLayer.add(c);
     const glow=this.add.graphics(); c.add(glow);
     const body=this.add.graphics(); c.add(body);
-    const prop=this.add.image(w/2-12, h/2-12, 'props', (Object.keys(ROOM_DEF).indexOf(agent.id)%8)).setScale(1.2).setAlpha(0.6); c.add(prop);
-    const nameTxt=this.add.text(0,-9, agent.name, {fontFamily:'monospace',fontSize:'10px',color:hex(color),fontStyle:'bold'}).setOrigin(0.5); c.add(nameTxt);
-    const roleTxt=this.add.text(0,3, agent.role||'', {fontFamily:'monospace',fontSize:'7px',color:hex(color)}).setOrigin(0.5).setAlpha(0.55); c.add(roleTxt);
+    const floor=this.add.tileSprite(0,2,w-10,h-12,'tiles',2).setOrigin(0.5).setTileScale(2,2).setAlpha(0.4); c.add(floor);
+    const nameTxt=this.add.text(0,-9,agent.name,{fontFamily:'monospace',fontSize:'10px',color:hex(color),fontStyle:'bold'}).setOrigin(0.5); c.add(nameTxt);
+    const roleTxt=this.add.text(0,3,agent.role||'',{fontFamily:'monospace',fontSize:'7px',color:hex(color)}).setOrigin(0.5).setAlpha(0.5); c.add(roleTxt);
     const badge=this.add.graphics(); c.add(badge);
     const lvTxt=this.add.text(w/2-5,-h/2+3,'LV '+agent.level,{fontFamily:'monospace',fontSize:'7px',color:hex(COL.yellow),fontStyle:'bold'}).setOrigin(1,0); c.add(lvTxt);
-    const dot=this.add.circle(-w/2+8, h/2-8, 3.5, COL.green); c.add(dot);
+    const dot=this.add.circle(-w/2+8,h/2-8,3.5,COL.green); c.add(dot);
     const xpTrack=this.add.graphics(); c.add(xpTrack);
     const xpFill=this.add.graphics(); c.add(xpFill);
-
-    c.setSize(w,h);
-    c.setInteractive(new Phaser.Geom.Rectangle(-w/2,-h/2,w,h), Phaser.Geom.Rectangle.Contains);
-
-    const room={ id:agent.id, cx:pos.x, cy:pos.y, w, h, color, container:c,
-      glow, body, badge, dot, xpFill, xpTrack, lvTxt, xpRatio:0, breathe:null, dotTween:null };
+    c.setSize(w,h); c.setInteractive(new Phaser.Geom.Rectangle(-w/2,-h/2,w,h), Phaser.Geom.Rectangle.Contains);
+    const room={id:agent.id, cx:pos.x, cy:pos.y, w, h, color, container:c, glow, body, badge, dot, xpFill, xpTrack, lvTxt, xpRatio:0, breathe:null, dotTween:null};
     MC.rooms[agent.id]=room;
-
     c.on('pointerover', ()=>{ this.tweens.add({targets:c, scale:1.06, duration:120}); this.input.setDefaultCursor('pointer'); });
     c.on('pointerout',  ()=>{ this.tweens.add({targets:c, scale:1.0, duration:120}); this.input.setDefaultCursor('default'); });
-    c.on('pointerdown', (p)=>{
-      const now=this.time.now;
-      if (room._lastClick && now-room._lastClick < 300){ // double-click → zoom + modal
-        this.cameras.main.pan(room.cx, room.cy, 600, 'Power2');
-        this.cameras.main.zoomTo(1.5, 600);
-      }
-      room._lastClick=now;
-      const flash=this.add.graphics(); c.add(flash);
-      flash.lineStyle(2, 0xffffff, 0.9); flash.strokePoints(this.chamfer(w,h,8), true, true);
-      this.time.delayedCall(100, ()=>flash.destroy());
-      openModal(agent.id);
+    c.on('pointerdown', ()=>{
+      const fl=this.add.graphics(); c.add(fl); fl.lineStyle(2,0xffffff,0.9); fl.strokePoints(this.chamfer(w,h,8),true,true);
+      this.time.delayedCall(60, ()=>fl.destroy()); openModal(agent.id);
     });
-
     this.styleRoom(room, agent, true);
     return room;
   }
-
   styleRoom(room, agent, immediate){
-    const {glow, body, badge, dot}=room; const w=room.w, h=room.h, color=room.color;
-    const cp=this.chamfer(w,h,8);
+    const {glow,body,badge,dot}=room; const w=room.w,h=room.h,color=room.color, cp=this.chamfer(w,h,8);
     const active=agent.status==='active', locked=agent.status==='locked';
-    const strokeAlpha = active?1:(locked?0.16:0.4);
-
     glow.clear();
-    if (active){ glow.lineStyle(8,color,0.10); glow.strokePoints(cp,true,true); glow.lineStyle(4,color,0.22); glow.strokePoints(cp,true,true); }
+    if(active){ glow.lineStyle(8,color,0.10); glow.strokePoints(cp,true,true); glow.lineStyle(4,color,0.22); glow.strokePoints(cp,true,true); }
     body.clear();
-    body.fillStyle(color, locked?0.03:0.08); body.fillPoints(cp,true);
-    body.lineStyle(locked?1:1.5, color, strokeAlpha); body.strokePoints(cp,true,true);
-    badge.clear(); badge.fillStyle(COL.yellow,0.18); badge.fillRect(w/2-34,-h/2+2,30,12);
-    badge.lineStyle(1, COL.yellow,0.8); badge.strokeRect(w/2-34,-h/2+2,30,12);
+    body.fillStyle(color, locked?0.04:0.12); body.fillPoints(cp,true);
+    body.fillStyle(color, 0.05); body.fillPoints(this.chamfer(w-6,h-6,6), true); // inner highlight
+    if(locked){ // dashed border (manual segments)
+      body.lineStyle(1,0x222244,0.6); const pts=cp.concat([cp[0]]);
+      for(let i=0;i<pts.length-1;i++){ const a=pts[i],b=pts[i+1], steps=Math.max(2,Math.hypot(b.x-a.x,b.y-a.y)/6);
+        for(let s=0;s<steps;s+=2){ const t1=s/steps,t2=Math.min(1,(s+1)/steps); body.lineBetween(a.x+(b.x-a.x)*t1,a.y+(b.y-a.y)*t1,a.x+(b.x-a.x)*t2,a.y+(b.y-a.y)*t2); } }
+    } else { body.lineStyle(1.5,color, active?1:0.3); body.strokePoints(cp,true,true); }
+    badge.clear(); badge.fillStyle(COL.yellow,0.18); badge.fillRect(w/2-34,-h/2+2,30,12); badge.lineStyle(1,COL.yellow,0.8); badge.strokeRect(w/2-34,-h/2+2,30,12);
     room.lvTxt.setText('LV '+agent.level);
     dot.setFillStyle(active?COL.green:(locked?0x444466:COL.cyan));
-    room.container.setAlpha(locked?0.5:1);
-
-    if (room.breathe){ room.breathe.stop(); room.breathe=null; glow.setAlpha(1); }
-    if (active){ room.breathe=this.tweens.add({targets:glow, alpha:{from:0.6,to:1}, duration:2500, yoyo:true, repeat:-1, delay:Phaser.Math.Between(0,1500)}); }
-    if (room.dotTween){ room.dotTween.stop(); dot.setAlpha(1); room.dotTween=null; }
-    if (active){ room.dotTween=this.tweens.add({targets:dot, alpha:0.3, duration:700, yoyo:true, repeat:-1}); }
-
-    const ratio=Phaser.Math.Clamp((agent.xp||0)/((agent.xp_max||1)),0,1);
-    this.setXpBar(room, ratio, immediate);
+    room.container.setAlpha(locked?0.4:1);
+    if(room.breathe){ room.breathe.stop(); room.breathe=null; glow.setAlpha(1); }
+    if(active) room.breathe=this.tweens.add({targets:glow, alpha:{from:0.6,to:1}, duration:2500, yoyo:true, repeat:-1, delay:Phaser.Math.Between(0,1500)});
+    if(room.dotTween){ room.dotTween.stop(); dot.setAlpha(1); room.dotTween=null; }
+    if(active) room.dotTween=this.tweens.add({targets:dot, alpha:0.3, duration:700, yoyo:true, repeat:-1});
+    this.setXpBar(room, Phaser.Math.Clamp((agent.xp||0)/((agent.xp_max||1)),0,1), immediate);
   }
   setXpBar(room, ratio, immediate){
-    const {xpTrack,xpFill}=room, w=room.w, h=room.h, color=room.color;
-    const barW=w-12, bx=-barW/2, by=h/2-4;
+    const {xpTrack,xpFill}=room, w=room.w, h=room.h, color=room.color, barW=w-12, bx=-barW/2, by=h/2-4;
     xpTrack.clear(); xpTrack.fillStyle(0xffffff,0.06); xpTrack.fillRect(bx,by,barW,3);
     const draw=rt=>{ xpFill.clear(); xpFill.fillStyle(color,0.75); xpFill.fillRect(bx,by,barW*rt,3); };
-    if (immediate){ room.xpRatio=ratio; draw(ratio); return; }
+    if(immediate){ room.xpRatio=ratio; draw(ratio); return; }
     const proxy={v:room.xpRatio};
     this.tweens.add({targets:proxy, v:ratio, duration:800, ease:'Cubic.easeOut', onUpdate:()=>draw(proxy.v), onComplete:()=>room.xpRatio=ratio});
   }
 
-  /* ── Characters (walk to Nexus and back) ──────────────────────────── */
+  /* ── Characters ───────────────────────────────────────────────────── */
   ensureChar(agent){
-    if (agent.id==='nexus' || !ROOM_DEF[agent.id]) return;
-    const active = agent.status==='active';
-    let ch = MC.chars[agent.id];
-    if (active && !ch){
-      const pos=roomCenter(agent.id);
-      const kit = Object.keys(ROOM_DEF).indexOf(agent.id) % this.kitCount;
-      const sp=this.add.sprite(pos.x, pos.y+8, 'chars', this.kitFrame[kit]).setScale(2).setDepth(6).setAlpha(0);
-      this.charLayer.add(sp);
-      this.tweens.add({targets:sp, alpha:1, duration:400});
-      ch={ id:agent.id, sprite:sp, kit, home:{x:pos.x,y:pos.y+8}, busy:false };
-      MC.chars[agent.id]=ch;
-      sp.play('idle'+kit);
-      this.scheduleWalk(ch);
-    } else if (active && ch){
-      ch.sprite.setAlpha(1);
-    } else if (!active && ch){
-      // fade out and remove
-      this.tweens.add({targets:ch.sprite, alpha:0, duration:300, onComplete:()=>ch.sprite.destroy()});
-      delete MC.chars[agent.id];
-    }
+    if(agent.id==='nexus'||!ROOM_DEF[agent.id]) return;
+    const active=agent.status==='active'; let ch=MC.chars[agent.id];
+    if(active&&!ch){
+      const pos=roomCenter(agent.id), kit=ROOM_IDS.indexOf(agent.id)%this.kitCount;
+      const sp=this.add.sprite(pos.x,pos.y+8,'chars',this.kitFrame[kit]).setScale(2).setDepth(7).setAlpha(0);
+      this.charLayer.add(sp); this.tweens.add({targets:sp, alpha:1, duration:400});
+      ch={id:agent.id, sprite:sp, kit, home:{x:pos.x,y:pos.y+8}}; MC.chars[agent.id]=ch;
+      sp.play('idle'+kit); this.scheduleWalk(ch);
+    } else if(active&&ch){ ch.sprite.setAlpha(1); }
+    else if(!active&&ch){ this.tweens.add({targets:ch.sprite, alpha:0, duration:300, onComplete:()=>ch.sprite.destroy()}); delete MC.chars[agent.id]; }
   }
   scheduleWalk(ch){
-    const wait=Phaser.Math.Between(8000,15000);
-    this.time.delayedCall(wait, ()=>{
+    this.time.delayedCall(Phaser.Math.Between(10000,20000), ()=>{
       const a=MC.agents.find(x=>x.id===ch.id);
-      if (!ch.sprite.active || !a || a.status!=='active'){ if (ch.sprite.active) this.scheduleWalk(ch); return; }
+      if(!ch.sprite.active||!a||a.status!=='active'){ if(ch.sprite.active) this.scheduleWalk(ch); return; }
       this.walkChar(ch, this.pathToNexus(ch.id), ()=>{
         ch.sprite.play('idle'+ch.kit);
-        this.time.delayedCall(Phaser.Math.Between(3000,5000), ()=>{
-          if (!ch.sprite.active){ return; }
-          this.walkChar(ch, this.pathToNexus(ch.id).slice().reverse(), ()=>{
-            ch.sprite.play('idle'+ch.kit); this.scheduleWalk(ch);
-          });
+        this.time.delayedCall(Phaser.Math.Between(4000,6000), ()=>{
+          if(!ch.sprite.active) return;
+          this.walkChar(ch, this.pathToNexus(ch.id).slice().reverse(), ()=>{ ch.sprite.play('idle'+ch.kit); this.scheduleWalk(ch); });
         });
       });
     });
   }
   walkChar(ch, pts, onDone){
     const sp=ch.sprite; sp.play('walk'+ch.kit);
-    const tweens=this.segmentTweens(sp, pts).map(t=>({ ...t, onStart:()=>{ sp.setFlipX(t.x < sp.x); } }));
-    this.tweens.chain({ targets:sp, tweens, onComplete:()=> onDone && onDone() });
+    const tweens=this.segTweens(sp,pts).map(t=>({...t, onStart:()=>sp.setFlipX(t.x<sp.x)}));
+    this.tweens.chain({targets:sp, tweens, onComplete:()=>onDone&&onDone()});
   }
 
   /* ── Particle / juice ─────────────────────────────────────────────── */
   levelUpBurst(room){
-    const em=this.add.particles(room.cx, room.cy, 'spark', {speed:{min:70,max:230}, angle:{min:0,max:360},
-      scale:{start:0.7,end:0}, lifespan:1500, blendMode:'ADD', tint:[COL.pink,COL.cyan,COL.yellow], emitting:false}).setDepth(11);
-    em.explode(40); this.time.delayedCall(1700, ()=>em.destroy());
-    if (room.lvTxt) this.tweens.add({targets:room.lvTxt, scale:{from:1.6,to:1}, duration:500, ease:'Back.easeOut'});
-    const t=this.add.text(room.cx, room.cy-14, '+LEVEL UP!', {fontFamily:'monospace',fontSize:'12px',color:hex(COL.pink),fontStyle:'bold'}).setOrigin(0.5).setDepth(12).setShadow(0,0,hex(COL.pink),8);
+    const em=this.add.particles(room.cx,room.cy,'spark',{speed:{min:70,max:230},angle:{min:0,max:360},scale:{start:0.7,end:0},lifespan:1500,blendMode:'ADD',tint:[COL.pink,COL.cyan,COL.yellow],emitting:false}).setDepth(11);
+    em.explode(40); this.time.delayedCall(1700,()=>em.destroy());
+    if(room.lvTxt) this.tweens.add({targets:room.lvTxt, scale:{from:1.6,to:1}, duration:500, ease:'Back.easeOut'});
+    const t=this.add.text(room.cx,room.cy-14,'+LEVEL UP!',{fontFamily:'monospace',fontSize:'12px',color:hex(COL.pink),fontStyle:'bold'}).setOrigin(0.5).setDepth(12).setShadow(0,0,hex(COL.pink),8);
     this.tweens.add({targets:t, y:t.y-40, alpha:0, duration:2000, ease:'Quad.easeOut', onComplete:()=>t.destroy()});
   }
   floatXp(room, amount){
-    const em=this.add.particles(room.cx, room.cy, 'spark', {speed:{min:40,max:120}, angle:{min:0,max:360},
-      scale:{start:0.5,end:0}, lifespan:900, blendMode:'ADD', tint:[COL.yellow], emitting:false}).setDepth(11);
-    em.explode(8); this.time.delayedCall(1100, ()=>em.destroy());
-    const t=this.add.text(room.cx, room.cy-12, '+'+amount+' XP', {fontFamily:'monospace',fontSize:'11px',color:hex(COL.yellow),fontStyle:'bold'}).setOrigin(0.5).setDepth(12);
+    const em=this.add.particles(room.cx,room.cy,'spark',{speed:{min:40,max:120},angle:{min:0,max:360},scale:{start:0.5,end:0},lifespan:900,blendMode:'ADD',tint:[COL.yellow],emitting:false}).setDepth(11);
+    em.explode(8); this.time.delayedCall(1100,()=>em.destroy());
+    const t=this.add.text(room.cx,room.cy-12,'+'+amount+' XP',{fontFamily:'monospace',fontSize:'11px',color:hex(COL.yellow),fontStyle:'bold'}).setOrigin(0.5).setDepth(12);
     this.tweens.add({targets:t, y:t.y-34, alpha:0, duration:1200, ease:'Quad.easeOut', onComplete:()=>t.destroy()});
   }
   activateFx(room){
-    // energy pulse Nexus → room + white border flash
     const path=this.pathToNexus(room.id).slice().reverse();
-    const dot=this.add.image(path[0].x, path[0].y, 'spark').setScale(0.6).setTint(COL.green).setDepth(3);
-    this.tweens.chain({targets:dot, tweens:this.segmentTweens(dot, path), onComplete:()=>dot.destroy()});
-    const cp=this.chamfer(room.w,room.h,8); const fl=this.add.graphics(); room.container.add(fl);
-    fl.lineStyle(2.5, 0xffffff, 1); fl.strokePoints(cp,true,true);
-    this.time.delayedCall(120, ()=>fl.destroy());
+    const dot=this.add.image(path[0].x,path[0].y,'spark').setScale(0.6).setTint(COL.green).setDepth(3.5);
+    this.tweens.chain({targets:dot, tweens:this.segTweens(dot,path), onComplete:()=>dot.destroy()});
+    const fl=this.add.graphics(); room.container.add(fl); fl.lineStyle(2.5,0xffffff,1); fl.strokePoints(this.chamfer(room.w,room.h,8),true,true);
+    this.time.delayedCall(120,()=>fl.destroy());
   }
   offlineShake(){
-    this.cameras.main.shake(400, 0.012);
-    const flash=this.add.rectangle(SHIP.x, SHIP.y, DW*2, DH*2, COL.red, 0.3).setDepth(40);
+    this.cameras.main.shake(400,0.012);
+    const flash=this.add.rectangle(SHIP.x,SHIP.y,DW*2,DH*2,COL.red,0.3).setDepth(40);
     this.tweens.add({targets:flash, alpha:0, duration:500, onComplete:()=>flash.destroy()});
   }
 
-  /* ── Camera controls ──────────────────────────────────────────────── */
+  /* ── Camera ───────────────────────────────────────────────────────── */
   setupCamera(){
     const cam=this.cameras.main;
-    this.input.on('wheel',(p,o,dx,dy)=>{ cam.zoomTo(Phaser.Math.Clamp(cam.zoom - dy*0.0012, 0.4, 2.5), 120); });
-    this.input.on('pointermove',(p)=>{ if (p.rightButtonDown()){ cam.scrollX -= (p.x-p.prevPosition.x)/cam.zoom; cam.scrollY -= (p.y-p.prevPosition.y)/cam.zoom; } });
+    this.input.on('wheel',(p,o,dx,dy)=>cam.zoomTo(Phaser.Math.Clamp(cam.zoom-dy*0.0012,0.35,2.5),120));
+    this.input.on('pointermove',p=>{ if(p.rightButtonDown()){ cam.scrollX-=(p.x-p.prevPosition.x)/cam.zoom; cam.scrollY-=(p.y-p.prevPosition.y)/cam.zoom; } });
     this.input.mouse.disableContextMenu();
   }
-  resetView(){ this.cameras.main.pan(SHIP.x, SHIP.y, 600, 'Power2'); this.fitCameraZoom(); }
-  fitCameraZoom(){ const z=Math.min(this.scale.width/DW, this.scale.height/DH)*0.96; this.cameras.main.zoomTo(Phaser.Math.Clamp(z,0.4,2.5), 600); }
-  panTo(id){ const r=MC.rooms[id]||(id==='nexus'?NEXUS:null); if (r) this.cameras.main.pan(r.cx||r.x, r.cy||r.y, 800, 'Power2'); }
+  resetView(){ this.cameras.main.pan(SHIP.x,SHIP.y,600,'Power2'); const z=Math.min(this.scale.width/DW,this.scale.height/DH)*0.96; this.cameras.main.zoomTo(Phaser.Math.Clamp(z,0.35,2.5),600); }
+  panTo(id){ const r=MC.rooms[id]||(id==='nexus'?{cx:NEXUS.x,cy:NEXUS.y}:null); if(r) this.cameras.main.pan(r.cx,r.cy,800,'Power2'); }
 
   /* ── Data refresh ─────────────────────────────────────────────────── */
   async refresh(first){
-    let data;
-    try { data=await API.agents(); } catch(e){ return this.onFetchFail(); }
-    if (!data || !data.agents) return this.onFetchFail();
+    let data; try{ data=await API.agents(); }catch(e){ return this.onFetchFail(); }
+    if(!data||!data.agents) return this.onFetchFail();
     MC.failCount=0; setOffline(false);
-
     const prev=Object.fromEntries(MC.agents.map(a=>[a.id,a]));
     MC.agents=data.agents; MC.live=data.live; MC.alerts=data.alerts||[];
-    const nx=data.agents.find(a=>a.id==='nexus');
-    if (nx && this.nexusLevelTxt) this.nexusLevelTxt.setText('LV '+nx.level);
-
+    const nx=data.agents.find(a=>a.id==='nexus'); if(nx&&this.nexusLevelTxt) this.nexusLevelTxt.setText('LV '+nx.level);
     data.agents.forEach(a=>{
-      if (a.id==='nexus' || !ROOM_DEF[a.id]) return;
-      const room=MC.rooms[a.id]; const before=prev[a.id];
-      if (!room){ this.buildRoom(a); this.ensureChar(a); return; }
-      if (before && before.status!=='active' && a.status==='active') this.activateFx(room);
-      this.styleRoom(room, a, first);
-      this.ensureChar(a);
-      if (before && a.level>before.level) this.levelUpBurst(room);
+      if(a.id==='nexus'||!ROOM_DEF[a.id]) return;
+      const room=MC.rooms[a.id], before=prev[a.id];
+      if(!room){ this.buildRoom(a); this.ensureChar(a); return; }
+      if(before&&before.status!=='active'&&a.status==='active') this.activateFx(room);
+      this.styleRoom(room,a,first); this.ensureChar(a);
+      if(before&&a.level>before.level) this.levelUpBurst(room);
     });
-
-    renderSidebar();
-    if (!first) flashSection('activity-sec');
+    renderSidebar(); if(!first) flashSection('activity-sec');
   }
-  onFetchFail(){ MC.failCount++; setOffline(true); if (MC.failCount===1) this.offlineShake(); this.time.delayedCall(10000, ()=>this.refresh(false)); }
+  onFetchFail(){ MC.failCount++; setOffline(true); if(MC.failCount===1) this.offlineShake(); this.time.delayedCall(10000,()=>this.refresh(false)); }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   PHASER GAME (RESIZE → full viewport, responsive)
+   PHASER GAME
    ════════════════════════════════════════════════════════════════════════ */
-const game = new Phaser.Game({
-  type: Phaser.AUTO,
-  parent: 'game-container',
-  backgroundColor: hex(COL.space),
-  scale: { mode: Phaser.Scale.RESIZE, width:'100%', height:'100%' },
-  scene: [BootScene, SpaceshipScene],
+const game=new Phaser.Game({
+  type:Phaser.AUTO, parent:'game-container', backgroundColor:hex(COL.space),
+  scale:{mode:Phaser.Scale.RESIZE, width:'100%', height:'100%'},
+  scene:[BootScene, SpaceshipScene],
 });
 
 /* ════════════════════════════════════════════════════════════════════════
-   HTML SIDEBAR + TOP BAR
+   SIDEBAR + TOP BAR
    ════════════════════════════════════════════════════════════════════════ */
 const $=id=>document.getElementById(id);
 function statusDot(st){ return st==='active'?'#39ff14':(st==='locked'?'#333355':'#00ffff'); }
 function nameColor(st,col){ return st==='active'?col:(st==='locked'?'#333355':'#00ffff'); }
 function fmtMoney(v){ if(v==null) return '–'; return (v>=0?'+':'-')+'$'+Math.abs(v).toFixed(2); }
-
 function renderSidebar(){ renderTopbar(); renderAgents(); renderLive(); renderActivity(); renderTicker(); }
-
 function renderTopbar(){
-  const active=MC.agents.filter(a=>a.status==='active').length;
-  $('pill-active').textContent=active+'/'+MC.agents.length;
+  $('pill-active').textContent=MC.agents.filter(a=>a.status==='active').length+'/'+MC.agents.length;
   $('pill-xp').textContent=MC.agents.reduce((s,a)=>s+(a.level*1000)+(a.xp||0),0).toLocaleString();
-  const tr=MC.live&&MC.live.trading; const pp=$('pill-pnl');
-  if (tr&&tr.pnl!=null){ pp.textContent=fmtMoney(tr.pnl); pp.parentElement.className='pill '+(tr.pnl>=0?'c-green':'c-red'); }
-  else pp.textContent='–';
+  const tr=MC.live&&MC.live.trading, pp=$('pill-pnl');
+  if(tr&&tr.pnl!=null){ pp.textContent=fmtMoney(tr.pnl); pp.parentElement.className='pill '+(tr.pnl>=0?'c-green':'c-red'); } else pp.textContent='–';
 }
 function renderAgents(){
   const order={active:0,idle:1,locked:2};
   const sorted=[...MC.agents].sort((a,b)=>((order[a.status]??3)-(order[b.status]??3))||a.name.localeCompare(b.name));
   $('agents-count').textContent=MC.agents.filter(a=>a.status==='active').length+' active';
   $('agents-list').innerHTML=sorted.map(a=>{
-    const col=hex(agentColor(a)); const ratio=Math.round(((a.xp||0)/((a.xp_max||1)))*100);
-    const sc=statusDot(a.status);
+    const col=hex(agentColor(a)), ratio=Math.round(((a.xp||0)/((a.xp_max||1)))*100), sc=statusDot(a.status);
     return `<div class="agent-row" data-id="${a.id}" style="border-left-color:${a.status==='active'?col:'transparent'}">
       <span class="dot ${a.status==='active'?'on':''}" style="background:${sc};box-shadow:0 0 6px ${sc}"></span>
       <div><div class="nm" style="color:${nameColor(a.status,col)}">${a.icon||''} ${a.name}</div><div class="rl">${a.role||''}</div></div>
       <div class="lv">LV ${a.level}</div>
-      <div class="xpwrap"><div class="xpfill" style="width:${ratio}%;background:${col}"></div></div>
-    </div>`;
+      <div class="xpwrap"><div class="xpfill" style="width:${ratio}%;background:${col}"></div></div></div>`;
   }).join('');
   document.querySelectorAll('.agent-row').forEach(el=>{ el.onclick=()=>{ if(MC.scene) MC.scene.panTo(el.dataset.id); openModal(el.dataset.id); }; });
 }
@@ -904,59 +730,40 @@ function renderLive(){
   $('live-water-bar').style.width=Math.min(100,((L.water_ml||0)/(L.water_target||2000))*100)+'%';
   $('live-supp').textContent=(L.supplements_taken||0)+'/'+(L.supplements_total||3);
   $('live-supp-dots').innerHTML=Array.from({length:L.supplements_total||3},(_,i)=>`<i class="${i<(L.supplements_taken||0)?'on':''}"></i>`).join('');
-  const tr=L.trading||{}; const pe=$('live-pnl');
-  if (tr.pnl!=null){ const pct=tr.pnl_pct!=null?' ('+(tr.pnl_pct>=0?'+':'')+Number(tr.pnl_pct).toFixed(2)+'%)':'';
-    pe.textContent=fmtMoney(tr.pnl)+pct; pe.style.color=tr.pnl>=0?'#00ff88':'#ef4444'; }
-  else { pe.textContent='offline'; pe.style.color='#7a6a9a'; }
+  const tr=L.trading||{}, pe=$('live-pnl');
+  if(tr.pnl!=null){ const pct=tr.pnl_pct!=null?' ('+(tr.pnl_pct>=0?'+':'')+Number(tr.pnl_pct).toFixed(2)+'%)':'';
+    pe.textContent=fmtMoney(tr.pnl)+pct; pe.style.color=tr.pnl>=0?'#00ff88':'#ef4444'; } else { pe.textContent='offline'; pe.style.color='#7a6a9a'; }
   const online=tr.online!==false;
   $('live-status').innerHTML=`<span class="pulse-dot" style="background:${online?'#39ff14':'#ef4444'}"></span>${online?'ONLINE':'OFFLINE'}`;
 }
 function renderActivity(){
-  Promise.all(MC.agents.filter(a=>a.status==='active').slice(0,5).map(a=>
-    API.log(a.id).then(rows=>(rows||[]).slice(0,2).map(r=>({...r,agent:a.name}))).catch(()=>[])
-  )).then(chunks=>{
-    const rows=[].concat(...chunks).sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,6);
-    $('activity-list').innerHTML=rows.length?rows.map(r=>{
-      const t=(r.timestamp||'').slice(11,16);
-      return `<div class="ln"><span class="t">${t}</span> · <span class="a">${(r.agent||'').toUpperCase()}</span> — ${r.message||''}</div>`;
-    }).join(''):'<div class="ln" style="color:#7a6a9a">No recent activity.</div>';
-  });
+  Promise.all(MC.agents.filter(a=>a.status==='active').slice(0,5).map(a=>API.log(a.id).then(rows=>(rows||[]).slice(0,2).map(r=>({...r,agent:a.name}))).catch(()=>[])))
+  .then(chunks=>{ const rows=[].concat(...chunks).sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,6);
+    $('activity-list').innerHTML=rows.length?rows.map(r=>{ const t=(r.timestamp||'').slice(11,16);
+      return `<div class="ln"><span class="t">${t}</span> · <span class="a">${(r.agent||'').toUpperCase()}</span> — ${r.message||''}</div>`; }).join(''):'<div class="ln" style="color:#7a6a9a">No recent activity.</div>'; });
 }
 function renderTicker(){
-  const crit=(MC.alerts||[]).some(a=>a.level==='crit');
-  $('ticker-wrap').classList.toggle('crit', crit);
+  const crit=(MC.alerts||[]).some(a=>a.level==='crit'); $('ticker-wrap').classList.toggle('crit',crit);
   const items=(MC.alerts||[]).map(a=>(a.level==='crit'?'🔴':a.level==='warn'?'🟡':'🔵')+' '+a.text);
   $('ticker').textContent=items.length?(items.join('     ·     ')+'     ·     '+items.join('     ·     ')):'All systems nominal · Station holding orbit · Agents standing by';
 }
-
 let missionsLoaded=false;
 function renderMissions(){
   $('missions-count').textContent=MC.missions.filter(m=>m.completed).length+'/'+MC.missions.length;
-  $('missions-list').innerHTML=MC.missions.map(m=>`
-    <div class="mission ${m.completed?'done':''}" data-id="${m.id}">
-      <div class="chk">${m.completed?'✓':''}</div>
-      <div><div class="m-title">${m.title}</div><div class="m-desc">${m.description||''}</div></div>
-      <div class="m-xp">+${m.xp_reward} XP</div>
-    </div>`).join('');
-  document.querySelectorAll('.mission .chk').forEach(el=>{
-    el.onclick=async()=>{
-      const id=el.closest('.mission').dataset.id;
-      const m=MC.missions.find(x=>String(x.id)===String(id)); if(!m||m.completed) return;
-      m.completed=1; renderMissions();
-      try{ await API.completeMission(id); }catch(e){}
-      loadMissions(); if(MC.scene) MC.scene.refresh(false);
-    };
-  });
+  $('missions-list').innerHTML=MC.missions.map(m=>`<div class="mission ${m.completed?'done':''}" data-id="${m.id}">
+    <div class="chk">${m.completed?'✓':''}</div><div><div class="m-title">${m.title}</div><div class="m-desc">${m.description||''}</div></div>
+    <div class="m-xp">+${m.xp_reward} XP</div></div>`).join('');
+  document.querySelectorAll('.mission .chk').forEach(el=>{ el.onclick=async()=>{
+    const id=el.closest('.mission').dataset.id, m=MC.missions.find(x=>String(x.id)===String(id)); if(!m||m.completed) return;
+    m.completed=1; renderMissions(); try{ await API.completeMission(id); }catch(e){} loadMissions(); if(MC.scene) MC.scene.refresh(false); }; });
 }
-async function loadMissions(){ try{ MC.missions=await API.missions()||[]; renderMissions(); missionsLoaded=true; }
-  catch(e){ if(!missionsLoaded) $('missions-list').innerHTML='<div class="m-desc">Missions unavailable.</div>'; } }
-
+async function loadMissions(){ try{ MC.missions=await API.missions()||[]; renderMissions(); missionsLoaded=true; }catch(e){ if(!missionsLoaded) $('missions-list').innerHTML='<div class="m-desc">Missions unavailable.</div>'; } }
 function flashSection(id){ const el=$(id); if(!el) return; el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
 function setOffline(on){ $('offline-banner').classList.toggle('show',on); }
 setInterval(()=>{ $('pill-time').textContent=new Date().toLocaleTimeString('en-GB'); }, 1000);
 
 /* ════════════════════════════════════════════════════════════════════════
-   AGENT MODAL
+   MODAL
    ════════════════════════════════════════════════════════════════════════ */
 let modalAgentId=null;
 function openModal(id){
@@ -966,73 +773,42 @@ function openModal(id){
   $('m-name').textContent=a.name; $('m-name').style.color=col; $('m-name').style.textShadow='0 0 12px '+col;
   $('m-role').textContent=a.role||'';
   const badge=$('m-badge'); badge.textContent=a.status; badge.className='m-badge '+a.status;
-  $('m-level').textContent='LV '+a.level;
-  $('m-xptext').textContent=(a.xp||0)+' / '+(a.xp_max||100)+' XP';
-  $('m-tasks').textContent=a.tasks_run||0; $('m-findings').textContent=a.findings||0;
-  $('m-won').textContent=a.battles_won||0; $('m-lost').textContent=a.battles_lost||0;
+  $('m-level').textContent='LV '+a.level; $('m-xptext').textContent=(a.xp||0)+' / '+(a.xp_max||100)+' XP';
+  $('m-tasks').textContent=a.tasks_run||0; $('m-findings').textContent=a.findings||0; $('m-won').textContent=a.battles_won||0; $('m-lost').textContent=a.battles_lost||0;
   $('m-xp-input').value=50;
-  document.querySelectorAll('.m-sbtn').forEach(b=>b.classList.toggle('sel', b.dataset.st===a.status));
-  document.querySelectorAll('.m-sbtn').forEach(b=>{ b.classList.remove('active','idle','locked'); if(b.dataset.st===a.status) b.classList.add(a.status); });
-
+  document.querySelectorAll('.m-sbtn').forEach(b=>{ b.classList.remove('sel','active','idle','locked'); if(b.dataset.st===a.status) b.classList.add('sel',a.status); });
   const card=$('modal-card'); card.style.borderColor=col; card.style.boxShadow='0 0 30px '+col+'88';
   $('modal').classList.add('show');
-
   const fill=$('m-xpfill'); fill.style.background=col; fill.style.transition='none'; fill.style.width='0';
   const ratio=Math.min(100,((a.xp||0)/((a.xp_max||1)))*100);
   requestAnimationFrame(()=>{ fill.style.transition='width .8s ease'; fill.style.width=ratio+'%'; });
-
   $('m-log').textContent='Loading…';
-  API.log(id).then(rows=>{
-    $('m-log').innerHTML=(rows&&rows.length)?rows.slice(0,8).map(r=>{
-      const t=(r.timestamp||'').slice(11,16); const xp=r.xp_earned?` <span style="color:#ffd60a">+${r.xp_earned}</span>`:'';
-      return `<div class="ln"><span class="t">[${t}]</span> ${r.message||''}${xp}</div>`;
-    }).join(''):'<div class="ln" style="color:#7a6a9a">No log entries yet.</div>';
-  }).catch(()=>{ $('m-log').textContent='Log unavailable.'; });
+  API.log(id).then(rows=>{ $('m-log').innerHTML=(rows&&rows.length)?rows.slice(0,8).map(r=>{ const t=(r.timestamp||'').slice(11,16); const xp=r.xp_earned?` <span style="color:#ffd60a">+${r.xp_earned}</span>`:'';
+    return `<div class="ln"><span class="t">[${t}]</span> ${r.message||''}${xp}</div>`; }).join(''):'<div class="ln" style="color:#7a6a9a">No log entries yet.</div>'; }).catch(()=>{ $('m-log').textContent='Log unavailable.'; });
 }
 function closeModal(){ $('modal').classList.remove('show'); modalAgentId=null; }
 $('modal-close').onclick=closeModal;
 $('modal').onclick=e=>{ if(e.target===$('modal')) closeModal(); };
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
-
 $('m-award-btn').onclick=async()=>{
-  if(!modalAgentId) return;
-  const amt=parseInt($('m-xp-input').value,10)||0; if(amt<=0) return;
-  const room=MC.rooms[modalAgentId]; if(room&&MC.scene) MC.scene.floatXp(room, amt);
-  try{
-    const res=await API.awardXp(modalAgentId, amt);
-    if(res&&res.agent){
-      const i=MC.agents.findIndex(x=>x.id===modalAgentId); if(i>=0) MC.agents[i]=res.agent;
+  if(!modalAgentId) return; const amt=parseInt($('m-xp-input').value,10)||0; if(amt<=0) return;
+  const room=MC.rooms[modalAgentId]; if(room&&MC.scene) MC.scene.floatXp(room,amt);
+  try{ const res=await API.awardXp(modalAgentId,amt);
+    if(res&&res.agent){ const i=MC.agents.findIndex(x=>x.id===modalAgentId); if(i>=0) MC.agents[i]=res.agent;
       if(room&&MC.scene){ MC.scene.styleRoom(room,res.agent,false); if(res.leveled_up) MC.scene.levelUpBurst(room); }
-      renderSidebar(); openModal(modalAgentId);
-    }
-  }catch(e){}
+      renderSidebar(); openModal(modalAgentId); } }catch(e){}
 };
-document.querySelectorAll('.m-sbtn').forEach(btn=>{
-  btn.onclick=async()=>{
-    if(!modalAgentId) return; const st=btn.dataset.st;
-    try{
-      const res=await API.setStatus(modalAgentId, st);
-      if(res&&res.id){
-        const i=MC.agents.findIndex(x=>x.id===modalAgentId); if(i>=0) MC.agents[i]=res;
-        const room=MC.rooms[modalAgentId];
-        if(room&&MC.scene){ MC.scene.tweens.add({targets:room.container, alpha:res.status==='locked'?0.5:0, duration:150, yoyo:res.status!=='locked',
-          onYoyo:()=>MC.scene.styleRoom(room,res,false), onComplete:()=>{ MC.scene.styleRoom(room,res,false); MC.scene.ensureChar(res); }}); }
-        renderSidebar(); openModal(modalAgentId);
-      }
-    }catch(e){}
-  };
-});
+document.querySelectorAll('.m-sbtn').forEach(btn=>{ btn.onclick=async()=>{
+  if(!modalAgentId) return; const st=btn.dataset.st;
+  try{ const res=await API.setStatus(modalAgentId,st);
+    if(res&&res.id){ const i=MC.agents.findIndex(x=>x.id===modalAgentId); if(i>=0) MC.agents[i]=res;
+      const room=MC.rooms[modalAgentId];
+      if(room&&MC.scene){ MC.scene.styleRoom(room,res,false); MC.scene.ensureChar(res); }
+      renderSidebar(); openModal(modalAgentId); } }catch(e){}
+}; });
 $('reset-view').onclick=()=>{ if(MC.scene) MC.scene.resetView(); };
-
-/* expose for the sidebar / external triggers */
-window.missionControl = {
-  refresh: ()=>MC.scene&&MC.scene.refresh(false),
-  selectAgent: id=>{ if(MC.scene) MC.scene.panTo(id); openModal(id); },
-  awardXP: (id,amt)=>API.awardXp(id,amt),
-};
-
-loadMissions();
-setInterval(loadMissions, 60000);
+window.missionControl={ refresh:()=>MC.scene&&MC.scene.refresh(false), selectAgent:id=>{ if(MC.scene) MC.scene.panTo(id); openModal(id); }, awardXP:(id,amt)=>API.awardXp(id,amt) };
+loadMissions(); setInterval(loadMissions, 60000);
 </script>
 </body>
 </html>
