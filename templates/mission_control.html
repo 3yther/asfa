@@ -659,107 +659,118 @@ function fmtTs(ts){
 }
 
 // ── Phaser map scene ──────────────────────────────────────────────────────
-// Pure procedural top-down pixel-art city. No external image assets — every
-// pixel is drawn with the Phaser Graphics API. Each agent owns one building;
-// the building's visual state (active / idle / locked) tracks agent.status.
+// Top-down pixel-art town stamped from the real RPG tileset assets in /static
+// (tiles-map.png = 11×9 grid of 32px frames, seamless grass tiles, hero sprite).
+// Each agent owns one building built from tileset frames; its visual state
+// (active / idle / locked) tracks agent.status.
 
-// Fixed layout on the 840×460 canvas. Positions are the CENTRE of each building.
+const TILE = 32;
+const MAP_COLS = 26, MAP_ROWS = 14;        // 832×448 play area on the 840×460 canvas
+
+// frameIndex = row*11 + col within tiles-map.png. Each building is stamped as a
+// cols×rows grid of 32px frames anchored at its top-left (x, y).
 const BUILDING_DEFS = {
-  nexus:    {x:420, y:150, w:80, h:80, body:0x0c1a3d, roof:0x0a1428, winOn:0x60a5fa, winOff:0x1e3a8a, glow:0x22d3ee, feat:"antenna"},
-  sentinel: {x:120, y:112, w:56, h:64, body:0x042f2e, roof:0x021f1e, winOn:0x10b981, winOff:0x064e3b, glow:0x10b981, feat:"battlements"},
-  axiom:    {x:600, y:108, w:60, h:60, body:0x1e1b4b, roof:0x13104d, winOn:0xa78bfa, winOff:0x312e81, glow:0xa78bfa, feat:"columns"},
-  pixel:    {x:742, y:110, w:52, h:56, body:0x042f2e, roof:0x021f1e, winOn:0x2dd4bf, winOff:0x115e59, glow:0x2dd4bf, feat:"marquee"},
-  pyro:     {x:118, y:360, w:52, h:56, body:0x2d1b00, roof:0x1c1100, winOn:0xf59e0b, winOff:0x78350f, glow:0xf59e0b, feat:"chimney"},
-  quant:    {x:560, y:362, w:56, h:60, body:0x0c1a3d, roof:0x07112b, winOn:0x3b82f6, winOff:0x1e3a8a, glow:0x3b82f6, feat:"dome"},
-  ghost:    {x:742, y:360, w:52, h:60, body:0x1f1030, roof:0x150820, winOn:0xec4899, winOff:0x831843, glow:0xec4899, feat:"gable"},
-  forge:    {x:300, y:378, w:48, h:52, body:0x1f2937, roof:0x111827, winOn:0x374151, winOff:0x374151, glow:0,        feat:"locked"}
+  nexus:    {x:370, y:80,  cols:3, rows:3, frames:[3,4,5,14,15,16,25,26,27], accent:0x22d3ee, feat:"nexus"},
+  sentinel: {x:60,  y:60,  cols:2, rows:2, frames:[0,1,11,12],                accent:0x10b981, feat:"sentinel"},
+  axiom:    {x:560, y:60,  cols:3, rows:3, frames:[8,9,10,19,20,21,30,31,32], accent:0xa78bfa, feat:"axiom"},
+  pixel:    {x:720, y:60,  cols:2, rows:2, frames:[0,1,11,12],                accent:0x2dd4bf, feat:"pixel"},
+  pyro:     {x:60,  y:280, cols:2, rows:2, frames:[33,34,44,45],              accent:0xf59e0b, feat:"pyro"},
+  quant:    {x:560, y:280, cols:2, rows:2, frames:[66,67,77,78],              accent:0x3b82f6, feat:"quant"},
+  ghost:    {x:720, y:280, cols:2, rows:2, frames:[68,69,79,80],              accent:0xec4899, feat:"ghost"},
+  forge:    {x:260, y:280, cols:2, rows:2, frames:[71,72,82,83],              accent:0x374151, feat:"locked"}
 };
 
-// Dirt paths (24px) stubbing each building out to the main horizontal road.
+// 16px dirt stubs linking each building to the trunk road (#2d1f0e).
 const PATH_RECTS = [
-  {x:108, y:144, w:24, h:70},  // sentinel → road
-  {x:588, y:138, w:24, h:76},  // axiom → road
-  {x:730, y:138, w:24, h:76},  // pixel → road
-  {x:408, y:190, w:24, h:24},  // nexus → road
-  {x:106, y:246, w:24, h:86},  // pyro → road
-  {x:288, y:246, w:24, h:106}, // forge → road
-  {x:548, y:246, w:24, h:86},  // quant → road
-  {x:730, y:246, w:24, h:84}   // ghost → road
+  {x:84,  y:124, w:16, h:68},   // sentinel ↓ road
+  {x:600, y:156, w:16, h:36},   // axiom    ↓ road
+  {x:744, y:124, w:16, h:68},   // pixel    ↓ road
+  {x:410, y:176, w:16, h:16},   // nexus    ↓ road
+  {x:84,  y:224, w:16, h:56},   // pyro     ↑ road
+  {x:284, y:224, w:16, h:56},   // forge    ↑ road
+  {x:584, y:224, w:16, h:56},   // quant    ↑ road
+  {x:744, y:224, w:16, h:56}    // ghost    ↑ road
 ];
 
+// Scattered cypress trees (tileset frame 0). Pixel positions dodge roads/buildings.
 const TREE_POS = [
-  {x:60,y:60},{x:240,y:55},{x:330,y:175},{x:500,y:185},{x:680,y:55},{x:800,y:185},
-  {x:55,y:300},{x:215,y:430},{x:380,y:430},{x:470,y:300},{x:650,y:300},{x:805,y:430}
+  {x:140,y:80},{x:220,y:80},{x:140,y:340},{x:220,y:340},{x:480,y:80},{x:480,y:340},
+  {x:640,y:80},{x:640,y:340},{x:80,y:160},{x:750,y:160},{x:80,y:400},{x:750,y:400}
 ];
-const ROCK_POS = [
-  {x:18,y:140},{x:818,y:120},{x:24,y:415},{x:812,y:330},{x:205,y:18},{x:560,y:18}
-];
-const LAMP_POS = [
-  {x:400,y:208},{x:440,y:208},{x:400,y:252},{x:440,y:252},   // crossroad corners
-  {x:120,y:208},{x:600,y:208},{x:742,y:208},                 // top path mouths
-  {x:118,y:252},{x:300,y:252},{x:560,y:252},{x:742,y:252}    // bottom path mouths
-];
+
+function cssHex(n){ return "#" + (n >>> 0 & 0xffffff).toString(16).padStart(6,"0"); }
 
 class MapScene extends Phaser.Scene {
   constructor(){ super("map"); }
 
+  preload(){
+    this.load.image("grass",  "/static/grass-tile.png");
+    this.load.image("grass2", "/static/grass-tile-2.png");
+    this.load.image("grass3", "/static/grass-tile-3.png");
+    this.load.spritesheet("tiles", "/static/tiles-map.png", {frameWidth:32, frameHeight:32});
+    this.load.spritesheet("hero",  "/static/hero.png",      {frameWidth:32, frameHeight:48});
+  }
+
   create(){
     mapScene = this;
+    window.mapScene = this;          // external JS (selectAgent / state swaps) hooks in here
     this.buildings = {};
     this.drawGround();
     this.drawRoads();
     this.drawDecor();
+    this.placeHero();
     this.selGfx = this.add.graphics().setDepth(20);
     if(pendingAgents){ this.setAgents(pendingAgents, pendingSelected); pendingAgents = null; }
   }
 
-  // ── Ground: dark grass tiles + grid + dirt paths ───────────────────────
+  // ── Ground: seamless grass tiles, seeded per position + dirt stubs ──────
   drawGround(){
-    const g = this.add.graphics();
-    g.fillStyle(0x1a2e1a, 1);
-    g.fillRect(0, 0, 840, 460);
-    g.lineStyle(1, 0x1f3520, 0.3);
-    for(let x=0; x<=840; x+=16){ g.beginPath(); g.moveTo(x,0); g.lineTo(x,460); g.strokePath(); }
-    for(let y=0; y<=460; y+=16){ g.beginPath(); g.moveTo(0,y); g.lineTo(840,y); g.strokePath(); }
+    const keys = ["grass","grass2","grass3"];
+    for(let col=0; col<=MAP_COLS; col++){
+      for(let row=0; row<=MAP_ROWS; row++){
+        const k = keys[(col*31 + row*7) % 3];   // seeded so the layout is stable
+        this.add.image(col*TILE, row*TILE, k)
+          .setOrigin(0,0).setDisplaySize(TILE, TILE).setDepth(0);
+      }
+    }
+    const g = this.add.graphics().setDepth(1);
     g.fillStyle(0x2d1f0e, 1);
     PATH_RECTS.forEach(p=> g.fillRect(p.x, p.y, p.w, p.h));
   }
 
-  // ── Roads: H + V trunk roads, crossroad, dashed centre lines ───────────
+  // ── Roads: trunk H+V, lighter crossroad, dashed centre lines ───────────
   drawRoads(){
-    const g = this.add.graphics();
+    const g = this.add.graphics().setDepth(2);
     g.fillStyle(0x1a2332, 1);
-    g.fillRect(0, 214, 840, 32);   // horizontal
-    g.fillRect(404, 0, 32, 460);   // vertical
-    g.fillStyle(0x24304a, 1);
-    g.fillRect(404, 214, 32, 32);  // crossroad (lighter tint)
+    g.fillRect(0, 192, 840, 32);     // horizontal (rows 6–7)
+    g.fillRect(400, 0, 32, 460);     // vertical (cols 12–13)
+    g.fillStyle(0x222d3d, 1);
+    g.fillRect(400, 192, 32, 32);    // crossroad (lighter)
     g.fillStyle(0x374151, 1);
-    for(let x=0; x<840; x+=24){ g.fillRect(x, 229, 12, 2); }   // H dashes
-    for(let y=0; y<460; y+=24){ g.fillRect(419, y, 2, 12); }   // V dashes
+    for(let x=0; x<840; x+=24){ g.fillRect(x, 207, 12, 2); }   // H dashes @ y=208
+    for(let y=0; y<460; y+=24){ g.fillRect(415, y, 2, 12); }   // V dashes @ x=416
   }
 
-  // ── Decor: trees, rocks, fountain, street lamps ────────────────────────
+  // ── Decor: cypress trees + well at the crossroad ───────────────────────
   drawDecor(){
-    const g = this.add.graphics();
-    TREE_POS.forEach(t=>{
-      g.fillStyle(0x166534, 1); g.fillCircle(t.x, t.y, 9);
-      g.fillStyle(0x15803d, 1); g.fillCircle(t.x-2, t.y-3, 5);
-    });
-    g.fillStyle(0x374151, 1);
-    ROCK_POS.forEach(r=> g.fillRect(r.x, r.y, 8, 6));
-    LAMP_POS.forEach(l=> this.drawLamp(g, l.x, l.y));
-    // fountain at the central crossroad
-    g.fillStyle(0x1e3a5f, 1); g.fillCircle(420, 230, 14);
-    g.fillStyle(0x3b82f6, 1); g.fillCircle(420, 230, 10);
-    g.fillStyle(0xbfdbfe, 1); g.fillCircle(420, 230, 4);
-    const ripple = this.add.circle(420, 230, 6).setStrokeStyle(1.5, 0xbfdbfe, 0.8);
-    this.tweens.add({targets:ripple, scale:2.4, alpha:0, duration:1800, repeat:-1, ease:"Sine.easeOut"});
+    TREE_POS.forEach(t=>
+      this.add.sprite(t.x, t.y, "tiles", 0).setOrigin(0,0).setDepth(3));
+    // well (frame 71) centred on the intersection
+    this.add.sprite(416, 208, "tiles", 71).setOrigin(0.5).setDepth(3);
   }
 
-  drawLamp(g, x, y){
-    g.fillStyle(0xfbbf24, 1); g.fillCircle(x, y, 2.5);
-    g.lineStyle(1, 0xfbbf24, 0.8);
-    g.beginPath(); g.moveTo(x-3,y); g.lineTo(x+3,y); g.moveTo(x,y-3); g.lineTo(x,y+3); g.strokePath();
+  // ── Hero idles at the HQ crossroad ─────────────────────────────────────
+  placeHero(){
+    this.hero = this.add.sprite(416, 200, "hero", 0).setOrigin(0.5, 1).setDepth(16);
+    const frameCount = this.textures.get("hero").frameTotal - 1;   // minus __BASE
+    if(frameCount >= 3 && !this.anims.exists("hero-idle")){
+      this.anims.create({
+        key:"hero-idle",
+        frames:this.anims.generateFrameNumbers("hero", {start:0, end:2}),
+        frameRate:4, repeat:-1
+      });
+      this.hero.play("hero-idle");
+    }
   }
 
   // ── Buildings ──────────────────────────────────────────────────────────
@@ -776,9 +787,11 @@ class MapScene extends Phaser.Scene {
 
   clearBuildings(){
     Object.values(this.buildings).forEach(c=>{
+      if(c._stateTween) c._stateTween.stop();
+      if(c._flicker) c._flicker.remove();
       if(c._smoke) c._smoke.remove();
-      c.list.forEach(ch=> this.tweens.killTweensOf(ch));
       this.tweens.killTweensOf(c);
+      c.list.slice().forEach(ch=> this.tweens.killTweensOf(ch));
       c.destroy();
     });
     this.buildings = {};
@@ -786,143 +799,145 @@ class MapScene extends Phaser.Scene {
   }
 
   buildBuilding(a, def, status){
-    const w = def.w, h = def.h, left = -w/2, top = -h/2;
-    const lit = status === "active";
-    const locked = status === "locked";
-    const c = this.add.container(def.x, def.y).setDepth(10);
+    const w = def.cols*TILE, h = def.rows*TILE;
+    const hw = w/2, hh = h/2;
+    const c = this.add.container(def.x + hw, def.y + hh).setDepth(10);
+    c._def = def; c._w = w; c._h = h; c._name = (a.name || a.id);
 
-    // shadow
-    const sh = this.add.graphics();
-    sh.fillStyle(0x000000, 0.4); sh.fillRect(left+3, top+3, w, h);
-    c.add(sh);
+    // tileset body (frames stamped left→right, top→bottom)
+    const tiles = [];
+    def.frames.forEach((fr, i)=>{
+      const col = i % def.cols, row = Math.floor(i / def.cols);
+      const sp = this.add.sprite(col*TILE - hw, row*TILE - hh, "tiles", fr).setOrigin(0,0);
+      tiles.push(sp); c.add(sp);
+    });
+    c._tiles = tiles;
 
-    // body + roof + door
-    const g = this.add.graphics();
-    g.fillStyle(def.body, 1); g.fillRect(left, top, w, h);
-    g.fillStyle(def.roof, 1); g.fillRect(left, top, w, 12);
-    g.fillStyle(0x0a0e16, 1); g.fillRect(left + w/2 - 5, top + h - 13, 10, 13);
-    c.add(g);
+    // status overlay (border + tint fill) and lock icon
+    c._overlay = this.add.graphics(); c.add(c._overlay);
+    c._lock = this.add.graphics(); c.add(c._lock);
 
-    // windows (kept on their own graphics so they can pulse)
-    const wg = this.add.graphics();
-    if(a.id !== "forge"){
-      wg.fillStyle(lit ? def.winOn : def.winOff, 1);
-      const ww = Math.max(6, Math.round(w*0.16));
-      const xs = [left + w*0.5 - ww - 4, left + w*0.5 + 4];
-      const ys = [top + 16, top + 16 + ww + 6];
-      xs.forEach(x=> ys.forEach(y=> wg.fillRect(x, y, ww, ww)));
+    // nexus transmission antenna (always pulsing above HQ)
+    if(def.feat === "nexus"){
+      const ant = this.add.container(0, -hh);
+      const ag = this.add.graphics();
+      ag.fillStyle(0x9ca3af, 1); ag.fillRect(-1, -16, 2, 16);
+      ag.fillStyle(def.accent, 1); ag.fillCircle(0, -16, 3);
+      ant.add(ag); c.add(ant);
+      this.tweens.add({targets:ant, scaleY:{from:0.95, to:1.05},
+        duration:1600, yoyo:true, repeat:-1, ease:"Sine.easeInOut"});
     }
-    c.add(wg);
-    if(lit){
-      this.tweens.add({targets:wg, alpha:{from:0.7, to:1}, duration:2000,
-        yoyo:true, repeat:-1, ease:"Sine.easeInOut"});
-    }
-
-    // per-agent rooftop / facade feature
-    this.drawFeature(c, a.id, def, status, {left, top, w, h, lit});
-
-    // border / glow
-    const bd = this.add.graphics();
-    if(lit && def.glow){
-      bd.lineStyle(6, def.glow, 0.12); bd.strokeRect(left-2, top-2, w+4, h+4);
-      bd.lineStyle(2, def.glow, 0.9);  bd.strokeRect(left, top, w, h);
-    } else {
-      bd.lineStyle(1, locked ? 0x374151 : 0x1e2a3a, 1); bd.strokeRect(left, top, w, h);
-    }
-    c.add(bd);
 
     // level badge (top-right)
+    const bw = 26;
     const badge = this.add.graphics();
-    badge.fillStyle(locked ? 0x374151 : (def.glow || 0x334155), 1);
-    badge.fillRect(w/2 - 16, top, 16, 11);
+    badge.fillStyle(status === "locked" ? 0x374151 : def.accent, 1);
+    badge.fillRect(hw - bw, -hh, bw, 12);
     c.add(badge);
-    c.add(this.add.text(w/2 - 8, top + 5, "" + (a.level||0),
+    c.add(this.add.text(hw - bw/2, -hh + 6, "LV " + (a.level||0),
       {fontFamily:"monospace", fontSize:"8px", color:"#0b131c"}).setOrigin(0.5));
 
-    // name label (below)
-    c.add(this.add.text(0, h/2 + 4, (a.name||a.id).toUpperCase(),
-      {fontFamily:"monospace", fontSize:"9px",
-       color: locked ? "#64748b" : "#cbd5e1"}).setOrigin(0.5, 0));
+    // name label (below building)
+    c._label = this.add.text(0, hh + 4, (a.name||a.id).toUpperCase(),
+      {fontFamily:"monospace", fontSize:"11px", color:"#e2e8f0"}).setOrigin(0.5, 0);
+    c.add(c._label);
 
-    // interactivity
-    c.setInteractive(new Phaser.Geom.Rectangle(left, top, w, h + 16),
+    // hover brighten overlay (top of stack)
+    c._hoverOv = this.add.graphics(); c.add(c._hoverOv);
+
+    // interactivity (hit area covers building + label)
+    c.setInteractive(new Phaser.Geom.Rectangle(-hw, -hh, w, h + 18),
       Phaser.Geom.Rectangle.Contains);
     c.on("pointerover", ()=>{
-      this.tweens.add({targets:c, scaleX:1.08, scaleY:1.08, duration:120});
-      this.input.setDefaultCursor(locked ? "not-allowed" : "pointer");
+      this.input.setDefaultCursor(c._locked ? "not-allowed" : "pointer");
+      this.tweens.add({targets:c, scaleX:1.05, scaleY:1.05, duration:120});
+      c._hoverOv.clear();
+      c._hoverOv.fillStyle(0xffffff, 0.1); c._hoverOv.fillRect(-hw, -hh, w, h);
     });
     c.on("pointerout", ()=>{
-      this.tweens.add({targets:c, scaleX:1, scaleY:1, duration:120});
       this.input.setDefaultCursor("default");
+      this.tweens.add({targets:c, scaleX:1, scaleY:1, duration:120});
+      c._hoverOv.clear();
     });
     c.on("pointerdown", ()=>{
-      if(locked) toast((a.name||a.id).toUpperCase() + " is locked");
-      else selectAgent(a.id, true);
+      if(c._locked){ toast(c._name.toUpperCase() + " is locked"); return; }
+      selectAgent(a.id, true);
+      this.setSelected(a.id);
     });
 
-    c._def = def;
+    this.applyState(c, status);
     return c;
   }
 
-  drawFeature(c, id, def, status, m){
-    const {left, top, w, h, lit} = m;
-    const g = this.add.graphics();
-    switch(id){
-      case "nexus": // antenna + beacon
-        g.fillStyle(0x9ca3af, 1); g.fillRect(-1.5, top-16, 3, 16);
-        g.fillStyle(lit ? def.glow : 0x475569, 1); g.fillCircle(0, top-18, 3);
-        break;
-      case "sentinel": // battlements
-        g.fillStyle(def.roof, 1);
-        [-1, 0, 1].forEach(i=> g.fillRect(i*14 - 4, top-6, 9, 6));
-        break;
-      case "axiom": // 2 front columns
-        g.fillStyle(def.roof, 1);
-        g.fillRect(left + w*0.28 - 3, top + 16, 6, h - 26);
-        g.fillRect(left + w*0.72 - 3, top + 16, 6, h - 26);
-        break;
-      case "pixel": // marquee sign
-        g.fillStyle(lit ? def.winOn : 0x115e59, 1);
-        g.fillRect(left + 6, top + 13, w - 12, 7);
-        break;
-      case "pyro": // chimney (offset right) + smoke when active
-        g.fillStyle(def.roof, 1); g.fillRect(left + w*0.6, top - 14, 8, 18);
-        if(lit) this.startSmoke(c, left + w*0.6 + 4, top - 14);
-        break;
-      case "quant": // observatory dome
-        g.fillStyle(def.roof, 1);
-        g.beginPath();
-        g.arc(0, top, w*0.3, Phaser.Math.DegToRad(180), Phaser.Math.DegToRad(360), false);
-        g.closePath(); g.fillPath();
-        break;
-      case "ghost": // pointed gable roof
-        g.fillStyle(def.roof, 1);
-        g.fillTriangle(left, top + 2, left + w, top + 2, 0, top - 16);
-        break;
-      case "locked": // forge — crumbling ruin + lock icon
-        g.fillStyle(0x111827, 1);
-        g.fillRect(left + 4, top + 6, w*0.4, h - 9);
-        g.fillRect(left + w*0.52, top + 11, w*0.4, h - 14);
-        g.fillStyle(0x374151, 1);
-        g.fillRect(left + 8, top + 18, 7, 7); g.fillRect(left + w - 16, top + 22, 7, 7);
-        const ly = top + h*0.55;
-        g.fillStyle(0x9ca3af, 1); g.fillRect(-6, ly, 12, 9);
-        g.lineStyle(2, 0x9ca3af, 1);
-        g.beginPath(); g.arc(0, ly, 4, Phaser.Math.DegToRad(180), Phaser.Math.DegToRad(360), false); g.strokePath();
-        break;
+  // ── Per-status overlay / glow / tint / animation ───────────────────────
+  applyState(c, status){
+    const def = c._def, hw = c._w/2, hh = c._h/2;
+    const locked = status === "locked";
+    const active = status === "active";
+    c._locked = locked;
+
+    // tear down any prior state animation
+    if(c._stateTween){ c._stateTween.stop(); c._stateTween = null; }
+    if(c._flicker){ c._flicker.remove(); c._flicker = null; }
+    if(c._smoke){ c._smoke.remove(); c._smoke = null; }
+
+    // tint tiles when locked
+    c._tiles.forEach(t=> locked ? t.setTint(0x333333) : t.clearTint());
+
+    // border + subtle fill
+    const ov = c._overlay; ov.clear(); ov.alpha = 1;
+    if(active){
+      ov.fillStyle(def.accent, 0.08); ov.fillRect(-hw, -hh, c._w, c._h);
+      ov.lineStyle(2, def.accent, 1.0); ov.strokeRect(-hw, -hh, c._w, c._h);
+    } else if(!locked){
+      ov.lineStyle(1, 0x374151, 0.5); ov.strokeRect(-hw, -hh, c._w, c._h);
     }
-    c.add(g);
+
+    // lock icon (body 8×6 + arc shackle)
+    const lg = c._lock; lg.clear();
+    if(locked){
+      lg.fillStyle(0xffffff, 1); lg.fillRect(-4, 0, 8, 6);
+      lg.lineStyle(2, 0xffffff, 1);
+      lg.beginPath();
+      lg.arc(0, 0, 4, Phaser.Math.DegToRad(180), Phaser.Math.DegToRad(360), false);
+      lg.strokePath();
+    }
+
+    // label colour by state
+    c._label.setColor(locked ? "#64748b" : active ? cssHex(def.accent) : "#94a3b8");
+
+    // active: pulsing border + occasional flicker (+ smoke for pyro)
+    if(active){
+      c._stateTween = this.tweens.add({targets:ov, alpha:{from:0.6, to:1.0},
+        duration:2000, yoyo:true, repeat:-1, ease:"Sine.easeInOut"});
+      c._flicker = this.time.addEvent({delay:Phaser.Math.Between(3000,8000), loop:true,
+        callback:()=>{
+          if(!c.active || !c._overlay) return;
+          if(c._stateTween) c._stateTween.pause();
+          this.tweens.add({targets:ov, alpha:0.3, duration:70, yoyo:true,
+            onComplete:()=>{ if(c._stateTween) c._stateTween.resume(); }});
+        }});
+      if(def.feat === "pyro") this.startSmoke(c);
+    }
   }
 
-  startSmoke(c, sx, sy){
+  startSmoke(c){
+    const sx = -c._w/2 + 48, sy = -c._h/2 + 8;   // chimney, relative to building
     c._smoke = this.time.addEvent({delay:550, loop:true, callback:()=>{
       if(!c.active) return;
-      const puff = this.add.circle(sx, sy, 2 + Math.random()*2, 0xb0b7c3, 0.45);
+      const puff = this.add.circle(sx, sy, 2 + Math.random()*2, 0xb0b7c3, 0.5);
       c.add(puff);
       this.tweens.add({targets:puff, y:sy - 30, x:sx + (Math.random()*12 - 6),
         alpha:0, scale:2, duration:1700, ease:"Sine.easeOut",
         onComplete:()=> puff.destroy()});
     }});
+  }
+
+  // Update a single building's state without rebuilding the map.
+  setBuildingState(id, status){
+    const c = this.buildings[id];
+    if(!c) return;
+    this.applyState(c, id === "forge" ? "locked" : status);
   }
 
   setSelected(id){
@@ -931,8 +946,8 @@ class MapScene extends Phaser.Scene {
     const c = this.buildings[id];
     if(!c) return;
     const d = c._def;
-    this.selGfx.lineStyle(2, 0x22d3ee, 1);
-    this.selGfx.strokeRect(d.x - d.w/2 - 3, d.y - d.h/2 - 3, d.w + 6, d.h + 6);
+    this.selGfx.lineStyle(2, 0xffffff, 0.8);
+    this.selGfx.strokeRect(d.x - 3, d.y - 3, c._w + 6, c._h + 6);
   }
 }
 
