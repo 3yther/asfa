@@ -38,10 +38,13 @@
   .tb-home{color:var(--cyan);text-decoration:none;font-size:.66rem;letter-spacing:2px;padding:3px 8px;border:1px solid #00ffff44;}
   .tb-home:hover{background:#00ffff11;box-shadow:0 0 8px #00ffff44;}
   .tb-stats{display:flex;gap:8px;align-items:center;margin-left:6px;}
-  .stat{display:flex;flex-direction:column;align-items:center;line-height:1.1;padding:3px 9px;background:#031107;border:1px solid var(--green-dim);}
+  .stat{position:relative;display:flex;flex-direction:column;align-items:center;line-height:1.1;padding:3px 9px 3px 11px;background:#031107;border:1px solid var(--green-dim);}
+  .stat::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--green);animation:heartbeat 1s ease-in-out infinite;}
+  @keyframes heartbeat{0%,100%{opacity:.3;}50%{opacity:1;}}
   .stat .k{font-size:.46rem;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;}
   .stat .v{font-size:.74rem;font-weight:700;color:var(--green);}
   .stat.gold .v{color:var(--gold);} .stat.pink .v{color:var(--pink);} .stat.red .v{color:var(--red);}
+  .stat.blue .v{color:#4cc9ff;} .stat.green .v{color:var(--green);}
   .tb-status{margin-left:auto;font-size:.64rem;letter-spacing:2px;color:var(--green);white-space:nowrap;text-shadow:0 0 8px currentColor;}
   .tb-status.alert{color:var(--red);animation:critpulse 1s ease-in-out infinite;}
   @keyframes critpulse{0%,100%{opacity:1;}50%{opacity:.4;}}
@@ -55,11 +58,13 @@
   .roster{flex:0 0 220px;overflow-y:auto;overflow-x:hidden;background:#02050a;border-right:2px solid var(--green);padding:10px;display:flex;flex-direction:column;}
   .ros-head{display:flex;justify-content:space-between;align-items:center;font-size:.6rem;letter-spacing:2px;color:var(--green);text-transform:uppercase;padding-bottom:6px;border-bottom:1px solid var(--green-dim);margin-bottom:8px;text-shadow:0 0 8px currentColor;}
   .ros-head .mobile{color:var(--gold);font-size:.56rem;}
-  .arow{display:grid;grid-template-columns:10px 1fr auto;gap:7px;align-items:center;padding:6px 7px;margin-bottom:4px;background:#031007;cursor:pointer;border-left:2px solid transparent;border:1px solid #0d2010;transition:background .15s;}
-  .arow:hover{background:#06200d;}
+  .arow{display:grid;grid-template-columns:10px 1fr auto;gap:7px;align-items:center;padding:6px 10px;margin-bottom:3px;background:#031007;cursor:pointer;border-left:2px solid transparent;border-bottom:1px solid #0d2010;transition:background .15s;}
+  .arow:hover{background:#39ff140d;}
   .arow .dot{width:7px;height:7px;border-radius:50%;}
   .arow .dot.on{animation:pulse 1.5s ease-in-out infinite;}
-  .arow .nm{font-size:.68rem;font-weight:700;}
+  .arow .nm{font-size:.68rem;font-weight:700;display:flex;align-items:center;gap:5px;}
+  .arow .rdot{width:4px;height:4px;border-radius:50%;flex:0 0 4px;}
+  .uptime{margin-top:6px;font-size:.5rem;letter-spacing:1px;color:#39ff1466;text-align:center;font-family:inherit;}
   .arow .rl{font-size:.5rem;color:var(--muted);}
   .arow .tk{font-size:.5rem;color:#39ff1499;font-style:italic;margin-top:1px;}
   .arow .lv{font-size:.56rem;color:var(--gold);font-weight:700;}
@@ -174,6 +179,9 @@
       <div class="stat"><span class="k">Agents</span><span class="v mono" id="stat-active">–/13</span></div>
       <div class="stat gold"><span class="k">XP</span><span class="v mono" id="stat-xp">–</span></div>
       <div class="stat pink"><span class="k">Revenue</span><span class="v mono" id="stat-pnl">–</span></div>
+      <div class="stat"><span class="k">Water</span><span class="v mono" id="stat-water">–</span></div>
+      <div class="stat"><span class="k">Supps</span><span class="v mono" id="stat-supps">–</span></div>
+      <div class="stat"><span class="k">Railway</span><span class="v mono" id="stat-railway">–</span></div>
       <div class="stat"><span class="k">Time</span><span class="v mono" id="stat-time">--:--:--</span></div>
     </div>
     <div class="tb-status" id="fac-status">FACILITY STATUS: OPERATIONAL</div>
@@ -188,6 +196,7 @@
         <button id="btn-overview">OVERVIEW</button>
         <button id="btn-settings">SETTINGS</button>
       </div>
+      <div class="uptime" id="uptime">UPTIME: 0h 0m</div>
     </aside>
 
     <!-- CENTER: facility -->
@@ -260,8 +269,6 @@
 /* ════════════════════════════════════════════════════════════════════════
    ASFA · NEXUS-01 — Hermes HQ style AI agent facility (living simulation v5)
    ════════════════════════════════════════════════════════════════════════ */
-const DW = 1100, DH = 700;
-const CX = 500, CY = 350;
 function hex(n){ return '#' + (n>>>0 & 0xffffff).toString(16).padStart(6,'0'); }
 
 const COL = {
@@ -269,19 +276,22 @@ const COL = {
   purple:0x818cf8, lcyan:0x00d4ff, slate:0x94a3b8, space:0x04010a, white:0xffffff,
 };
 
-/* ── 9 rooms: top-left x/y + size, neon border colour, prop frames ──────── */
+/* ── 9 rooms: center-relative offset (dx,dy = top-left) + size, border ──── */
+/* Absolute x/y are filled in by layoutRooms(cx,cy) at scene create so the   */
+/* facility scales with the live canvas size (FIX 1 + FIX 2 wider spacing).  */
 const ROOMS = {
-  nexus:     {name:'NEXUS',        x:CX-60,  y:CY-50,  w:200, h:120, color:COL.pink,   lw:3,   props:[0,1]      },
-  war:       {name:'WAR ROOM',     x:CX+180, y:CY-180, w:160, h:100, color:COL.red,    lw:2.5, props:[4,5]      },
-  research:  {name:'RESEARCH LAB', x:CX-280, y:CY-180, w:160, h:100, color:COL.purple, lw:2.5, props:[2,3]      },
-  treasury:  {name:'TREASURY',     x:CX+200, y:CY+20,  w:140, h:90,  color:COL.gold,   lw:2.5, props:[6,7]      },
-  comms:     {name:'COMMS LAB',    x:CX-280, y:CY+20,  w:140, h:90,  color:COL.cyan,   lw:2.5, props:[8,9]      },
-  publishing:{name:'PUBLISHING',   x:CX+160, y:CY+180, w:150, h:90,  color:COL.green,  lw:2.5, props:[10,11]    },
-  archives:  {name:'ARCHIVES',     x:CX-260, y:CY+180, w:150, h:90,  color:COL.lcyan,  lw:2.5, props:[12,13]    },
-  incident:  {name:'INCIDENT BAY', x:CX-30,  y:CY-210, w:130, h:80,  color:COL.red,    lw:2,   props:[14,15]    },
-  quarters:  {name:'QUARTERS',     x:CX-60,  y:CY+210, w:180, h:100, color:COL.slate,  lw:2,   props:[16,17,18] },
+  nexus:     {name:'NEXUS',        dx:-70,  dy:-55,  w:220, h:130, color:COL.pink,   lw:3,   props:[0,1,2]      },
+  war:       {name:'WAR ROOM',     dx:200,  dy:-210, w:175, h:105, color:COL.red,    lw:2.5, props:[4,5,6,7]    },
+  research:  {name:'RESEARCH LAB', dx:-330, dy:-210, w:175, h:105, color:COL.purple, lw:2.5, props:[2,3,1,0]    },
+  treasury:  {name:'TREASURY',     dx:230,  dy:10,   w:160, h:100, color:COL.gold,   lw:2.5, props:[6,7,8,5]    },
+  comms:     {name:'COMMS LAB',    dx:-340, dy:10,   w:160, h:100, color:COL.cyan,   lw:2.5, props:[8,9,10,7]   },
+  publishing:{name:'PUBLISHING',   dx:180,  dy:210,  w:165, h:100, color:COL.green,  lw:2.5, props:[10,11,12,9] },
+  archives:  {name:'ARCHIVES',     dx:-300, dy:210,  w:165, h:100, color:COL.lcyan,  lw:2.5, props:[12,13,14,11]},
+  incident:  {name:'INCIDENT BAY', dx:-40,  dy:-260, w:150, h:90,  color:COL.red,    lw:2,   props:[14,15,13]   },
+  quarters:  {name:'QUARTERS',     dx:-80,  dy:260,  w:220, h:120, color:COL.slate,  lw:3,   props:[16,17,18,15,9] },
 };
 const ROOM_IDS = Object.keys(ROOMS);
+function layoutRooms(cx, cy){ ROOM_IDS.forEach(id=>{ const r=ROOMS[id]; r.x=cx+r.dx; r.y=cy+r.dy; }); }
 function roomCenter(id){ const r=ROOMS[id]; return { x:r.x+r.w/2, y:r.y+r.h/2 }; }
 
 /* ── agent → work room (forge is locked / not visible) ──────────────────── */
@@ -291,16 +301,31 @@ const AGENT_ROOM = {
   warden:'incident', 'auto-docs':'publishing', ledger:'treasury',
   'incident-responder':'incident', forge:null,
 };
-const ROOM_TASK = {
-  nexus:'coordinating agents', war:'analyzing strategy', research:'researching',
-  treasury:'tracking P&L', comms:'monitoring comms', publishing:'deploying',
-  archives:'indexing logs', incident:'standing watch', quarters:'resting',
+/* Per-agent rotating task lines (FIX 7) — refreshed on every poll. */
+const TASK_DESCRIPTIONS = {
+  'nexus':              ['coordinating agents', 'routing tasks', 'monitoring facility', 'dispatching orders'],
+  'sentinel':           ['scanning for threats', 'auditing comms', 'monitoring traffic', 'checking perimeter'],
+  'axiom':              ['reviewing code', 'checking PR', 'analyzing patterns', 'refactoring modules'],
+  'oracle':             ['researching markets', 'scanning GitHub', 'reading docs', 'analyzing trends'],
+  'pyro':               ['running scripts', 'optimizing loops', 'debugging Python', 'processing data'],
+  'quant':              ['analyzing P&L', 'scanning signals', 'calculating drawdown', 'reviewing trades'],
+  'ghost':              ['tracing errors', 'reading stack traces', 'hunting bugs', 'checking logs'],
+  'pixel':              ['building assets', 'scripting Lua', 'designing levels', 'testing mechanics'],
+  'warden':             ['pinging ASFA', 'checking Railway', 'monitoring uptime', 'watching logs'],
+  'auto-docs':          ['writing README', 'generating docs', 'updating changelog', 'documenting API'],
+  'ledger':             ['tracking costs', 'logging P&L', 'auditing expenses', 'calculating margins'],
+  'incident-responder': ['on standby', 'reading error logs', 'preparing fixes', 'monitoring alerts'],
+  'forge':              ['locked', 'awaiting activation', '—', '—'],
 };
-function taskFor(a){
-  if(a.status==='locked') return 'offline';
-  if(a.status!=='active') return 'resting';
-  return ROOM_TASK[AGENT_ROOM[a.id]] || 'working';
+/* refreshTaskText() picks a new random task per active agent each poll. */
+function refreshTaskText(){
+  MC.agents.forEach(a=>{
+    if(a.status==='active'){ const list=TASK_DESCRIPTIONS[a.id]||['working']; MC.taskText[a.id]=list[Math.floor(Math.random()*list.length)]; }
+    else if(a.status==='locked') MC.taskText[a.id]='offline';
+    else MC.taskText[a.id]='resting';
+  });
 }
+function taskFor(a){ return MC.taskText[a.id] || (a.status==='locked'?'offline':a.status!=='active'?'resting':(TASK_DESCRIPTIONS[a.id]||['working'])[0]); }
 /* The room an agent is currently in, given its status. */
 function currentRoomId(a){
   if(a.status==='locked' || !AGENT_ROOM[a.id]) return null;
@@ -310,7 +335,7 @@ function roomColor(id){ return ROOMS[id] ? ROOMS[id].color : COL.green; }
 function agentColor(a){ const rid=AGENT_ROOM[a.id]; return rid ? roomColor(rid) : (a.status==='locked'?0x333355:COL.green); }
 
 const WALK_SPEED = 70;
-const MC = { agents:[], live:null, alerts:[], missions:[], chars:{}, rooms:{}, scene:null, failCount:0, ready:false };
+const MC = { agents:[], live:null, alerts:[], missions:[], chars:{}, rooms:{}, taskText:{}, scene:null, failCount:0, ready:false };
 
 const J = { 'Content-Type':'application/json' };
 const API = {
@@ -339,6 +364,11 @@ class BootScene extends Phaser.Scene {
   }
   create(){
     const s=this.add.graphics(); s.fillStyle(0xffffff,1).fillCircle(4,4,4); s.generateTexture('spark',8,8); s.destroy();
+    // vignette texture: transparent centre → dark space edges (FIX 9)
+    const sz=256, ct=this.textures.createCanvas('vignette', sz, sz), ctx=ct.getContext();
+    const grd=ctx.createRadialGradient(sz/2,sz/2,sz*0.18, sz/2,sz/2,sz*0.55);
+    grd.addColorStop(0,'rgba(4,1,10,0)'); grd.addColorStop(1,'rgba(4,1,10,0.6)');
+    ctx.fillStyle=grd; ctx.fillRect(0,0,sz,sz); ct.refresh();
     this.scene.start('Facility');
   }
 }
@@ -351,8 +381,13 @@ class FacilityScene extends Phaser.Scene {
 
   create(){
     MC.scene=this;
+    MC.chars={}; MC.rooms={};   // sprites/containers from any prior scene are gone after restart
+    // dynamic facility centre from the live canvas size (FIX 1)
+    const W=this.scale.width, H=this.scale.height;
+    this.cx=W*0.45; this.cy=H*0.5;
+    layoutRooms(this.cx, this.cy);
     this.cameras.main.setBackgroundColor(COL.space);
-    this.cameras.main.setBounds(-350,-300, DW+700, DH+600);
+    this.cameras.main.setBounds(this.cx-900, this.cy-800, 1800, 1600);
 
     // frame caps so we never request a missing prop/tile frame
     this.propMax = Math.max(0, (this.textures.get('props').frameTotal||1) - 2);
@@ -367,24 +402,34 @@ class FacilityScene extends Phaser.Scene {
     this.charLayer     = this.add.container(0,0).setDepth(7);
     this.fxLayer       = this.add.container(0,0).setDepth(11);
 
-    this.drawSpace();
     this.drawCorridors();
     this.buildRooms();
     this.drawNexusFx();
 
     this.setupCamera();
     this.fitCamera();
-    this.scale.on('resize', ()=>this.fitCamera());
+    this.drawSpace();   // drawn after fit so it frames the visible world view
+    // RESIZE → rebuild the whole scene so rooms re-centre on the new canvas (FIX 1)
+    this._onResize=()=>{ if(!this._restarting){ this._restarting=true; this.time.delayedCall(120, ()=>this.scene.restart()); } };
+    this.scale.on('resize', this._onResize);
+    this.events.once('shutdown', ()=>this.scale.off('resize', this._onResize));
 
     this.refresh(true);
     this.time.addEvent({delay:30000, loop:true, callback:()=>this.refresh(false)});
+    this.time.addEvent({delay:3500, loop:true, callback:()=>this.emitZzz()});
     ROOM_IDS.filter(id=>id!=='nexus').forEach((id,i)=>this.time.delayedCall(i*600, ()=>this.spawnPulse(id)));
   }
 
+  /* Fit the camera to the whole facility bounding box (FIX 1). */
+  facilityBBox(){
+    let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+    ROOM_IDS.forEach(id=>{ const r=ROOMS[id]; minX=Math.min(minX,r.x); minY=Math.min(minY,r.y); maxX=Math.max(maxX,r.x+r.w); maxY=Math.max(maxY,r.y+r.h); });
+    return {x:minX, y:minY, w:maxX-minX, h:maxY-minY, cx:(minX+maxX)/2, cy:(minY+maxY)/2};
+  }
   fitCamera(){
-    const facW=720, facH=620, cx=CX+30, cy=CY+40;
-    const z=Math.min(this.scale.width/facW, this.scale.height/facH)*0.92;
-    const cam=this.cameras.main; cam.setZoom(Phaser.Math.Clamp(z,0.3,2.5)); cam.centerOn(cx, cy);
+    const b=this.facilityBBox(), pad=70;
+    const z=Math.min(this.scale.width/(b.w+pad*2), this.scale.height/(b.h+pad*2));
+    const cam=this.cameras.main; cam.setZoom(Phaser.Math.Clamp(z,0.3,2.5)); cam.centerOn(b.cx, b.cy);
   }
 
   buildCharAnims(){
@@ -403,31 +448,35 @@ class FacilityScene extends Phaser.Scene {
     });
   }
 
-  /* ── Space background: stars, grid, scan line, corner brackets ───────── */
+  /* ── Space background: stars, grid, scan line, corner brackets, vignette ─ */
   drawSpace(){
-    const g=this.bgLayer;
-    g.fillStyle(COL.space,1).fillRect(-350,-300,DW+700,DH+600);
-    // faint facility floor grid
-    g.lineStyle(0.5,COL.green,0.02);
-    for(let x=0;x<=DW;x+=64) g.lineBetween(x,0,x,DH);
-    for(let y=0;y<=DH;y+=64) g.lineBetween(0,y,DW,y);
+    const g=this.bgLayer, v=this.cameras.main.worldView;
+    const x0=v.x-40, y0=v.y-40, x1=v.x+v.width+40, y1=v.y+v.height+40;
+    g.fillStyle(COL.space,1).fillRect(x0,y0,x1-x0,y1-y0);
+    // facility floor grid (FIX 9: 3% alpha)
+    g.lineStyle(0.5,COL.green,0.03);
+    for(let x=Math.floor(x0/64)*64;x<=x1;x+=64) g.lineBetween(x,y0,x,y1);
+    for(let y=Math.floor(y0/64)*64;y<=y1;y+=64) g.lineBetween(x0,y,x1,y);
     // stars
     const pal=[0xffffff,0xffffff,0xffffff,0xb4d4ff,0xb4d4ff,0xfff8e8];
     for(let i=0;i<250;i++){
-      const x=Phaser.Math.Between(0,DW), y=Phaser.Math.Between(0,DH), r=Phaser.Math.FloatBetween(0.3,1.8), col=Phaser.Utils.Array.GetRandom(pal);
+      const x=Phaser.Math.Between(x0,x1), y=Phaser.Math.Between(y0,y1), r=Phaser.Math.FloatBetween(0.3,1.8), col=Phaser.Utils.Array.GetRandom(pal);
       g.fillStyle(col, Phaser.Math.FloatBetween(0.1,0.7)); g.fillCircle(x,y,r);
       if(r>1.2){ g.lineStyle(1,col,0.18); g.lineBetween(x-5,y,x+5,y); g.lineBetween(x,y-5,x,y+5); }
     }
     for(let i=0;i<36;i++){
-      const st=this.add.circle(Phaser.Math.Between(0,DW),Phaser.Math.Between(0,DH),Phaser.Math.FloatBetween(0.5,1.4),0xffffff).setDepth(0.2);
+      const st=this.add.circle(Phaser.Math.Between(x0,x1),Phaser.Math.Between(y0,y1),Phaser.Math.FloatBetween(0.5,1.4),0xffffff).setDepth(0.2);
       this.tweens.add({targets:st, alpha:{from:0.1,to:0.7}, duration:Phaser.Math.Between(2200,5200), yoyo:true, repeat:-1, delay:Phaser.Math.Between(0,3000)});
     }
-    // corner brackets (targeting reticle)
-    const cb=this.add.graphics().setDepth(0.3); cb.lineStyle(2,COL.green,0.3); const m=14,L=34;
-    [[m,m,1,1],[DW-m,m,-1,1],[m,DH-m,1,-1],[DW-m,DH-m,-1,-1]].forEach(([x,y,sx,sy])=>{ cb.lineBetween(x,y,x+L*sx,y); cb.lineBetween(x,y,x,y+L*sy); });
-    // scanning line
-    const scan=this.add.rectangle(DW/2,0,DW,2,COL.green,0.08).setDepth(0.4);
-    this.tweens.add({targets:scan, y:DH, duration:8000, repeat:-1, ease:'Linear'});
+    // corner brackets at the view edges (FIX 9: 40px arms, 40% alpha)
+    const cb=this.add.graphics().setDepth(0.3); cb.lineStyle(2,COL.green,0.4); const m=20,L=40;
+    [[v.x+m,v.y+m,1,1],[v.x+v.width-m,v.y+m,-1,1],[v.x+m,v.y+v.height-m,1,-1],[v.x+v.width-m,v.y+v.height-m,-1,-1]]
+      .forEach(([x,y,sx,sy])=>{ cb.lineBetween(x,y,x+L*sx,y); cb.lineBetween(x,y,x,y+L*sy); });
+    // scanning line (FIX 9: 3px, brighter, faster)
+    const scan=this.add.rectangle(v.x+v.width/2, v.y, v.width, 3, COL.green, 0.15).setDepth(0.4);
+    this.tweens.add({targets:scan, y:v.y+v.height, duration:6000, repeat:-1, ease:'Linear'});
+    // vignette over everything (FIX 9)
+    this.add.image(v.x+v.width/2, v.y+v.height/2, 'vignette').setDisplaySize(v.width+80, v.height+80).setDepth(8.5);
   }
 
   /* ── Corridors + energy pulses ───────────────────────────────────────── */
@@ -439,16 +488,28 @@ class FacilityScene extends Phaser.Scene {
   drawCorridors(){
     const g=this.corridorLayer;
     const drawSeg=(x1,y1,x2,y2,width)=>{
-      const ang=Math.atan2(y2-y1,x2-x1), nx=Math.sin(ang)*width/2, ny=-Math.cos(ang)*width/2;
-      g.fillStyle(0x0d1a0d,0.8);
+      const ang=Math.atan2(y2-y1,x2-x1), len=Math.hypot(x2-x1,y2-y1);
+      const nx=Math.sin(ang)*width/2, ny=-Math.cos(ang)*width/2;
+      // dark green floor (FIX 5)
+      g.fillStyle(0x020d02,1);
       g.fillPoints([new Phaser.Geom.Point(x1+nx,y1+ny),new Phaser.Geom.Point(x2+nx,y2+ny),new Phaser.Geom.Point(x2-nx,y2-ny),new Phaser.Geom.Point(x1-nx,y1-ny)],true);
-      g.lineStyle(1,COL.green,0.4); g.lineBetween(x1+nx,y1+ny,x2+nx,y2+ny); g.lineBetween(x1-nx,y1-ny,x2-nx,y2-ny);
-      g.lineStyle(1,COL.green,0.16); g.lineBetween(x1,y1,x2,y2);
+      // side walls
+      g.lineStyle(1.5,COL.green,0.5); g.lineBetween(x1+nx,y1+ny,x2+nx,y2+ny); g.lineBetween(x1-nx,y1-ny,x2-nx,y2-ny);
+      // dashed centre line
+      g.lineStyle(1,COL.green,0.15);
+      const dx=Math.cos(ang), dy=Math.sin(ang);
+      for(let d=0; d<len; d+=20){ const e=Math.min(d+10,len); g.lineBetween(x1+dx*d,y1+dy*d, x1+dx*e,y1+dy*e); }
+      // sparse Neo Zero floor tiles along centre
+      for(let d=16; d<len; d+=32){ this.add.image(x1+dx*d, y1+dy*d, 'tiles', Math.min(1,this.tileMax)).setScale(1.5).setAlpha(0.3).setDepth(1.8); }
     };
+    const junctions=[];
+    const spoke=(p,col)=>{ for(let i=0;i<p.length-1;i++) drawSeg(p[i].x,p[i].y,p[i+1].x,p[i+1].y,32); p.forEach(pt=>junctions.push({x:pt.x,y:pt.y,c:col})); };
     // hub-and-spoke (Nexus → each room)
-    ROOM_IDS.forEach(id=>{ if(id==='nexus') return; const p=this.pathToNexus(id); for(let i=0;i<p.length-1;i++) drawSeg(p[i].x,p[i].y,p[i+1].x,p[i+1].y,24); });
+    ROOM_IDS.forEach(id=>{ if(id==='nexus') return; spoke(this.pathToNexus(id), roomColor(id)); });
     // cross-links
-    [['research','incident'],['war','treasury'],['archives','quarters']].forEach(([a,b])=>{ const A=roomCenter(a),B=roomCenter(b); drawSeg(A.x,A.y,B.x,B.y,16); });
+    [['research','incident'],['war','treasury'],['archives','quarters']].forEach(([a,b])=>{ const A=roomCenter(a),B=roomCenter(b); drawSeg(A.x,A.y,B.x,B.y,20); junctions.push({x:A.x,y:A.y,c:roomColor(a)},{x:B.x,y:B.y,c:roomColor(b)}); });
+    // junction clarity dots (FIX 5)
+    junctions.forEach(j=>{ g.fillStyle(j.c,0.3); g.fillCircle(j.x,j.y,8); g.lineStyle(1,j.c,0.8); g.strokeCircle(j.x,j.y,8); });
   }
   spawnPulse(id){
     const path=this.pathToNexus(id).slice().reverse(); // nexus → room
@@ -468,29 +529,42 @@ class FacilityScene extends Phaser.Scene {
   buildRooms(){
     ROOM_IDS.forEach(id=>{ if(id!=='nexus') this.buildRoom(id); });
   }
-  buildRoom(id){
-    const R=ROOMS[id], color=R.color, cx=R.x+R.w/2, cy=R.y+R.h/2;
-    const c=this.add.container(cx,cy); this.roomLayer.add(c);
+  /* scatter props near walls + centre, avoiding the header bar (FIX 4) */
+  propSpots(R){
     const hw=R.w/2, hh=R.h/2;
-    // floor tiling
-    const floor=this.add.tileSprite(0,0,R.w-6,R.h-6,'tiles',Math.min(1,this.tileMax)).setOrigin(0.5).setTileScale(2,2).setAlpha(0.4); c.add(floor);
-    // tinted interior
-    const body=this.add.graphics(); body.fillStyle(color,0.08); body.fillRect(-hw,-hh,R.w,R.h); c.add(body);
+    return [ {x:-hw+22,y:hh-18},{x:hw-22,y:hh-18},{x:-hw+22,y:-hh+34},{x:hw-22,y:-hh+34},{x:0,y:hh-18} ];
+  }
+  buildRoom(id){
+    const R=ROOMS[id], color=R.color, cx=R.x+R.w/2, cy=R.y+R.h/2, isQ=(id==='quarters');
+    const c=this.add.container(cx,cy); this.roomLayer.add(c);
+    const hw=R.w/2, hh=R.h/2, hdrH=isQ?20:16;
+    // floor tiling (FIX 4: alpha 0.7)
+    const floor=this.add.tileSprite(0,0,R.w-6,R.h-6,'tiles',Math.min(1,this.tileMax)).setOrigin(0.5).setTileScale(2,2).setAlpha(0.7); c.add(floor);
+    // tinted interior — Quarters gets a distinct blue-tinted dark fill (FIX 6)
+    const body=this.add.graphics();
+    if(isQ){ body.fillStyle(0x0a0a12,0.85); body.fillRect(-hw,-hh,R.w,R.h); }
+    body.fillStyle(color,0.08); body.fillRect(-hw,-hh,R.w,R.h); c.add(body);
     // interior grid lines (32px)
     const grid=this.add.graphics(); grid.lineStyle(0.5,color,0.06);
     for(let x=-hw+32;x<hw;x+=32) grid.lineBetween(x,-hh,x,hh);
     for(let y=-hh+32;y<hh;y+=32) grid.lineBetween(-hw,y,hw,y);
     c.add(grid);
-    // props
-    R.props.forEach((f,i)=>{ const px=-hw+22+i*26, py=hh-18; const im=this.add.image(px,py,'props',Math.min(f,this.propMax)).setScale(1.5).setAlpha(0.75); c.add(im); });
+    // props (FIX 4: 3-5 scattered, alpha 0.8)
+    const spots=this.propSpots(R);
+    R.props.forEach((f,i)=>{ const s=spots[i%spots.length]; const im=this.add.image(s.x,s.y,'props',Math.min(f,this.propMax)).setScale(1.5).setAlpha(0.8); c.add(im); });
     // ambient light
     const amb=this.add.graphics(); c.add(amb);
     // border (triple glow)
     const border=this.add.graphics(); c.add(border);
+    // Quarters secondary inner border (FIX 6)
+    if(isQ){ const inner=this.add.graphics(); inner.lineStyle(1,COL.slate,0.2); inner.strokeRect(-hw+4,-hh+4,R.w-8,R.h-8); c.add(inner); }
     // header bar
-    const hdr=this.add.graphics(); hdr.fillStyle(color,0.25); hdr.fillRect(-hw,-hh,R.w,16); c.add(hdr);
-    const nameTxt=this.add.text(-hw+6,-hh+8,R.name,{fontFamily:'monospace',fontSize:'9px',color:hex(color),fontStyle:'bold'}).setOrigin(0,0.5); c.add(nameTxt);
-    const cntTxt=this.add.text(hw-6,-hh+8,'',{fontFamily:'monospace',fontSize:'8px',color:hex(color)}).setOrigin(1,0.5).setAlpha(0.6); c.add(cntTxt);
+    const hdr=this.add.graphics(); hdr.fillStyle(color,0.25); hdr.fillRect(-hw,-hh,R.w,hdrH); c.add(hdr);
+    const nameTxt=this.add.text(-hw+6,-hh+hdrH/2,R.name,{fontFamily:'monospace',fontSize:isQ?'11px':'9px',color:hex(color),fontStyle:'bold'}).setOrigin(0,0.5); c.add(nameTxt);
+    if(isQ){ c.add(this.add.text(-hw+6,-hh+hdrH+7,'REST & RECOVERY',{fontFamily:'monospace',fontSize:'7px',color:hex(COL.slate),fontStyle:'italic'}).setOrigin(0,0.5).setAlpha(0.5)); }
+    // count badge (FIX 6: boxed for Quarters)
+    const badge=this.add.graphics(); c.add(badge);
+    const cntTxt=this.add.text(hw-6,-hh+hdrH/2,'',{fontFamily:'monospace',fontSize:'8px',color:hex(color),fontStyle:'bold'}).setOrigin(1,0.5).setAlpha(0.95); c.add(cntTxt);
     // status indicator
     const dot=this.add.circle(-hw+8,hh-8,3,COL.green).setAlpha(0.5); c.add(dot);
     // interaction
@@ -498,24 +572,45 @@ class FacilityScene extends Phaser.Scene {
     c.on('pointerover', ()=>{ this.tweens.add({targets:c, scale:1.03, duration:120}); this.input.setDefaultCursor('pointer'); });
     c.on('pointerout',  ()=>{ this.tweens.add({targets:c, scale:1.0, duration:120}); this.input.setDefaultCursor('default'); });
     c.on('pointerdown', ()=>this.onRoomClick(id));
-    const room={id, color, cx, cy, w:R.w, h:R.h, container:c, body, amb, border, dot, cntTxt, hdr, ambTween:null, dotTween:null};
+    const room={id, color, cx, cy, w:R.w, h:R.h, hdrH, container:c, body, amb, border, badge, dot, cntTxt, ambTween:null, dotTween:null};
     MC.rooms[id]=room;
     this.styleRoom(room, false);
+    if(isQ){ // restful breathing glow (FIX 6)
+      room.ambTween=this.tweens.add({targets:amb, alpha:{from:0.5,to:1}, duration:4000, yoyo:true, repeat:-1});
+      amb.fillStyle(COL.slate,0.05); amb.fillCircle(0,4, R.w*0.4);
+    }
     return room;
   }
   styleRoom(room, active){
-    const {amb,border,dot}=room, color=room.color, hw=room.w/2, hh=room.h/2;
+    const {amb,border,dot}=room, color=room.color, hw=room.w/2, hh=room.h/2, isQ=(room.id==='quarters');
     border.clear();
     border.lineStyle(12,color,0.08); border.strokeRect(-hw,-hh,room.w,room.h);
     border.lineStyle(6,color,0.20);  border.strokeRect(-hw,-hh,room.w,room.h);
-    border.lineStyle(ROOMS[room.id].lw,color,active?1:0.55); border.strokeRect(-hw,-hh,room.w,room.h);
-    amb.clear();
-    if(active){
-      const steps=6; for(let i=steps;i>0;i--){ amb.fillStyle(color, 0.06*(i/steps)); amb.fillCircle(0,4, 30*(i/steps)); }
+    border.lineStyle(ROOMS[room.id].lw,color,active?1:(isQ?0.85:0.55)); border.strokeRect(-hw,-hh,room.w,room.h);
+    if(!isQ){ // Quarters keeps its static breathing glow set in buildRoom
+      amb.clear();
+      if(active){ const steps=7, R=room.w*0.4; for(let i=steps;i>0;i--){ amb.fillStyle(color, 0.05*(i/steps)); amb.fillCircle(0,4, R*(i/steps)); } }
     }
     dot.setFillStyle(active?COL.green:0x444466);
     if(room.dotTween){ room.dotTween.stop(); dot.setAlpha(active?1:0.5); room.dotTween=null; }
     if(active) room.dotTween=this.tweens.add({targets:dot, alpha:{from:0.5,to:1}, duration:1000, yoyo:true, repeat:-1});
+  }
+  /* Quarters count badge with boxed background + blink on overflow (FIX 6) */
+  updateQuartersBadge(room, resting){
+    let label, col, bg;
+    if(resting===0){ label='✓ ALL DEPLOYED'; col=COL.green; bg=0x003300; }
+    else if(resting<5){ label=resting+' RESTING'; col=COL.gold; bg=0x332200; }
+    else if(resting<9){ label=resting+' RESTING ⚠'; col=COL.red; bg=0x330000; }
+    else { label='OFFLINE ✕'; col=COL.red; bg=0x330000; }
+    const t=room.cntTxt; t.setText(label).setColor(hex(col)).setAlpha(1);
+    if(room.badge){
+      room.badge.clear();
+      const w=t.width+10, h=14, bx=room.w/2-6-w, by=-room.h/2+room.hdrH/2-h/2;
+      room.badge.fillStyle(bg,0.9); room.badge.fillRect(bx,by,w,h);
+      room.badge.lineStyle(1,col,0.8); room.badge.strokeRect(bx,by,w,h);
+    }
+    if(room.badgeBlink){ room.badgeBlink.stop(); room.badgeBlink=null; t.setAlpha(1); }
+    if(resting>=9){ room.badgeBlink=this.tweens.add({targets:[t,room.badge], alpha:0.25, duration:500, yoyo:true, repeat:-1}); }
   }
   onRoomClick(id){
     // open the first agent stationed in this room (active in work-room, or any idle in quarters)
@@ -568,6 +663,11 @@ class FacilityScene extends Phaser.Scene {
   /* ── Spot allocation inside a room ───────────────────────────────────── */
   spotsFor(id, n){
     const R=ROOMS[id], res=[]; if(n<=0) return res;
+    if(id==='quarters'){ // fixed 3-per-row grid, 36px spacing (FIX 6)
+      const cols=3, step=36, x0=R.x+24, y0=R.y+34;
+      for(let i=0;i<n;i++){ const r=Math.floor(i/cols), col=i%cols; res.push({x:x0+col*step, y:y0+r*step}); }
+      return res;
+    }
     const innerW=R.w-40, innerH=R.h-34, x0=R.x+20, y0=R.y+26;
     const cols=Math.min(n, Math.max(1, Math.round(Math.sqrt(n*innerW/innerH)))), rows=Math.ceil(n/cols);
     const cw=innerW/cols, rh=innerH/rows;
@@ -589,13 +689,15 @@ class FacilityScene extends Phaser.Scene {
     if(!AGENT_ROOM[a.id]) return; // forge / unknown
     const t=target[a.id];
     let ch=MC.chars[a.id];
-    if(a.status==='locked'){ if(ch){ ch.sprite.destroy(); delete MC.chars[a.id]; } return; }
+    if(a.status==='locked'){ if(ch){ ch.sprite.destroy(); if(ch.ring) ch.ring.destroy(); delete MC.chars[a.id]; } return; }
     if(!t) return;
     if(!ch){
       const kit=(a.id==='nexus')?0:this.kitFor(a.id);
-      const sp=this.add.sprite(t.spot.x, t.spot.y, 'chars', this.kitFrame[kit]).setScale(2).setDepth(7).setAlpha(0);
+      const sp=this.add.sprite(t.spot.x, t.spot.y, 'chars', this.kitFrame[kit]).setScale(3).setDepth(7).setAlpha(0); // FIX 3: 3x
       this.charLayer.add(sp);
-      ch={id:a.id, sprite:sp, kit, roomId:t.roomId}; MC.chars[a.id]=ch;
+      const ring=this.add.graphics().setDepth(6.5); this.charLayer.add(ring);
+      ch={id:a.id, sprite:sp, ring, kit, roomId:t.roomId}; MC.chars[a.id]=ch;
+      this.redrawRing(ch);
       this.tweens.add({targets:sp, alpha:1, duration:400});
       this.settle(ch, t.roomId);
       if(a.id==='nexus') this.scheduleNexusRoam(ch); else this.scheduleVisit(ch);
@@ -606,7 +708,7 @@ class FacilityScene extends Phaser.Scene {
       this.stopBob(ch);
       const fromIdle=ch.roomId==='quarters';
       this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, roomCenter('nexus'), t.spot], ()=>{ ch.roomId=t.roomId; this.settle(ch, t.roomId); });
-      ch.roomId=t.roomId;
+      ch.roomId=t.roomId; this.redrawRing(ch);
       if(!fromIdle && t.roomId==='quarters') this.puff(ch.sprite.x, ch.sprite.y, COL.slate);
     } else if(!first){
       // same room, possibly new spot (count changed)
@@ -614,9 +716,21 @@ class FacilityScene extends Phaser.Scene {
     }
     ch.targetSpot=t.spot;
   }
+  /* white + room-colour highlight ring under active work-room agents (FIX 3) */
+  redrawRing(ch){
+    const g=ch.ring; if(!g) return; g.clear();
+    const show = ch.roomId && ch.roomId!=='quarters';
+    g.setVisible(show); if(!show) return;
+    const col=roomColor(ch.roomId);
+    g.lineStyle(2,col,0.9); g.strokeCircle(0,0,13);
+    g.lineStyle(1,0xffffff,0.5); g.strokeCircle(0,0,13);
+  }
+  update(){
+    for(const id in MC.chars){ const ch=MC.chars[id]; if(ch.ring && ch.sprite.active){ ch.ring.setPosition(ch.sprite.x, ch.sprite.y+26); } }
+  }
   settle(ch, roomId){
     const sp=ch.sprite; sp.play('idle'+ch.kit);
-    this.stopBob(ch);
+    this.stopBob(ch); this.redrawRing(ch);
     ch.bob=this.tweens.add({targets:sp, y:sp.y-2, duration:roomId==='quarters'?1400:2000, yoyo:true, repeat:-1, delay:Phaser.Math.Between(0,800)});
   }
   stopBob(ch){ if(ch.bob){ ch.bob.stop(); ch.bob=null; } }
@@ -691,9 +805,18 @@ class FacilityScene extends Phaser.Scene {
     const c=roomCenter('quarters'); const ring=this.add.circle(c.x,c.y,10,0,0).setStrokeStyle(2,COL.green,0.7).setDepth(12);
     this.tweens.add({targets:ring, scale:8, alpha:0, duration:1200, ease:'Quad.easeOut', onComplete:()=>ring.destroy()});
   }
+  /* sleepy "zzz" rising off a resting agent in Quarters (FIX 6) */
+  emitZzz(){
+    const resting=Object.values(MC.chars).filter(ch=>ch.roomId==='quarters'&&ch.sprite.active);
+    if(!resting.length) return;
+    const ch=Phaser.Utils.Array.GetRandom(resting);
+    const t=this.add.text(ch.sprite.x+8, ch.sprite.y-18, Phaser.Utils.Array.GetRandom(['z','zzz']), {fontFamily:'monospace',fontSize:'10px',color:hex(COL.slate),fontStyle:'italic'}).setDepth(12).setAlpha(0.8);
+    this.tweens.add({targets:t, y:t.y-30, x:t.x+6, alpha:0, duration:3000, ease:'Quad.easeOut', onComplete:()=>t.destroy()});
+  }
   offlineShake(){
     this.cameras.main.shake(500,0.015);
-    const flash=this.add.rectangle(DW/2,DH/2,DW*2,DH*2,COL.red,0.25).setDepth(40);
+    const v=this.cameras.main.worldView;
+    const flash=this.add.rectangle(v.x+v.width/2, v.y+v.height/2, v.width*1.5, v.height*1.5, COL.red, 0.25).setDepth(40);
     this.tweens.add({targets:flash, alpha:0, duration:600, onComplete:()=>flash.destroy()});
     Object.values(MC.rooms).forEach(r=>{ if(r.border){ const f=this.add.graphics(); r.container.add(f); f.lineStyle(2,COL.red,1); f.strokeRect(-r.w/2,-r.h/2,r.w,r.h); this.time.delayedCall(500,()=>f.destroy()); } });
   }
@@ -726,7 +849,7 @@ class FacilityScene extends Phaser.Scene {
     const wasOffline=MC.failCount>0; MC.failCount=0; setOffline(false);
     const prev=Object.fromEntries(MC.agents.map(a=>[a.id,a]));
     MC.agents=data.agents; MC.live=data.live; MC.alerts=data.alerts||[];
-    MC.ready=true;
+    MC.ready=true; refreshTaskText();
 
     const nx=data.agents.find(a=>a.id==='nexus'); if(nx&&this.nexusLevelTxt) this.nexusLevelTxt.setText('LV '+nx.level);
 
@@ -736,16 +859,8 @@ class FacilityScene extends Phaser.Scene {
     data.agents.forEach(a=>{ const rid=currentRoomId(a); if(!rid) return; roomCnt[rid]=(roomCnt[rid]||0)+1; if(a.status==='active') roomActive[rid]=true; });
     Object.values(MC.rooms).forEach(room=>{
       if(room.id!=='nexus') this.styleRoom(room, !!roomActive[room.id]);
-      if(room.cntTxt){
-        if(room.id==='quarters'){
-          const resting=roomCnt.quarters||0;
-          const label = resting===0?'ALL WORKING':(resting<5?resting+' RESTING':resting+' RESTING — ASSIGN');
-          const col = resting===0?COL.green:(resting<5?COL.gold:COL.red);
-          room.cntTxt.setText(label).setColor(hex(col)).setAlpha(0.95);
-        } else {
-          room.cntTxt.setText((roomCnt[room.id]||0)+' AGENTS');
-        }
-      }
+      if(room.id==='quarters'){ this.updateQuartersBadge(room, roomCnt.quarters||0); }
+      else if(room.cntTxt){ room.cntTxt.setText((roomCnt[room.id]||0)+' AGENTS'); }
     });
 
     // characters
@@ -793,6 +908,14 @@ function renderTopbar(){
   $('stat-xp').textContent=MC.agents.reduce((s,a)=>s+(a.level*1000)+(a.xp||0),0).toLocaleString();
   const tr=MC.live&&MC.live.trading, pp=$('stat-pnl');
   if(tr&&tr.pnl!=null){ pp.textContent=fmtMoney(tr.pnl); pp.parentElement.className='stat '+(tr.pnl>=0?'':'red'); } else { pp.textContent='–'; pp.parentElement.className='stat pink'; }
+  // FIX 8: water / supps / railway pills
+  const L=MC.live||{};
+  const wml=L.water_ml||0, wt=L.water_target||2000, wp=$('stat-water');
+  wp.textContent=wml+'/'+wt+'ml'; wp.parentElement.className='stat '+(wml>0?'blue':'red');
+  const st_=L.supplements_taken||0, stt=L.supplements_total||3, sp=$('stat-supps');
+  sp.textContent=st_+'/'+stt; sp.parentElement.className='stat '+(st_>0?'green':'red');
+  const rail=$('stat-railway'), railOnline=MC.failCount===0;
+  rail.textContent=railOnline?'ONLINE':'OFFLINE'; rail.parentElement.className='stat '+(railOnline?'green':'red');
   const online=!(tr&&tr.online===false);
   const st=$('fac-status');
   st.textContent='FACILITY STATUS: '+(online?'OPERATIONAL':'ALERT');
@@ -804,9 +927,10 @@ function renderRoster(){
   $('mobile-count').textContent=MC.agents.filter(a=>a.status==='active').length+' MOBILE';
   $('roster-list').innerHTML=sorted.map(a=>{
     const col=hex(agentColor(a)), ratio=Math.round(((a.xp||0)/((a.xp_max||1)))*100), sc=statusDot(a.status);
+    const rid=currentRoomId(a), rdotCol=rid?hex(roomColor(rid)):'#333355', rdotName=rid?ROOMS[rid].name:'OFFLINE';
     return `<div class="arow" data-id="${a.id}" style="border-left-color:${a.status==='active'?col:'transparent'}">
       <span class="dot ${a.status==='active'?'on':''}" style="background:${sc};box-shadow:0 0 6px ${sc}"></span>
-      <div><div class="nm" style="color:${nameColor(a.status,col)}">${a.icon||''} ${a.name}</div><div class="rl">${a.role||''}</div><div class="tk">${taskFor(a)}</div></div>
+      <div><div class="nm" style="color:${nameColor(a.status,col)}"><span class="rdot" style="background:${rdotCol}" title="Currently in: ${rdotName}"></span>${a.icon||''} ${a.name}</div><div class="rl">${a.role||''}</div><div class="tk">${taskFor(a)}</div></div>
       <div class="lv">LV ${a.level}</div>
       <div class="xpwrap"><div class="xpfill" style="width:${ratio}%;background:${col}"></div></div></div>`;
   }).join('');
@@ -847,6 +971,8 @@ function flashSection(id){ const el=$(id); if(!el) return; el.classList.remove('
 function flashFacilityStatus(){ const s=$('fac-status'); s.style.transition='none'; s.style.background='#39ff1433'; requestAnimationFrame(()=>{ s.style.transition='background .8s ease'; s.style.background='transparent'; }); }
 function setOffline(on){ $('offline-banner').classList.toggle('show',on); }
 setInterval(()=>{ $('stat-time').textContent=new Date().toLocaleTimeString('en-GB'); }, 1000);
+const _pageLoad=Date.now();
+setInterval(()=>{ const s=Math.floor((Date.now()-_pageLoad)/1000); const h=Math.floor(s/3600), m=Math.floor((s%3600)/60); const el=$('uptime'); if(el) el.textContent='UPTIME: '+h+'h '+m+'m'; }, 1000);
 
 /* Quick actions */
 async function bulkStatus(targetStatus, fromStatus){
