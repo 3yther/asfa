@@ -1158,6 +1158,8 @@ body.bh-active { overflow: hidden; }
 .fx-btn:hover { background: rgba(0,217,255,.16); box-shadow: 0 0 16px rgba(0,217,255,.35); }
 .fx-btn-mag { background: rgba(255,0,110,.06); border-color: rgba(255,0,110,.45); color: #ff4d94; }
 .fx-btn-mag:hover { background: rgba(255,0,110,.16); box-shadow: 0 0 16px rgba(255,0,110,.4); }
+.spaceship-btn { background: rgba(57,255,20,.06); border-color: rgba(57,255,20,.45); color: #39ff14; text-decoration: none; }
+.spaceship-btn:hover { background: rgba(57,255,20,.16); box-shadow: 0 0 16px rgba(57,255,20,.4); }
 
 /* ── THINK MODE — calm full-screen view ────────────────────────────────────────── */
 .think-mode {
