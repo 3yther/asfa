@@ -37,6 +37,8 @@
   .tb-title{font-size:.82rem;font-weight:700;letter-spacing:3px;color:var(--green);text-shadow:0 0 12px var(--green);white-space:nowrap;}
   .tb-home{color:var(--cyan);text-decoration:none;font-size:.66rem;letter-spacing:2px;padding:3px 8px;border:1px solid #00ffff44;}
   .tb-home:hover{background:#00ffff11;box-shadow:0 0 8px #00ffff44;}
+  .nav-back-btn{margin-left:14px;padding:8px 16px;background:#0a1210;border:1px solid #39ff14;color:#39ff14;font-family:monospace;font-size:11px;letter-spacing:2px;cursor:pointer;text-decoration:none;border-radius:2px;transition:all .2s;white-space:nowrap;}
+  .nav-back-btn:hover{background:#0d2010;box-shadow:0 0 8px #39ff1466;}
   .tb-stats{display:flex;gap:8px;align-items:center;margin-left:6px;}
   .stat{position:relative;display:flex;flex-direction:column;align-items:center;line-height:1.1;padding:3px 9px 3px 11px;background:#031107;border:1px solid var(--green-dim);}
   .stat::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--green);animation:heartbeat 1s ease-in-out infinite;}
@@ -185,6 +187,7 @@
       <div class="stat"><span class="k">Time</span><span class="v mono" id="stat-time">--:--:--</span></div>
     </div>
     <div class="tb-status" id="fac-status">FACILITY STATUS: OPERATIONAL</div>
+    <a href="/" class="nav-back-btn">← RETURN TO ASFA</a>
   </div>
   <div class="offline-banner" id="offline-banner">⚠ ASFA OFFLINE — RETRYING…</div>
   <div class="main">
