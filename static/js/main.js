@@ -44,17 +44,32 @@ function wireControls() {
 // ── Obsidian sync (manual) ───────────────────────────────────────────────────────
 function wireObsidian() {
   const b = document.getElementById("obsidian-btn");
-  if (!b) return;
-  b.addEventListener("click", async () => {
-    const label = b.textContent;
-    b.disabled = true; b.textContent = "SYNCING…";
-    try {
-      const d = await apiGet("/api/asfa/obsidian/sync-now");
-      if (d.status === "synced") toast("OBSIDIAN · " + d.file);
-      else toast(d.message || "Sync failed — run ASFA on your Mac");
-    } catch { toast("Sync failed"); }
-    b.textContent = label; b.disabled = false;
-  });
+  if (b) {
+    b.addEventListener("click", async () => {
+      const label = b.textContent;
+      b.disabled = true; b.textContent = "SYNCING…";
+      try {
+        const d = await apiGet("/api/asfa/obsidian/sync-now");
+        if (d.status === "synced") {
+          const extra = d.agents ? ` · ${d.agents} agents` : "";
+          toast("OBSIDIAN · " + d.file + extra);
+        } else {
+          toast(d.message || "Sync failed — run ASFA on your Mac");
+        }
+      } catch { toast("Sync failed"); }
+      b.textContent = label; b.disabled = false;
+    });
+  }
+  const open = document.getElementById("obsidian-open-btn");
+  if (open) {
+    open.addEventListener("click", async () => {
+      try {
+        const d = await apiPost("/api/asfa/obsidian/open", {});
+        if (d.status === "opened") toast("OBSIDIAN · opening vault");
+        else toast(d.message || "Open the vault from your Mac");
+      } catch { toast("Couldn't open vault"); }
+    });
+  }
 }
 
 // ── Hydration ───────────────────────────────────────────────────────────────────

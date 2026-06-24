@@ -29,7 +29,8 @@ for proactive reminders and daily summaries.
   - `bots.py` — trading bot health/activity
   - `scheduler.py` — APScheduler job definitions (`start_scheduler()`)
   - `telegram_bot.py`, `alerts.py` — notifications
-  - `obsidian_sync.py` — daily markdown export to `~/Obsidian/ASFA-Logs` (local FS only)
+  - `obsidian_sync.py` — daily vault sync to `~/Obsidian/asfa/` (agent profiles,
+    daily logs, live summary; seeds editable second-brain notes once; local FS only)
 - `templates/` — `index.html` (dashboard), `login.html`
 - `static/js/main.js` — frontend logic + `apiGet`/`apiPost` HTTP helpers
 - `.env.example` — full list of supported env vars
@@ -77,7 +78,7 @@ for proactive reminders and daily summaries.
 - **APScheduler runs 12 jobs** (`services/scheduler.py:start_scheduler`):
   morning briefing (09:00 UTC), bedtime reminder (mon–fri 22:30 + sun/sat 00:00),
   market-open reminder (mon–fri 14:00), reflection prompt (22:00),
-  daily summary (21:00 UTC), obsidian sync (21:10), supplement reminders
+  daily summary (21:00 UTC), obsidian sync (midnight), supplement reminders
   (09:00 + 20:00), water check (every 30 min), bot-trade poll (every 5 min),
   weekly review (sun 18:00). Single gunicorn worker so jobs run once.
 - **OAuth state must be validated.** Both Google and Spotify flows generate a
