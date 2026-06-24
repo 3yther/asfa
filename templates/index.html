@@ -12,8 +12,8 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <style>
-  .nav-spaceship-btn{display:inline-block;padding:10px 20px;background:linear-gradient(135deg,#ff006e 0%,#39ff14 100%);border:2px solid #ff006e;color:#04010a;font-family:monospace;font-weight:bold;font-size:12px;letter-spacing:2px;cursor:pointer;text-decoration:none;border-radius:4px;transition:all .3s;box-shadow:0 0 12px #ff006e44;white-space:nowrap;}
-  .nav-spaceship-btn:hover{box-shadow:0 0 20px #ff006e88;transform:scale(1.05);}
+  .nav-spaceship-btn{display:inline-block;padding:10px 20px;background:#0a1210;border:2px solid #39ff14;color:#39ff14;font-family:monospace;font-weight:bold;font-size:12px;letter-spacing:2px;cursor:pointer;text-decoration:none;border-radius:4px;transition:all .3s;box-shadow:0 0 12px #39ff1444;white-space:nowrap;}
+  .nav-spaceship-btn:hover{box-shadow:0 0 20px #39ff1488;background:#0d2010;}
   .nav-spaceship-btn:active{transform:scale(0.98);}
 </style>
 </head>
@@ -154,6 +154,7 @@
   <div class="focus-actions">
     <span class="focus-today-chip" id="focus-today-chip" title="Focus time logged today">◷ 0h 0m</span>
     <button class="fx-btn" id="obsidian-btn" type="button" title="Write today's log to your Obsidian vault">⬡ OBSIDIAN</button>
+    <a class="fx-btn spaceship-btn" href="/mission-control" title="Open Spaceship Mission Control">🚀 SPACESHIP CONTROL</a>
     <button class="fx-btn" id="think-btn" type="button">◍ THINK</button>
     <button class="fx-btn fx-btn-mag" id="lockin-btn" type="button">▣ LOCK IN</button>
   </div>
