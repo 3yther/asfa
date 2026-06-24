@@ -11,11 +11,6 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-<style>
-  .nav-spaceship-btn{display:inline-block;padding:10px 20px;background:#0a1210;border:2px solid #39ff14;color:#39ff14;font-family:monospace;font-weight:bold;font-size:12px;letter-spacing:2px;cursor:pointer;text-decoration:none;border-radius:4px;transition:all .3s;box-shadow:0 0 12px #39ff1444;white-space:nowrap;}
-  .nav-spaceship-btn:hover{box-shadow:0 0 20px #39ff1488;background:#0d2010;}
-  .nav-spaceship-btn:active{transform:scale(0.98);}
-</style>
 </head>
 <body>
 
@@ -119,7 +114,6 @@
   </div>
 
   <div class="header-right">
-    <a href="/mission-control" class="nav-spaceship-btn">🚀 SPACESHIP CONTROL</a>
     <div class="clock-block">
       <div class="clock mono" id="clock">00:00:00.00</div>
       <div class="clock-label">LOCAL TIME</div>
