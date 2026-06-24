@@ -5,7 +5,7 @@ notifications always stored so the dashboard bell still works.
 """
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -232,12 +232,16 @@ def supplement_reminder():
 
 
 def obsidian_sync_job():
-    """Write the daily Obsidian markdown log (no-op on cloud filesystems)."""
+    """Midnight Obsidian sync: agent profiles, summary, and the daily log for the
+    day that just ended (no-op on cloud filesystems)."""
     from services.obsidian_sync import sync_to_obsidian
+    # Runs at 00:00, so the completed day is yesterday's date.
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     try:
-        res = sync_to_obsidian()
+        res = sync_to_obsidian(date=yesterday)
         if res.get("status") == "synced":
-            logger.info("Obsidian daily sync: %s", res.get("path"))
+            logger.info("Obsidian daily sync (%s): %s agents → %s",
+                        yesterday, res.get("agents"), res.get("path"))
         else:
             logger.warning("Obsidian daily sync skipped: %s", res.get("error"))
     except Exception as e:
@@ -270,9 +274,9 @@ def start_scheduler():
     sched.add_job(reflection_prompt, "cron", hour=22, minute=0)
     # Autonomous end-of-day summary — auto-sent, no user action required.
     sched.add_job(daily_summary, "cron", hour=21, minute=0, timezone="UTC")
-    # Daily Obsidian markdown log, shortly after the end-of-day debrief.
-    sched.add_job(obsidian_sync_job, "cron", hour=21, minute=10,
-                  id="obsidian_sync_daily")
+    # Daily Obsidian vault sync at midnight (writes the just-ended day's log).
+    sched.add_job(obsidian_sync_job, "cron", hour=0, minute=0,
+                  id="obsidian_midnight_sync")
     # Supplement reminders (local time) — morning prompt + evening nudge.
     sched.add_job(supplement_reminder, "cron", hour=9, minute=0)
     sched.add_job(supplement_reminder, "cron", hour=20, minute=0)

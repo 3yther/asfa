@@ -576,11 +576,27 @@ def api_bots_health():
 
 @app.route("/api/asfa/obsidian/sync-now")
 def api_obsidian_sync():
-    """Write today's markdown log to OBSIDIAN_VAULT_PATH. Only writes when ASFA
-    runs on a machine with that local folder (i.e. the Mac, not Railway)."""
+    """Write the full ASFA vault tree to OBSIDIAN_VAULT_PATH. Only writes when
+    ASFA runs on a machine with that local folder (i.e. the Mac, not Railway)."""
     result = sync_to_obsidian()
     result.setdefault("vault", OBSIDIAN_VAULT_PATH)
     return jsonify(result)
+
+
+@app.route("/api/asfa/obsidian/open", methods=["POST"])
+def api_obsidian_open():
+    """Open the Obsidian vault in the desktop app. macOS/local only — fails
+    gracefully on cloud (Railway) where there's no GUI / `open` binary."""
+    import shutil
+    import subprocess
+    if not shutil.which("open"):
+        return jsonify({"status": "error",
+                        "message": "Open the vault from your Mac — no GUI here."}), 200
+    try:
+        subprocess.Popen(["open", "-a", "Obsidian", OBSIDIAN_VAULT_PATH])
+        return jsonify({"status": "opened", "vault": OBSIDIAN_VAULT_PATH})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)[:120]}), 200
 
 
 # Forward-validation window for both bots. Configurable; default targets the
