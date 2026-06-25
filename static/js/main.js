@@ -9,11 +9,13 @@ const SCORE_CIRCUMFERENCE = 2 * Math.PI * 72; // r=72
 document.addEventListener("DOMContentLoaded", () => {
   initClock();
   initOrbCanvas();
+  initOrbDust();
+  initOrbActivity();
   initOrbClick();
   buildScoreTicks();
   initNav();
   loadAll();
-  spawnParticles();
+  initCardPulse();
   setStatusDate();
   wireControls();
   // Trading-bot data auto-refreshes every 10 minutes.
@@ -167,8 +169,8 @@ function initOrbCanvas() {
 
     // Orb background
     const grad = ctx.createRadialGradient(CX, CY, 0, CX, CY, R);
-    grad.addColorStop(0,   "rgba(124,58,237,0.35)");
-    grad.addColorStop(0.5, "rgba(79,70,229,0.20)");
+    grad.addColorStop(0,   "rgba(34,211,238,0.32)");
+    grad.addColorStop(0.5, "rgba(79,70,229,0.18)");
     grad.addColorStop(1,   "rgba(6,182,212,0.08)");
     ctx.save();
     ctx.beginPath();
@@ -209,7 +211,7 @@ function initOrbCanvas() {
       const pulse = 0.5 + 0.5 * Math.sin(frame * 0.04 + i * 0.7);
       ctx.beginPath();
       ctx.arc(n.x, n.y, 1.2 + pulse * 0.6, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(124,58,237,${0.6 + pulse * 0.4})`;
+      ctx.fillStyle = `rgba(103,232,249,${0.55 + pulse * 0.4})`;
       ctx.fill();
     }
 
@@ -229,6 +231,89 @@ function initOrbCanvas() {
   }
 
   draw();
+}
+
+// ── Orb dust — slow, sparse particles drifting around the orb ───────────────────
+function initOrbDust() {
+  const canvas = document.getElementById("orb-dust");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  const N = 34;
+  const motes = Array.from({ length: N }, () => ({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    r: 0.5 + Math.random() * 1.3,
+    vx: (Math.random() - 0.5) * 0.12,
+    vy: (Math.random() - 0.5) * 0.12,
+    a: 0.06 + Math.random() * 0.22,
+    tw: Math.random() * Math.PI * 2,
+  }));
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    for (const m of motes) {
+      m.x += m.vx; m.y += m.vy; m.tw += 0.01;
+      if (m.x < 0) m.x = W; else if (m.x > W) m.x = 0;
+      if (m.y < 0) m.y = H; else if (m.y > H) m.y = 0;
+      const alpha = m.a * (0.6 + 0.4 * Math.sin(m.tw));
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(103,232,249,${alpha})`;
+      ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  }
+  draw();
+}
+
+// ── Activity-reactive pulse + critical (red) mode ───────────────────────────────
+function _parseAgentTs(s) {
+  if (!s) return 0;
+  // SQLite "now" gives "YYYY-MM-DD HH:MM:SS" (UTC, no tz); ISO writes are local.
+  const iso = s.includes("T") ? s : s.replace(" ", "T") + "Z";
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? 0 : t;
+}
+
+async function pollOrbActivity() {
+  const stage = document.getElementById("orb-stage");
+  const orb = document.getElementById("orb");
+  if (!stage || !orb) return;
+
+  let agents = [], alerts = [];
+  try {
+    const d = await apiGet("/api/agents");
+    agents = d.agents || [];
+    alerts = d.alerts || [];
+  } catch { return; /* leave last-known cadence on a failed poll */ }
+
+  // Critical state: any crit-level alert (overdue task, system/deploy error, …).
+  const critical = alerts.some(a => (a.level || "").toLowerCase() === "crit");
+  orb.classList.toggle("orb-critical", critical);
+
+  const now = Date.now();
+  let inLastMin = 0, inLast5Min = 0;
+  for (const a of agents) {
+    if (a.status === "locked") continue;
+    const age = now - _parseAgentTs(a.last_active);
+    if (age >= 0 && age < 60 * 1000) inLastMin++;
+    if (age >= 0 && age < 5 * 60 * 1000) inLast5Min++;
+  }
+
+  // Critical pulses fastest; otherwise rate scales with recent agent activity.
+  let cycle;
+  if (critical)            cycle = "1s";
+  else if (inLastMin >= 2) cycle = "1.5s"; // multiple agents in last minute
+  else if (inLast5Min > 0) cycle = "3s";   // agent ran in last 5 min
+  else                     cycle = "6s";   // calm idle
+  stage.style.setProperty("--pulse-cycle", cycle);
+}
+
+function initOrbActivity() {
+  if (!document.getElementById("orb-stage")) return;
+  pollOrbActivity();
+  setInterval(pollOrbActivity, 20 * 1000);
 }
 
 // ── Orb click → voice ─────────────────────────────────────────────────────────
@@ -271,7 +356,9 @@ function setOrbState(state) {
   ORB_STATE = state;
   const orb = document.getElementById("orb");
   if (!orb) return;
-  orb.className = `orb orb-${state}`;
+  // Swap voice state without clobbering the activity-driven `orb-critical` class.
+  orb.classList.remove("orb-idle", "orb-listening", "orb-speaking");
+  orb.classList.add(`orb-${state}`);
 }
 
 async function transcribeBlob(blob) {
@@ -353,19 +440,19 @@ function initNav() {
   setTimeout(() => movePill(active), 50);
 }
 
-// ── Ambient particles ──────────────────────────────────────────────────────────
-function spawnParticles() {
-  const container = document.getElementById("particles");
-  if (!container) return;
-  for (let i = 0; i < 30; i++) {
-    const p = document.createElement("div");
-    p.className = "particle";
-    p.style.left = Math.random() * 100 + "vw";
-    p.style.animationDuration = (12 + Math.random() * 20) + "s";
-    p.style.animationDelay = (-Math.random() * 20) + "s";
-    p.style.opacity = 0;
-    container.appendChild(p);
-  }
+// ── Card data-update pulse ──────────────────────────────────────────────────────
+// Highlights a card briefly whenever its content changes (fresh data arriving),
+// so motion is purposeful rather than decorative. Bursts are debounced to one pulse.
+function initCardPulse() {
+  document.querySelectorAll(".grid .card").forEach(card => {
+    let t = null;
+    const obs = new MutationObserver(() => {
+      if (t) return;
+      card.classList.add("pulse");
+      t = setTimeout(() => { card.classList.remove("pulse"); t = null; }, 1200);
+    });
+    obs.observe(card, { childList: true, subtree: true, characterData: true });
+  });
 }
 
 // ── Load all data ──────────────────────────────────────────────────────────────

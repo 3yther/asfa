@@ -17,52 +17,23 @@
   #scout-card .scout-radar-wrap { display: flex; justify-content: center; padding: 4px 0 10px; }
   #scout-card .scout-radar {
     width: 250px; height: 250px; max-width: 100%; border-radius: 50%;
-    background: radial-gradient(circle at 50% 50%, rgba(57,255,20,.06), rgba(0,4,8,.9) 72%);
-    box-shadow: 0 0 24px rgba(57,255,20,.18), inset 0 0 30px rgba(57,255,20,.08);
+    background: radial-gradient(circle at 50% 50%, rgba(0,217,255,.06), rgba(0,4,8,.9) 72%);
+    box-shadow: 0 0 24px rgba(0,217,255,.18), inset 0 0 30px rgba(0,217,255,.08);
   }
   #scout-card .scout-radar-meta {
     font-size: .62rem; letter-spacing: 1px; color: var(--muted);
     display: flex; flex-direction: column; gap: 3px; text-align: center;
   }
-  #scout-card .scout-hi { color: #39ff14; text-shadow: 0 0 6px rgba(57,255,20,.5); }
+  #scout-card .scout-hi { color: #00d9ff; text-shadow: 0 0 6px rgba(0,217,255,.5); }
 </style>
 </head>
 <body>
 
-<!-- ── Cinematic black-hole landing (Event Horizon) ────────────────────────
-     Hyperspace warp → WebGL black hole (Three.js, custom lensing shader) →
-     fall-in transition → dashboard. Driven by static/js/blackhole.js. Falls
-     back to a CSS black hole on weak GPU / mobile, and is skipped entirely on
-     prefers-reduced-motion. Removes itself from the DOM on ENTER. -->
-<div id="bh-landing" class="bh-landing" aria-hidden="true">
-  <canvas id="bh-warp" class="bh-warp"></canvas>
-  <div id="bh-stage" class="bh-stage"></div>
-  <div class="bh-vignette"></div>
-  <div id="bh-brand" class="bh-brand">
-    <div class="bh-title">[ ASFA ]</div>
-    <button id="bh-enter" class="bh-enter" type="button">ENTER</button>
-  </div>
-  <button id="bh-mute" class="bh-mute" type="button" aria-label="Toggle sound" aria-pressed="false">
-    <span class="bh-mute-on">♪ SOUND ON</span><span class="bh-mute-off">♪ SOUND OFF</span>
-  </button>
-  <div class="bh-skip mono">PRESS ANY KEY TO SKIP</div>
-  <div id="bh-flash" class="bh-flash"></div>
-</div>
-
-<!-- ── Page-level effects ──────────────────────────────────────────────── -->
-<div class="scanline-overlay" aria-hidden="true"></div>
+<!-- ── Page corner decorations (subtle) ────────────────────────────────── -->
 <div class="page-corner pc-tl" aria-hidden="true"></div>
 <div class="page-corner pc-tr" aria-hidden="true"></div>
 <div class="page-corner pc-bl" aria-hidden="true"></div>
 <div class="page-corner pc-br" aria-hidden="true"></div>
-
-<div class="aurora" aria-hidden="true">
-  <div class="aurora-orb a1"></div>
-  <div class="aurora-orb a2"></div>
-  <div class="aurora-orb a3"></div>
-  <div class="aurora-orb a4"></div>
-</div>
-<div id="particles"></div>
 
 <!-- ── Header ─────────────────────────────────────────────────────────── -->
 <header class="header">
@@ -93,17 +64,27 @@
 
   <!-- ── Central Orb ───────────────────────────────────────────────────── -->
   <div class="orb-stage" id="orb-stage">
+    <!-- Soft dust drifting around the orb -->
+    <canvas id="orb-dust" class="orb-dust" width="480" height="480"></canvas>
     <!-- Outer ring: CCW, dashed -->
     <svg class="orb-ring-svg orb-ring-outer" viewBox="0 0 290 290">
       <circle cx="145" cy="145" r="138" fill="none"
-        stroke="rgba(6,182,212,0.30)" stroke-width="1"
+        stroke="rgba(34,211,238,0.30)" stroke-width="1"
         stroke-dasharray="5 11"/>
-      <circle cx="145" cy="7"   r="4" fill="rgba(6,182,212,0.85)"/>
-      <circle cx="283" cy="145" r="4" fill="rgba(6,182,212,0.85)"/>
-      <circle cx="145" cy="283" r="4" fill="rgba(6,182,212,0.85)"/>
-      <circle cx="7"   cy="145" r="4" fill="rgba(6,182,212,0.85)"/>
+      <circle cx="145" cy="7"   r="4" fill="rgba(34,211,238,0.85)"/>
+      <circle cx="283" cy="145" r="4" fill="rgba(34,211,238,0.85)"/>
+      <circle cx="145" cy="283" r="4" fill="rgba(34,211,238,0.85)"/>
+      <circle cx="7"   cy="145" r="4" fill="rgba(34,211,238,0.85)"/>
     </svg>
-    <!-- Inner ring: CW, finer dash -->
+    <!-- Mid ring: CW, sparse dash -->
+    <svg class="orb-ring-svg orb-ring-mid" viewBox="0 0 290 290">
+      <circle cx="145" cy="145" r="132" fill="none"
+        stroke="rgba(79,70,229,0.32)" stroke-width="1"
+        stroke-dasharray="2 14"/>
+      <circle cx="145" cy="13" r="2.5" fill="rgba(103,232,249,0.7)"/>
+      <circle cx="277" cy="145" r="2.5" fill="rgba(103,232,249,0.7)"/>
+    </svg>
+    <!-- Inner ring: CCW, finer dash -->
     <svg class="orb-ring-svg orb-ring-inner" viewBox="0 0 240 240">
       <circle cx="120" cy="120" r="114" fill="none"
         stroke="rgba(124,58,237,0.45)" stroke-width="1.5"
@@ -123,7 +104,8 @@
     </svg>
     <!-- Orb core -->
     <div id="orb" class="orb orb-idle" title="Tap to speak">
-      <canvas id="orb-canvas" width="200" height="200"></canvas>
+      <div class="orb-aura-red"></div>
+      <canvas id="orb-canvas" width="330" height="330"></canvas>
       <div class="orb-glow-ring"></div>
     </div>
   </div>
@@ -327,7 +309,7 @@
     <div class="bio-gauge-wrap">
       <svg class="bio-gauge" viewBox="0 0 100 100">
         <circle class="bg-arc" cx="50" cy="50" r="40" fill="none" stroke="rgba(139,148,158,.12)" stroke-width="8" stroke-dasharray="188.5 251.3" stroke-dashoffset="-31.4" stroke-linecap="round"/>
-        <circle class="fg-arc" id="water-arc" cx="50" cy="50" r="40" fill="none" stroke="#06B6D4" stroke-width="8" stroke-dasharray="0 251.3" stroke-dashoffset="-31.4" stroke-linecap="round" style="filter:drop-shadow(0 0 5px #06B6D4);transition:stroke-dasharray 1s cubic-bezier(.25,1,.35,1)"/>
+        <circle class="fg-arc" id="water-arc" cx="50" cy="50" r="40" fill="none" stroke="#00d9ff" stroke-width="8" stroke-dasharray="0 251.3" stroke-dashoffset="-31.4" stroke-linecap="round" style="filter:drop-shadow(0 0 5px #00d9ff);transition:stroke-dasharray 1s cubic-bezier(.25,1,.35,1)"/>
       </svg>
       <div class="bio-gauge-label">
         <div class="mono glow" id="water-num" style="font-size:1.4rem;font-weight:700">0</div>
@@ -500,7 +482,7 @@
   const canvas = document.getElementById("scout-radar");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
-  const GREEN = "57,255,20";
+  const GREEN = "0,217,255";
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const S = canvas.width;                 // logical size (250)
   canvas.width = canvas.height = S * dpr; // backing store for crispness
@@ -604,25 +586,5 @@
 })();
 </script>
 
-<!-- Black-hole landing: Three.js resolved via import map; the module loads bare
-     specifiers ("three", "three/addons/…") and dynamic-imports them so a CDN
-     failure degrades to the CSS fallback instead of trapping the user. -->
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
-  }
-}
-</script>
-<!-- Safety net: if the module never boots (e.g. import map unsupported), don't
-     leave the overlay covering the dashboard. blackhole.js clears this. -->
-<script>
-  window.__bhSafety = setTimeout(function () {
-    var el = document.getElementById("bh-landing");
-    if (el) el.parentNode && el.remove();
-  }, 9000);
-</script>
-<script type="module" src="{{ url_for('static', filename='js/blackhole.js') }}"></script>
 </body>
 </html>
