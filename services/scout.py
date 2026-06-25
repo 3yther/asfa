@@ -1,0 +1,254 @@
+"""Scout — part-time job hunting agent.
+
+Pulls part-time roles across a set of South-East London / North Kent locations
+from two real job-search APIs — Reed (https://www.reed.co.uk/developers) and
+SerpAPI's Google Jobs engine — filters to a list of target high-street
+employers (or anything posted in the last 24h), and stores new finds in the
+scout_jobs table.
+
+Best-effort by design: every network step is wrapped defensively — a failed
+request yields zero jobs rather than raising, and `scan()` always returns an
+integer count so the API can return valid JSON regardless of upstream state.
+
+Required environment variables:
+  - REED_API_KEY  — Reed API key, used as the HTTP Basic auth username.
+  - SERPAPI_KEY   — SerpAPI key for the google_jobs engine.
+Either may be unset; the corresponding source is simply skipped.
+"""
+import logging
+import os
+import re
+from datetime import datetime, timedelta
+
+import requests
+
+try:  # SerpAPI Python client (package: google-search-results)
+    from serpapi import GoogleSearch
+except ImportError:  # surfaced clearly; SerpAPI source is skipped if missing
+    GoogleSearch = None
+
+import database as db
+
+logger = logging.getLogger("asfa.scout")
+
+REED_BASE = "https://www.reed.co.uk/api/1.0/search"
+SERPAPI_BASE = "https://serpapi.com/search"
+
+# South-East London / North Kent catchment.
+LOCATIONS = [
+    "Erith", "Bexleyheath", "Bluewater", "Dartford",
+    "Charlton", "Woolwich", "Belvedere", "Plumstead",
+]
+
+# Reed runs one request per (keyword x location).
+REED_KEYWORDS = [
+    "part time retail", "sales assistant", "customer service", "team member",
+]
+
+# Google Jobs (SerpAPI) runs one combined query per location.
+JOB_TYPES = ["retail", "sales assistant", "customer service", "team member"]
+
+# Roles are kept if the employer matches one of these (case-insensitive) OR the
+# posting is < 24h old regardless of employer.
+TARGET_COMPANIES = [
+    "TK Maxx", "NEXT", "Nike", "Ernest Jones", "Farmfoods", "iSmash",
+    "UNIQLO", "McDonald's", "H&M", "Zara", "Primark", "River Island",
+    "New Look", "Sports Direct", "JD Sports", "Marks & Spencer",
+    "Boots", "Superdrug", "Costa", "Greggs",
+]
+_TARGETS_LC = [c.lower() for c in TARGET_COMPANIES]
+
+# Network timeout (seconds) for upstream API calls.
+REQUEST_TIMEOUT = 20
+
+
+def _company_is_target(company: str) -> bool:
+    if not company:
+        return False
+    c = company.lower()
+    return any(t in c for t in _TARGETS_LC)
+
+
+def _is_recent(posted: str) -> bool:
+    """True if a posting looks like it's from the last ~24 hours.
+
+    Handles both the relative strings Google Jobs returns ('Today',
+    '3 hours ago', '1 day ago') and the absolute DD/MM/YYYY dates Reed returns.
+    """
+    if not posted:
+        return False
+    t = posted.strip().lower()
+    if "just posted" in t or "today" in t or "just now" in t:
+        return True
+    m = re.search(r"(\d+)\s*(hour|hr|minute|min|day)", t)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        if unit.startswith(("hour", "hr", "minute", "min")):
+            return True
+        if unit.startswith("day"):
+            return n <= 1
+        return False
+    # Reed absolute date, e.g. "25/06/2026".
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            d = datetime.strptime(posted.strip(), fmt).date()
+            return (datetime.now().date() - d) <= timedelta(days=1)
+        except ValueError:
+            continue
+    return False
+
+
+def _fetch_reed(found_date: str, seen_urls: set) -> int:
+    """Query Reed for every (keyword x location) and store qualifying jobs."""
+    api_key = os.getenv("REED_API_KEY")
+    if not api_key:
+        logger.info("scout: REED_API_KEY not set — skipping Reed source")
+        return 0
+
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+    inserted = 0
+
+    for location in LOCATIONS:
+        for keyword in REED_KEYWORDS:
+            params = {
+                "keywords": keyword,
+                "locationName": location,
+                "distancefromLocation": 3,
+                "fullTime": "false",
+                "partTime": "true",
+                "minimumDate": yesterday,
+            }
+            try:
+                resp = requests.get(
+                    REED_BASE, params=params, auth=(api_key, ""),
+                    timeout=REQUEST_TIMEOUT,
+                )
+            except requests.RequestException as e:
+                logger.warning("scout reed fetch failed (%s/%s): %s",
+                               location, keyword, e)
+                continue
+            if resp.status_code != 200:
+                logger.warning("scout reed %s/%s -> HTTP %s",
+                               location, keyword, resp.status_code)
+                continue
+            try:
+                results = resp.json().get("results", []) or []
+            except ValueError:
+                logger.warning("scout reed %s/%s -> invalid JSON",
+                               location, keyword)
+                continue
+            logger.info("scout reed %s/%s -> %d results",
+                        location, keyword, len(results))
+
+            for r in results:
+                salary = (r.get("salary")
+                          or r.get("maximumSalary")
+                          or r.get("minimumSalary") or "")
+                job = {
+                    "title": r.get("jobTitle") or "",
+                    "company": r.get("employerName") or "",
+                    "location": r.get("locationName") or location,
+                    "salary": str(salary) if salary else "",
+                    "url": r.get("jobUrl") or "",
+                    "posted_date": r.get("date") or "",
+                    "description": (r.get("jobDescription") or "").strip(),
+                    "source": "reed",
+                }
+                if _store(job, found_date, seen_urls):
+                    inserted += 1
+    return inserted
+
+
+def _fetch_serpapi(found_date: str, seen_urls: set) -> int:
+    """Query Google Jobs via SerpAPI, one combined query per location."""
+    api_key = os.getenv("SERPAPI_KEY")
+    if not api_key:
+        logger.info("scout: SERPAPI_KEY not set — skipping SerpAPI source")
+        return 0
+    if GoogleSearch is None:
+        logger.warning("scout: google-search-results not installed — "
+                       "skipping SerpAPI source")
+        return 0
+
+    job_type = " ".join(JOB_TYPES)
+    inserted = 0
+
+    for location in LOCATIONS:
+        params = {
+            "engine": "google_jobs",
+            "q": f"part time {job_type} {location}",
+            "location": "London, England",
+            "chips": "date_posted:today",
+            "api_key": api_key,
+        }
+        try:
+            results = GoogleSearch(params).get_dict()
+        except Exception as e:
+            logger.warning("scout serpapi fetch failed (%s): %s", location, e)
+            continue
+        if results.get("error"):
+            logger.warning("scout serpapi %s -> %s", location, results["error"])
+            continue
+        jobs = results.get("jobs_results", []) or []
+        logger.info("scout serpapi %s -> %d results", location, len(jobs))
+
+        for r in jobs:
+            ext = r.get("detected_extensions") or {}
+            link = r.get("link") or ""
+            if not link:
+                apply_opts = r.get("apply_options") or []
+                if apply_opts:
+                    link = apply_opts[0].get("link") or ""
+            job = {
+                "title": r.get("title") or "",
+                "company": r.get("company_name") or "",
+                "location": r.get("location") or location,
+                "salary": (r.get("detected_extensions") or {}).get("salary", ""),
+                "url": link,
+                "posted_date": ext.get("posted_at") or "",
+                "description": (r.get("description") or "").strip(),
+                "source": r.get("via") or "google_jobs",
+            }
+            if _store(job, found_date, seen_urls):
+                inserted += 1
+    return inserted
+
+
+def _store(job: dict, found_date: str, seen_urls: set) -> bool:
+    """Apply the target-company / recency filter and insert. Returns True if a
+    new row was written. Dedups within this run via seen_urls and across runs
+    via the DB's url uniqueness check in add_scout_job."""
+    url = job.get("url")
+    if not url or url in seen_urls:
+        return False
+    recent = _is_recent(job.get("posted_date", ""))
+    if not (recent or _company_is_target(job.get("company", ""))):
+        return False
+    seen_urls.add(url)
+    return db.add_scout_job(
+        title=job.get("title", ""),
+        company=job.get("company", ""),
+        location=job.get("location", ""),
+        salary=job.get("salary", ""),
+        job_type="part time",
+        url=url,
+        description=job.get("description", ""),
+        source=job.get("source", ""),
+        posted_date=job.get("posted_date", ""),
+        found_date=found_date,
+        is_new=1 if recent else 0,
+    )
+
+
+def scan() -> int:
+    """Run a full pass over both sources. Saves new, non-duplicate, qualifying
+    jobs and returns the count of jobs inserted."""
+    found_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    seen_urls = set()
+
+    new_count = 0
+    new_count += _fetch_reed(found_date, seen_urls)
+    new_count += _fetch_serpapi(found_date, seen_urls)
+
+    logger.info("Scout scan complete — %d new jobs found", new_count)
+    return new_count
