@@ -1024,6 +1024,12 @@ def api_scout_application_update(app_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/scout/applications/<int:app_id>", methods=["DELETE"])
+def api_scout_application_delete(app_id):
+    db.delete_scout_application(app_id)
+    return jsonify({"ok": True})
+
+
 def scout_daily_scan():
     """06:00 daily — scrape Indeed for new part-time roles and ping the bell."""
     try:
