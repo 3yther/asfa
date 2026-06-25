@@ -4,47 +4,145 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#000408">
-<title>ASFA // LOCKED</title>
+<title>ASFA // MISSION CONTROL</title>
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root { --cyan:#00d9ff; --bg:#000408; }
+  :root { --cyan:#00d9ff; --cyan-hi:#5fe6ff; --bg:#000408; }
   * { box-sizing:border-box; }
+  html, body { height:100%; }
   body {
-    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-    background:radial-gradient(circle at 50% 30%, #06121c 0%, var(--bg) 70%);
-    font-family:'JetBrains Mono','IBM Plex Mono',monospace; color:#cfe9f2;
+    margin:0; min-height:100vh; overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
+    background:#000408;
+    font-family:'Inter',-apple-system,sans-serif; color:#cfe9f2;
   }
+
+  /* Deep-space starfield + faint nebula */
+  #starfield { position:fixed; inset:0; z-index:0; display:block; }
+  .nebula {
+    position:fixed; z-index:0; pointer-events:none;
+    width:60vw; height:60vw; bottom:-18vw; right:-14vw; border-radius:50%;
+    background:radial-gradient(circle, rgba(79,70,229,.14) 0%, rgba(0,217,255,.05) 40%, transparent 70%);
+    filter:blur(40px);
+  }
+  .nebula.n2 {
+    width:42vw; height:42vw; top:-14vw; left:-10vw; bottom:auto; right:auto;
+    background:radial-gradient(circle, rgba(0,217,255,.09) 0%, rgba(124,58,237,.04) 45%, transparent 72%);
+  }
+
+  /* Login card */
   .lock {
-    width:min(360px,90vw); padding:34px 30px; border:1px solid rgba(0,217,255,.25);
-    border-radius:14px; background:rgba(4,12,20,.72);
-    box-shadow:0 0 40px rgba(0,217,255,.08), inset 0 0 30px rgba(0,217,255,.04);
+    position:relative; z-index:3;
+    width:min(380px,90vw); padding:40px 34px 34px;
+    border:1px solid rgba(0,217,255,.16); border-radius:16px;
+    background:rgba(9,15,24,.55);
+    backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+    box-shadow:0 18px 50px rgba(0,0,0,.5), 0 0 40px rgba(0,217,255,.05);
     text-align:center;
   }
-  .title { font-weight:700; letter-spacing:.32em; font-size:20px; color:var(--cyan); margin-bottom:4px; }
-  .sub { font-size:11px; letter-spacing:.18em; color:#5f7a85; margin-bottom:26px; text-transform:uppercase; }
+  .title {
+    font-family:'Inter',sans-serif; font-weight:800;
+    letter-spacing:.5px; font-size:18px; line-height:1.35;
+    color:var(--cyan-hi); text-shadow:0 0 22px rgba(0,217,255,.4); margin-bottom:10px;
+  }
+  .sub { font-size:11px; letter-spacing:.18em; color:#5f7a85; margin-bottom:28px; text-transform:uppercase; }
   input[type=password] {
-    width:100%; padding:13px 14px; margin-bottom:14px; background:#020a10;
-    border:1px solid rgba(0,217,255,.3); border-radius:8px; color:#e8f7fc;
-    font-family:inherit; font-size:14px; letter-spacing:.08em; outline:none;
+    width:100%; padding:14px 15px; margin-bottom:16px;
+    background:rgba(2,10,16,.55);
+    border:1px solid rgba(0,217,255,.20); border-radius:10px; color:#e8f7fc;
+    font-family:inherit; font-size:14px; letter-spacing:.06em; outline:none;
+    transition:border-color .25s, box-shadow .25s, background .25s;
   }
-  input[type=password]:focus { border-color:var(--cyan); box-shadow:0 0 0 2px rgba(0,217,255,.18); }
+  input[type=password]::placeholder { color:#3f5963; letter-spacing:.1em; }
+  input[type=password]:focus {
+    border-color:var(--cyan);
+    background:rgba(4,16,24,.7);
+    box-shadow:0 0 0 2px rgba(0,217,255,.14), 0 0 22px rgba(0,217,255,.16);
+  }
   button {
-    width:100%; padding:13px; background:linear-gradient(180deg,#00d9ff,#0095b3);
-    border:none; border-radius:8px; color:#001016; font-family:inherit; font-weight:700;
-    letter-spacing:.2em; font-size:13px; cursor:pointer; text-transform:uppercase;
+    width:100%; padding:14px;
+    background:linear-gradient(180deg, rgba(0,217,255,.92), rgba(0,150,185,.92));
+    border:none; border-radius:10px; color:#001318; font-family:inherit; font-weight:700;
+    letter-spacing:.22em; font-size:13px; cursor:pointer; text-transform:uppercase;
+    box-shadow:0 0 18px rgba(0,217,255,.18);
+    transition:filter .2s, box-shadow .2s;
   }
-  button:hover { filter:brightness(1.1); }
+  button:hover { filter:brightness(1.08); box-shadow:0 0 26px rgba(0,217,255,.28); }
   .err { color:#ff5d6c; font-size:12px; letter-spacing:.05em; margin-bottom:14px; min-height:16px; }
 </style>
 </head>
 <body>
+  <canvas id="starfield"></canvas>
+  <div class="nebula"></div>
+  <div class="nebula n2"></div>
+
   <form class="lock" method="POST" action="{{ url_for('login', next=next_url) }}">
-    <div class="title">[ ASFA ]</div>
-    <div class="sub">Access Restricted</div>
+    <div class="title">INITIALIZE<br>MISSION CONTROL</div>
+    <div class="sub">Authentication required</div>
     {% if error %}<div class="err">{{ error }}</div>{% endif %}
     <input type="password" name="password" placeholder="passphrase" autofocus autocomplete="current-password">
-    <button type="submit">Unlock</button>
+    <button type="submit">Engage</button>
   </form>
+
+<script>
+(function () {
+  // Deep-space starfield — gently drifting stars + a few brighter twinklers.
+  const canvas = document.getElementById("starfield");
+  const ctx = canvas.getContext("2d");
+  let W, H, stars = [], bright = [];
+
+  function build() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    const count = Math.max(200, Math.round(W * H / 6000));
+    stars = Array.from({ length: count }, () => ({
+      x: Math.random() * W, y: Math.random() * H,
+      r: Math.random() * 1.1 + 0.2,
+      a: Math.random() * 0.5 + 0.2,
+      vx: (Math.random() - 0.5) * 0.05,
+      vy: (Math.random() - 0.5) * 0.05,
+    }));
+    bright = Array.from({ length: 4 }, () => ({
+      x: Math.random() * W, y: Math.random() * H,
+      r: Math.random() * 1.4 + 1.4,
+      tw: Math.random() * Math.PI * 2,
+      vx: (Math.random() - 0.5) * 0.04,
+      vy: (Math.random() - 0.5) * 0.04,
+    }));
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    for (const s of stars) {
+      s.x += s.vx; s.y += s.vy;
+      if (s.x < 0) s.x = W; else if (s.x > W) s.x = 0;
+      if (s.y < 0) s.y = H; else if (s.y > H) s.y = 0;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(207,233,242,${s.a})`;
+      ctx.fill();
+    }
+    for (const b of bright) {
+      b.x += b.vx; b.y += b.vy; b.tw += 0.03;
+      if (b.x < 0) b.x = W; else if (b.x > W) b.x = 0;
+      if (b.y < 0) b.y = H; else if (b.y > H) b.y = 0;
+      const a = 0.55 + 0.45 * Math.sin(b.tw);
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(95,230,255,${a})`;
+      ctx.shadowColor = "rgba(0,217,255,0.8)";
+      ctx.shadowBlur = 8;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+    requestAnimationFrame(draw);
+  }
+
+  build();
+  draw();
+  window.addEventListener("resize", build);
+})();
+</script>
 </body>
 </html>
