@@ -106,10 +106,62 @@
     letter-spacing: 1px; text-transform: uppercase; padding: 3px 9px; border-radius: 20px;
     border: 1px solid currentColor;
   }
-  .badge.pending     { color: var(--gold);  background: rgba(245,197,66,.1); }
-  .badge.applied     { color: var(--cyan);  background: rgba(6,182,212,.12); }
-  .badge.rejected    { color: var(--red);   background: rgba(248,81,73,.12); }
-  .badge.interviewed { color: var(--scout); background: rgba(57,255,20,.12); }
+  .badge.pending      { color: var(--gold);  background: rgba(245,197,66,.1); }
+  .badge.applied      { color: var(--cyan);  background: rgba(6,182,212,.12); }
+  .badge.interviewing { color: #c084fc;      background: rgba(192,132,252,.12); }
+  .badge.interviewed  { color: #c084fc;      background: rgba(192,132,252,.12); }
+  .badge.rejected     { color: var(--red);   background: rgba(248,81,73,.12); }
+  .badge.offered      { color: var(--scout); background: rgba(57,255,20,.14); text-shadow: 0 0 6px rgba(57,255,20,.5); }
+  .badge.clickable    { cursor: pointer; transition: box-shadow .15s, transform .1s; }
+  .badge.clickable:hover { box-shadow: 0 0 10px currentColor; }
+  .badge.clickable:active { transform: scale(.95); }
+
+  /* delete (✕) button on application rows */
+  .del-btn {
+    font-family: 'JetBrains Mono', monospace; font-size: .72rem; line-height: 1;
+    background: rgba(248,81,73,.08); color: var(--red); border: 1px solid rgba(248,81,73,.4);
+    border-radius: var(--radius); padding: 4px 9px; cursor: pointer;
+  }
+  .del-btn:hover { background: rgba(248,81,73,.22); box-shadow: 0 0 10px rgba(248,81,73,.4); }
+
+  /* ── Log-application form ────────────────────────────────────────────── */
+  .log-toggle {
+    font-family: 'JetBrains Mono', monospace; font-size: .62rem; letter-spacing: 1.5px;
+    color: var(--scout); background: rgba(57,255,20,.08); border: 1px solid var(--scout-dim);
+    border-radius: var(--radius); padding: 7px 14px; cursor: pointer;
+  }
+  .log-toggle:hover { background: rgba(57,255,20,.18); box-shadow: 0 0 12px rgba(57,255,20,.3); }
+  .log-form {
+    margin-bottom: 16px; padding: 16px; border: 1px solid var(--scout-dim); border-radius: var(--radius);
+    background: rgba(57,255,20,.035); box-shadow: inset 0 0 22px rgba(57,255,20,.05);
+  }
+  .log-form[hidden] { display: none; }
+  .log-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .log-field { display: flex; flex-direction: column; gap: 5px; }
+  .log-field.full { grid-column: 1 / -1; }
+  .log-field label {
+    font-family: 'JetBrains Mono', monospace; font-size: .58rem; letter-spacing: 1.5px;
+    color: var(--muted); text-transform: uppercase;
+  }
+  .log-field input, .log-field select, .log-field textarea {
+    background: #02110a; color: var(--scout); border: 1px solid var(--scout-dim);
+    border-radius: var(--radius); padding: 8px 10px;
+    font-family: 'JetBrains Mono', monospace; font-size: .74rem;
+  }
+  .log-field input:focus, .log-field select:focus, .log-field textarea:focus {
+    outline: none; border-color: var(--scout); box-shadow: 0 0 10px rgba(57,255,20,.25);
+  }
+  .log-field textarea { resize: vertical; min-height: 56px; }
+  .log-submit {
+    margin-top: 14px; font-family: 'JetBrains Mono', monospace; font-weight: 700;
+    font-size: .74rem; letter-spacing: 2px; color: #051a02;
+    background: linear-gradient(180deg, #6dff4f, #39ff14); border: none; border-radius: 6px;
+    padding: 11px 26px; cursor: pointer; box-shadow: 0 0 16px rgba(57,255,20,.4);
+  }
+  .log-submit:hover { box-shadow: 0 0 26px rgba(57,255,20,.7); }
+  .log-submit:active { transform: scale(.97); }
+  .log-submit:disabled { opacity: .6; cursor: progress; }
+  @media (max-width: 620px) { .log-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -159,12 +211,59 @@
 
   <!-- ── Applications ──────────────────────────────────────────────────── -->
   <div class="panel">
-    <div class="panel-head"><h2>Applications</h2></div>
+    <div class="panel-head">
+      <h2>Applications</h2>
+      <button class="log-toggle" id="log-toggle" type="button" aria-expanded="false">＋ LOG APPLICATION</button>
+    </div>
+
+    <form class="log-form" id="log-form" hidden>
+      <div class="log-grid">
+        <div class="log-field">
+          <label for="f-company">Company</label>
+          <input type="text" id="f-company" required autocomplete="off">
+        </div>
+        <div class="log-field">
+          <label for="f-role">Role</label>
+          <input type="text" id="f-role" required autocomplete="off">
+        </div>
+        <div class="log-field">
+          <label for="f-location">Location</label>
+          <select id="f-location">
+            <option>Erith</option><option>Bexleyheath</option><option>Bluewater</option>
+            <option>Dartford</option><option>Charlton</option><option>Woolwich</option>
+            <option>Belvedere</option><option>Plumstead</option><option>Other</option>
+          </select>
+        </div>
+        <div class="log-field">
+          <label for="f-method">Method</label>
+          <select id="f-method">
+            <option>Online</option><option>In Person</option><option>Email</option><option>Referral</option>
+          </select>
+        </div>
+        <div class="log-field">
+          <label for="f-date">Date Applied</label>
+          <input type="date" id="f-date">
+        </div>
+        <div class="log-field">
+          <label for="f-status">Status</label>
+          <select id="f-status">
+            <option>pending</option><option>applied</option><option>interviewing</option>
+            <option>rejected</option><option>offered</option>
+          </select>
+        </div>
+        <div class="log-field full">
+          <label for="f-notes">Notes (optional)</label>
+          <textarea id="f-notes" placeholder="Anything worth remembering…"></textarea>
+        </div>
+      </div>
+      <button class="log-submit" id="log-submit" type="submit">LOG IT</button>
+    </form>
+
     <table>
       <thead>
-        <tr><th>Company</th><th>Role</th><th>Location</th><th>Method</th><th>Date Applied</th><th>Status</th></tr>
+        <tr><th>Company</th><th>Role</th><th>Location</th><th>Method</th><th>Date Applied</th><th>Status</th><th></th></tr>
       </thead>
-      <tbody id="apps-body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+      <tbody id="apps-body"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
     </table>
   </div>
 
@@ -282,16 +381,21 @@
   }
 
   /* ── Applications table ──────────────────────────────────────────────── */
+  const STATUS_CYCLE = ["pending", "applied", "interviewing", "rejected", "offered"];
+  const nextStatus = (s) => {
+    const i = STATUS_CYCLE.indexOf((s || "pending").toLowerCase());
+    return STATUS_CYCLE[(i + 1) % STATUS_CYCLE.length];
+  };
   function statusBadge(status) {
     const s = (status || "pending").toLowerCase();
-    const cls = ["pending", "applied", "rejected", "interviewed"].includes(s) ? s : "pending";
-    return `<span class="badge ${cls}">${esc(s)}</span>`;
+    const cls = STATUS_CYCLE.includes(s) || s === "interviewed" ? s : "pending";
+    return `<span class="badge clickable ${cls}" title="click to cycle status">${esc(s)}</span>`;
   }
   async function loadApps() {
     const apps = await apiGet("/api/scout/applications");
     const body = document.getElementById("apps-body");
     if (!Array.isArray(apps) || !apps.length) {
-      body.innerHTML = '<tr><td colspan="6" class="empty">No applications logged yet.</td></tr>';
+      body.innerHTML = '<tr><td colspan="7" class="empty">No applications logged yet.</td></tr>';
       return;
     }
     body.innerHTML = apps.map((a) => `
@@ -301,9 +405,73 @@
         <td>${esc(a.location) || "—"}</td>
         <td>${esc(a.method) || "—"}</td>
         <td class="muted">${esc(a.applied_date) || "—"}</td>
-        <td>${statusBadge(a.status)}</td>
+        <td data-status-cell="${a.id}">${statusBadge(a.status)}</td>
+        <td><button class="del-btn" data-del="${a.id}" title="delete">✕</button></td>
       </tr>`).join("");
+
+    // Clickable status badge → cycle via PUT.
+    body.querySelectorAll(".badge.clickable").forEach((b) => {
+      const cell = b.closest("[data-status-cell]");
+      if (!cell) return;
+      b.addEventListener("click", async () => {
+        const id = Number(cell.dataset.statusCell);
+        const next = nextStatus(b.textContent.trim());
+        await apiSend(`/api/scout/applications/${id}`, { status: next }, "PUT");
+        loadApps();
+      });
+    });
+
+    // Delete button → confirm, then DELETE.
+    body.querySelectorAll(".del-btn").forEach((b) =>
+      b.addEventListener("click", async () => {
+        if (!confirm("Delete this application?")) return;
+        await apiSend(`/api/scout/applications/${Number(b.dataset.del)}`, {}, "DELETE");
+        loadApps();
+      }));
   }
+
+  /* ── Log-application form ─────────────────────────────────────────────── */
+  (function () {
+    const toggle = document.getElementById("log-toggle");
+    const form = document.getElementById("log-form");
+    const submit = document.getElementById("log-submit");
+    const dateInput = document.getElementById("f-date");
+    dateInput.value = new Date().toISOString().slice(0, 10); // default today
+
+    toggle.addEventListener("click", () => {
+      const open = form.hidden;
+      form.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.textContent = open ? "✕ CLOSE" : "＋ LOG APPLICATION";
+      if (open) document.getElementById("f-company").focus();
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const company = document.getElementById("f-company").value.trim();
+      const role = document.getElementById("f-role").value.trim();
+      if (!company || !role) return;
+      submit.disabled = true;
+      try {
+        await apiSend("/api/scout/applications", {
+          company, role,
+          location: document.getElementById("f-location").value,
+          method: document.getElementById("f-method").value,
+          applied_date: dateInput.value,
+          status: document.getElementById("f-status").value,
+          notes: document.getElementById("f-notes").value.trim(),
+        });
+        form.reset();
+        dateInput.value = new Date().toISOString().slice(0, 10);
+        form.hidden = true;
+        toggle.setAttribute("aria-expanded", "false");
+        toggle.textContent = "＋ LOG APPLICATION";
+        await loadApps();
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  })();
 
   /* ── Scan ────────────────────────────────────────────────────────────── */
   document.getElementById("scan-btn").addEventListener("click", async () => {

@@ -14,11 +14,17 @@ Required environment variables:
   - REED_API_KEY  — Reed API key, used as the HTTP Basic auth username.
   - SERPAPI_KEY   — SerpAPI key for the google_jobs engine.
 Either may be unset; the corresponding source is simply skipped.
+
+Optional — email notification on new finds (Gmail SMTP):
+  - SCOUT_EMAIL_USER — Gmail address to send from / authenticate with.
+  - SCOUT_EMAIL_PASS — Gmail app password. Both must be set or email is skipped.
 """
 import logging
 import os
 import re
+import smtplib
 from datetime import datetime, timedelta
+from email.mime.text import MIMEText
 
 import requests
 
@@ -33,6 +39,11 @@ logger = logging.getLogger("asfa.scout")
 
 REED_BASE = "https://www.reed.co.uk/api/1.0/search"
 SERPAPI_BASE = "https://serpapi.com/search"
+
+# Email notification (Gmail SMTP) for new finds.
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 587
+NOTIFY_EMAIL_TO = "ami.salax08@gmail.com"
 
 # South-East London / North Kent catchment.
 LOCATIONS = [
@@ -98,7 +109,7 @@ def _is_recent(posted: str) -> bool:
     return False
 
 
-def _fetch_reed(found_date: str, seen_urls: set) -> int:
+def _fetch_reed(found_date: str, seen_urls: set, collected: list) -> int:
     """Query Reed for every (keyword x location) and store qualifying jobs."""
     api_key = os.getenv("REED_API_KEY")
     if not api_key:
@@ -154,12 +165,12 @@ def _fetch_reed(found_date: str, seen_urls: set) -> int:
                     "description": (r.get("jobDescription") or "").strip(),
                     "source": "reed",
                 }
-                if _store(job, found_date, seen_urls):
+                if _store(job, found_date, seen_urls, collected):
                     inserted += 1
     return inserted
 
 
-def _fetch_serpapi(found_date: str, seen_urls: set) -> int:
+def _fetch_serpapi(found_date: str, seen_urls: set, collected: list) -> int:
     """Query Google Jobs via SerpAPI, one combined query per location."""
     api_key = os.getenv("SERPAPI_KEY")
     if not api_key:
@@ -209,12 +220,12 @@ def _fetch_serpapi(found_date: str, seen_urls: set) -> int:
                 "description": (r.get("description") or "").strip(),
                 "source": r.get("via") or "google_jobs",
             }
-            if _store(job, found_date, seen_urls):
+            if _store(job, found_date, seen_urls, collected):
                 inserted += 1
     return inserted
 
 
-def _store(job: dict, found_date: str, seen_urls: set) -> bool:
+def _store(job: dict, found_date: str, seen_urls: set, collected: list) -> bool:
     """Apply the target-company / recency filter and insert. Returns True if a
     new row was written. Dedups within this run via seen_urls and across runs
     via the DB's url uniqueness check in add_scout_job."""
@@ -225,7 +236,7 @@ def _store(job: dict, found_date: str, seen_urls: set) -> bool:
     if not (recent or _company_is_target(job.get("company", ""))):
         return False
     seen_urls.add(url)
-    return db.add_scout_job(
+    inserted = db.add_scout_job(
         title=job.get("title", ""),
         company=job.get("company", ""),
         location=job.get("location", ""),
@@ -238,17 +249,67 @@ def _store(job: dict, found_date: str, seen_urls: set) -> bool:
         found_date=found_date,
         is_new=1 if recent else 0,
     )
+    if inserted:
+        collected.append(job)
+    return inserted
+
+
+def _send_email(jobs: list) -> bool:
+    """Email the list of newly-found jobs via Gmail SMTP. No-op (returns False)
+    unless both SCOUT_EMAIL_USER and SCOUT_EMAIL_PASS are set and jobs is
+    non-empty. Best-effort: any failure is logged and swallowed."""
+    if not jobs:
+        return False
+    user = os.getenv("SCOUT_EMAIL_USER")
+    password = os.getenv("SCOUT_EMAIL_PASS")
+    if not (user and password):
+        logger.info("scout: SCOUT_EMAIL_USER/SCOUT_EMAIL_PASS not set — "
+                    "skipping email notification")
+        return False
+
+    n = len(jobs)
+    subject = f"SCOUT — {n} new job{'s' if n != 1 else ''} found"
+    lines = []
+    for j in jobs:
+        lines.append(
+            f"• {j.get('title', '') or 'Untitled'} — {j.get('company', '') or 'Unknown'}\n"
+            f"  {j.get('location', '') or '—'}  |  posted: {j.get('posted_date', '') or 'n/a'}\n"
+            f"  {j.get('url', '') or '(no link)'}"
+        )
+    body = f"Scout found {n} new part-time role{'s' if n != 1 else ''}:\n\n" \
+           + "\n\n".join(lines)
+
+    try:
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = user
+        msg["To"] = NOTIFY_EMAIL_TO
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(user, password)
+            server.sendmail(user, [NOTIFY_EMAIL_TO], msg.as_string())
+        logger.info("scout: emailed %d new job(s) to %s", n, NOTIFY_EMAIL_TO)
+        return True
+    except Exception as e:
+        logger.warning("scout email send failed: %s", e)
+        return False
 
 
 def scan() -> int:
     """Run a full pass over both sources. Saves new, non-duplicate, qualifying
-    jobs and returns the count of jobs inserted."""
+    jobs, emails them if any were found, and returns the count inserted."""
     found_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     seen_urls = set()
+    collected: list = []
 
     new_count = 0
-    new_count += _fetch_reed(found_date, seen_urls)
-    new_count += _fetch_serpapi(found_date, seen_urls)
+    new_count += _fetch_reed(found_date, seen_urls, collected)
+    new_count += _fetch_serpapi(found_date, seen_urls, collected)
+
+    if collected:
+        _send_email(collected)
 
     logger.info("Scout scan complete — %d new jobs found", new_count)
     return new_count

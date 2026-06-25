@@ -1174,3 +1174,11 @@ def update_scout_application_status(app_id, status, notes=None) -> None:
             cur.execute(
                 f"UPDATE scout_applications SET status = {ph} WHERE id = {ph}",
                 (status, app_id))
+
+
+def delete_scout_application(app_id) -> None:
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"DELETE FROM scout_applications WHERE id = {ph}", (app_id,))

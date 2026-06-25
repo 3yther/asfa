@@ -13,9 +13,10 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <style>
   /* Scout radar widget — neon green scope on the dashboard */
+  #scout-card { width: 100%; }
   #scout-card .scout-radar-wrap { display: flex; justify-content: center; padding: 4px 0 10px; }
   #scout-card .scout-radar {
-    width: 300px; height: 300px; max-width: 100%; border-radius: 50%;
+    width: 250px; height: 250px; max-width: 100%; border-radius: 50%;
     background: radial-gradient(circle at 50% 50%, rgba(57,255,20,.06), rgba(0,4,8,.9) 72%);
     box-shadow: 0 0 24px rgba(57,255,20,.18), inset 0 0 30px rgba(57,255,20,.08);
   }
@@ -281,7 +282,7 @@
       <a class="btn btn-ghost" href="/scout" title="Open Scout job hunter">⤢</a>
     </div>
     <div class="scout-radar-wrap">
-      <canvas id="scout-radar" class="scout-radar" width="300" height="300"
+      <canvas id="scout-radar" class="scout-radar" width="250" height="250"
               aria-label="Scout job radar"></canvas>
     </div>
     <div class="scout-radar-meta mono">
@@ -501,7 +502,7 @@
   const ctx = canvas.getContext("2d");
   const GREEN = "57,255,20";
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const S = canvas.width;                 // logical size (300)
+  const S = canvas.width;                 // logical size (250)
   canvas.width = canvas.height = S * dpr; // backing store for crispness
   ctx.scale(dpr, dpr);
   const cx = S / 2, cy = S / 2, R = S / 2 - 6;
