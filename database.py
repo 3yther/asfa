@@ -1037,3 +1037,140 @@ def complete_mission(mission_id: int) -> dict:
             f"🎯 Completed mission: {mission['title']}")
     mission["completed"] = 1
     return {"mission": mission, "award": award}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SCOUT — part-time job hunting agent (scraped jobs + application tracker)
+# Self-initialising, same pattern as Mission Control / supplements / focus:
+# idempotent CREATE on first use, works on SQLite and a fresh Postgres.
+# ════════════════════════════════════════════════════════════════════════════
+
+_SCOUT_READY = False
+
+
+def _ensure_scout_tables():
+    global _SCOUT_READY
+    if _SCOUT_READY:
+        return
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS scout_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT, company TEXT, location TEXT,
+            salary TEXT, job_type TEXT, url TEXT,
+            description TEXT, source TEXT,
+            posted_date TEXT, found_date TEXT,
+            is_new INTEGER DEFAULT 1,
+            applied INTEGER DEFAULT 0
+        )""",
+        """CREATE TABLE IF NOT EXISTS scout_applications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT, role TEXT, location TEXT,
+            method TEXT, applied_date TEXT,
+            status TEXT DEFAULT 'pending',
+            notes TEXT
+        )""",
+    ]
+    with get_db() as conn:
+        cur = conn.cursor()
+        for stmt in stmts:
+            if USE_POSTGRES:
+                stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+            cur.execute(stmt)
+    _SCOUT_READY = True
+
+
+# ── Scout jobs ───────────────────────────────────────────────────────────────
+
+def scout_job_exists(url: str) -> bool:
+    """Dedup check — True if a job with this url is already stored."""
+    if not url:
+        return False
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT 1 FROM scout_jobs WHERE url = {ph} LIMIT 1", (url,))
+        return cur.fetchone() is not None
+
+
+def add_scout_job(title, company, location, salary, job_type, url, description,
+                  source, posted_date, found_date, is_new=1) -> bool:
+    """Insert a scraped job, skipping duplicates by url. Returns True if inserted."""
+    _ensure_scout_tables()
+    if scout_job_exists(url):
+        return False
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cols = ("title, company, location, salary, job_type, url, description, "
+                "source, posted_date, found_date, is_new")
+        placeholders = ",".join([ph] * 11)
+        cur.execute(
+            f"INSERT INTO scout_jobs ({cols}) VALUES ({placeholders})",
+            (title, company, location, salary, job_type, url, description,
+             source, posted_date, found_date, int(is_new)))
+    return True
+
+
+def get_scout_jobs(location=None, new_only=False) -> list:
+    """All stored jobs, newest first. Optional case-insensitive location filter
+    and a new_only flag (is_new = 1)."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        clauses, params = [], []
+        if location:
+            clauses.append(f"LOWER(location) LIKE {ph}")
+            params.append(f"%{location.lower()}%")
+        if new_only:
+            clauses.append("is_new = 1")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        cur.execute(f"SELECT * FROM scout_jobs {where} ORDER BY id DESC", tuple(params))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def mark_scout_job_applied(job_id) -> None:
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"UPDATE scout_jobs SET applied = 1 WHERE id = {ph}", (job_id,))
+
+
+# ── Scout applications ───────────────────────────────────────────────────────
+
+def get_scout_applications() -> list:
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM scout_applications ORDER BY id DESC")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def add_scout_application(company, role, location, method, applied_date,
+                          status="pending", notes="") -> None:
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cols = "company, role, location, method, applied_date, status, notes"
+        placeholders = ",".join([ph] * 7)
+        cur.execute(
+            f"INSERT INTO scout_applications ({cols}) VALUES ({placeholders})",
+            (company, role, location, method, applied_date, status, notes))
+
+
+def update_scout_application_status(app_id, status, notes=None) -> None:
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if notes is not None:
+            cur.execute(
+                f"UPDATE scout_applications SET status = {ph}, notes = {ph} WHERE id = {ph}",
+                (status, notes, app_id))
+        else:
+            cur.execute(
+                f"UPDATE scout_applications SET status = {ph} WHERE id = {ph}",
+                (status, app_id))

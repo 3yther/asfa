@@ -11,6 +11,20 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+  /* Scout radar widget — neon green scope on the dashboard */
+  #scout-card .scout-radar-wrap { display: flex; justify-content: center; padding: 4px 0 10px; }
+  #scout-card .scout-radar {
+    width: 300px; height: 300px; max-width: 100%; border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, rgba(57,255,20,.06), rgba(0,4,8,.9) 72%);
+    box-shadow: 0 0 24px rgba(57,255,20,.18), inset 0 0 30px rgba(57,255,20,.08);
+  }
+  #scout-card .scout-radar-meta {
+    font-size: .62rem; letter-spacing: 1px; color: var(--muted);
+    display: flex; flex-direction: column; gap: 3px; text-align: center;
+  }
+  #scout-card .scout-hi { color: #39ff14; text-shadow: 0 0 6px rgba(57,255,20,.5); }
+</style>
 </head>
 <body>
 
@@ -150,6 +164,7 @@
     <button class="fx-btn" id="obsidian-btn" type="button" title="Sync agents, P&amp;L &amp; insights to your Obsidian vault">⬡ OBSIDIAN</button>
     <button class="fx-btn" id="obsidian-open-btn" type="button" title="Open the Obsidian vault (Mac)">⬡ OPEN VAULT</button>
     <a class="fx-btn spaceship-btn" href="/mission-control" title="Open Spaceship Mission Control">🚀 SPACESHIP CONTROL</a>
+    <a class="fx-btn scout-btn" href="/scout" title="Open Scout — part-time job hunter">🔎 SCOUT</a>
     <button class="fx-btn" id="think-btn" type="button">◍ THINK</button>
     <button class="fx-btn fx-btn-mag" id="lockin-btn" type="button">▣ LOCK IN</button>
   </div>
@@ -257,6 +272,22 @@
     <div class="val-day mono" id="val-day">—</div>
     <div class="val-bar"><div class="val-fill" id="val-fill"></div></div>
     <div class="val-note mono">Let them run. No changes until validation completes.</div>
+  </section>
+
+  <!-- Scout radar — compact live job-hunt scope (links to full /scout page) -->
+  <section class="card scout-card" id="scout-card" data-tabs="home">
+    <div class="card-head">
+      <h2>Scout // Radar</h2>
+      <a class="btn btn-ghost" href="/scout" title="Open Scout job hunter">⤢</a>
+    </div>
+    <div class="scout-radar-wrap">
+      <canvas id="scout-radar" class="scout-radar" width="300" height="300"
+              aria-label="Scout job radar"></canvas>
+    </div>
+    <div class="scout-radar-meta mono">
+      <div>SCOUT — Last scan: <span id="scout-last-scan" class="scout-hi">—</span></div>
+      <div>Jobs found: <span id="scout-jobs-count" class="scout-hi">—</span></div>
+    </div>
   </section>
 
   <!-- ROW 3: Mission Schedule + Comms -->
@@ -461,6 +492,116 @@
 </div>
 
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+<!-- Scout radar — pure-canvas animated scope + live scan stats (no libraries) -->
+<script>
+(function () {
+  const canvas = document.getElementById("scout-radar");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const GREEN = "57,255,20";
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const S = canvas.width;                 // logical size (300)
+  canvas.width = canvas.height = S * dpr; // backing store for crispness
+  ctx.scale(dpr, dpr);
+  const cx = S / 2, cy = S / 2, R = S / 2 - 6;
+
+  // Latent blips: lit when the sweep crosses them, then fade. Occasionally
+  // relocated so the scope feels alive.
+  const blips = [];
+  for (let i = 0; i < 7; i++) {
+    blips.push({ a: Math.random() * Math.PI * 2, r: (0.18 + Math.random() * 0.78) * R, life: 0 });
+  }
+  function relocate(b) { b.a = Math.random() * Math.PI * 2; b.r = (0.18 + Math.random() * 0.78) * R; }
+
+  function crossed(prev, cur, t) {
+    const TAU = Math.PI * 2;
+    prev = ((prev % TAU) + TAU) % TAU; cur = ((cur % TAU) + TAU) % TAU; t = ((t % TAU) + TAU) % TAU;
+    return prev <= cur ? (t > prev && t <= cur) : (t > prev || t <= cur);
+  }
+
+  function grid() {
+    ctx.clearRect(0, 0, S, S);
+    ctx.strokeStyle = `rgba(${GREEN},0.22)`;
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 4; i++) {
+      ctx.beginPath(); ctx.arc(cx, cy, (R * i) / 4, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
+    ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
+    // diagonals
+    const d = R * Math.SQRT1_2;
+    ctx.moveTo(cx - d, cy - d); ctx.lineTo(cx + d, cy + d);
+    ctx.moveTo(cx - d, cy + d); ctx.lineTo(cx + d, cy - d);
+    ctx.strokeStyle = `rgba(${GREEN},0.12)`;
+    ctx.stroke();
+  }
+
+  function sweep(angle) {
+    let grad;
+    try { grad = ctx.createConicGradient(angle, cx, cy); }
+    catch (e) { grad = null; }
+    if (grad) {
+      grad.addColorStop(0.00, `rgba(${GREEN},0.42)`);
+      grad.addColorStop(0.07, `rgba(${GREEN},0.12)`);
+      grad.addColorStop(0.18, `rgba(${GREEN},0.0)`);
+      grad.addColorStop(1.00, `rgba(${GREEN},0.0)`);
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fillStyle = grad; ctx.fill();
+    }
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(angle) * R, cy + Math.sin(angle) * R);
+    ctx.strokeStyle = `rgba(${GREEN},0.9)`;
+    ctx.lineWidth = 2; ctx.stroke();
+  }
+
+  let angle = 0, prev = 0, last = performance.now();
+  function frame(now) {
+    const dt = Math.min((now - last) / 1000, 0.1); last = now;
+    prev = angle; angle = (angle + dt * 1.3) % (Math.PI * 2);
+    grid();
+    sweep(angle);
+    for (const b of blips) {
+      if (crossed(prev, angle, b.a)) b.life = 1;
+      if (b.life > 0) {
+        const x = cx + Math.cos(b.a) * b.r, y = cy + Math.sin(b.a) * b.r;
+        ctx.beginPath(); ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${GREEN},${b.life.toFixed(3)})`;
+        ctx.shadowColor = `rgba(${GREEN},${b.life.toFixed(3)})`; ctx.shadowBlur = 10;
+        ctx.fill(); ctx.shadowBlur = 0;
+        b.life *= 0.965;
+        if (b.life < 0.03 && Math.random() < 0.04) { b.life = 0; relocate(b); }
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // Live stats from the new-jobs feed.
+  function fmt(ts) {
+    if (!ts) return "never";
+    const d = new Date(ts.replace(" ", "T"));
+    if (isNaN(d)) return ts;
+    return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+  async function refreshStats() {
+    try {
+      const r = await fetch("/api/scout/jobs?new_only=true", { credentials: "include" });
+      const jobs = await r.json();
+      const countEl = document.getElementById("scout-jobs-count");
+      const scanEl = document.getElementById("scout-last-scan");
+      if (countEl) countEl.textContent = Array.isArray(jobs) ? jobs.length : 0;
+      const latest = Array.isArray(jobs) && jobs.length
+        ? jobs.map((j) => j.found_date).filter(Boolean).sort().slice(-1)[0] : null;
+      if (scanEl) scanEl.textContent = fmt(latest);
+    } catch (e) { /* leave placeholders */ }
+  }
+  refreshStats();
+  setInterval(refreshStats, 60000);
+})();
+</script>
 
 <!-- Black-hole landing: Three.js resolved via import map; the module loads bare
      specifiers ("three", "three/addons/…") and dynamic-imports them so a CDN

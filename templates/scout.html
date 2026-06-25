@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>SCOUT // JOB HUNTER</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<style>
+  /* Scout — neon-green job hunter, building on ASFA's :root variables. */
+  :root { --scout: #39ff14; --scout-dim: rgba(57,255,20,.45); }
+  body {
+    background:
+      radial-gradient(circle at 50% -10%, rgba(57,255,20,.07), transparent 55%),
+      var(--bg);
+    color: var(--text); font-family: 'Inter', system-ui, sans-serif;
+    padding: 20px; min-height: 100vh;
+  }
+  .scout-wrap { max-width: 1180px; margin: 0 auto; }
+
+  .scout-topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .return-btn {
+    font-family: 'JetBrains Mono', monospace; font-size: .68rem; letter-spacing: 1.5px;
+    color: var(--scout); text-decoration: none; padding: 9px 16px;
+    border: 1px solid var(--scout-dim); border-radius: var(--radius);
+    background: rgba(57,255,20,.05);
+  }
+  .return-btn:hover { background: rgba(57,255,20,.14); box-shadow: 0 0 14px rgba(57,255,20,.25); }
+  .scout-brand { text-align: right; }
+  .scout-brand .t { font-family: 'JetBrains Mono', monospace; font-size: 1.05rem; font-weight: 700; letter-spacing: 3px; color: var(--scout); text-shadow: 0 0 10px rgba(57,255,20,.5); }
+  .scout-brand .s { font-size: .55rem; letter-spacing: 3px; color: var(--muted); }
+
+  /* ── Hero radar ─────────────────────────────────────────────────────── */
+  .hero { display: flex; flex-direction: column; align-items: center; padding: 18px 0 8px; }
+  #scout-radar-hero {
+    width: 400px; height: 400px; max-width: 92vw; border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, rgba(57,255,20,.07), rgba(0,4,8,.92) 72%);
+    box-shadow: 0 0 40px rgba(57,255,20,.22), inset 0 0 50px rgba(57,255,20,.08);
+  }
+  .scan-btn {
+    margin-top: 22px; font-family: 'JetBrains Mono', monospace; font-weight: 700;
+    font-size: .95rem; letter-spacing: 3px; color: #051a02;
+    background: linear-gradient(180deg, #6dff4f, #39ff14);
+    border: none; border-radius: 6px; padding: 14px 38px; cursor: pointer;
+    box-shadow: 0 0 22px rgba(57,255,20,.5), inset 0 0 8px rgba(255,255,255,.4);
+    transition: transform .1s ease, box-shadow .2s ease;
+  }
+  .scan-btn:hover { box-shadow: 0 0 34px rgba(57,255,20,.8), inset 0 0 8px rgba(255,255,255,.5); }
+  .scan-btn:active { transform: scale(.97); }
+  .scan-btn:disabled { opacity: .65; cursor: progress; }
+  .scan-btn.flash { animation: scanflash .6s ease; }
+  @keyframes scanflash { 0%,100% { box-shadow: 0 0 22px rgba(57,255,20,.5); } 50% { box-shadow: 0 0 60px rgba(57,255,20,1); } }
+  .scan-status {
+    margin-top: 10px; font-family: 'JetBrains Mono', monospace; font-size: .7rem;
+    letter-spacing: 2px; color: var(--scout); min-height: 1.1em; text-shadow: 0 0 6px rgba(57,255,20,.5);
+  }
+
+  /* ── Panels & tables ────────────────────────────────────────────────── */
+  .panel {
+    background: rgba(4,10,6,.7); border: 1px solid var(--scout-dim);
+    border-radius: var(--radius); padding: 16px 18px; margin-top: 22px;
+    box-shadow: 0 0 18px rgba(57,255,20,.08);
+  }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+  .panel-head h2 { font-family: 'JetBrains Mono', monospace; font-size: .8rem; letter-spacing: 2px; color: var(--scout); text-transform: uppercase; }
+
+  .filter-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .filter-bar label { font-family: 'JetBrains Mono', monospace; font-size: .62rem; letter-spacing: 1.5px; color: var(--muted); }
+  .filter-bar select {
+    background: #02110a; color: var(--scout); border: 1px solid var(--scout-dim);
+    border-radius: var(--radius); padding: 6px 10px; font-family: 'JetBrains Mono', monospace; font-size: .7rem;
+  }
+  .toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .toggle input { display: none; }
+  .toggle .track { width: 38px; height: 18px; border-radius: 10px; background: #0a1f12; border: 1px solid var(--scout-dim); position: relative; transition: background .2s; }
+  .toggle .track::after { content: ""; position: absolute; top: 1px; left: 1px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .2s, background .2s; }
+  .toggle input:checked + .track { background: rgba(57,255,20,.25); }
+  .toggle input:checked + .track::after { transform: translateX(20px); background: var(--scout); box-shadow: 0 0 8px var(--scout); }
+
+  table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+  th, td { text-align: left; padding: 9px 11px; vertical-align: top; }
+  thead th { font-family: 'JetBrains Mono', monospace; font-size: .58rem; letter-spacing: 1.5px; color: var(--scout); text-transform: uppercase; border-bottom: 1px solid var(--scout-dim); }
+  tbody tr { border-bottom: 1px solid rgba(57,255,20,.08); }
+  tbody tr:nth-child(odd) { background: rgba(57,255,20,.035); }
+  tbody tr:hover { background: rgba(57,255,20,.09); }
+  td a { color: var(--scout); text-decoration: none; }
+  td a:hover { text-decoration: underline; }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); font-size: .8rem; padding: 16px 4px; text-align: center; }
+  .tag-new { color: var(--scout); font-family: 'JetBrains Mono', monospace; font-size: .56rem; margin-left: 6px; text-shadow: 0 0 6px rgba(57,255,20,.6); }
+
+  .apply-btn {
+    font-family: 'JetBrains Mono', monospace; font-size: .58rem; letter-spacing: 1px;
+    background: rgba(57,255,20,.1); color: var(--scout); border: 1px solid var(--scout-dim);
+    border-radius: var(--radius); padding: 5px 12px; cursor: pointer;
+  }
+  .apply-btn:hover { background: rgba(57,255,20,.25); box-shadow: 0 0 10px rgba(57,255,20,.4); }
+  .applied-badge { color: var(--scout); font-family: 'JetBrains Mono', monospace; font-size: .6rem; }
+
+  /* status badges */
+  .badge {
+    display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: .56rem;
+    letter-spacing: 1px; text-transform: uppercase; padding: 3px 9px; border-radius: 20px;
+    border: 1px solid currentColor;
+  }
+  .badge.pending     { color: var(--gold);  background: rgba(245,197,66,.1); }
+  .badge.applied     { color: var(--cyan);  background: rgba(6,182,212,.12); }
+  .badge.rejected    { color: var(--red);   background: rgba(248,81,73,.12); }
+  .badge.interviewed { color: var(--scout); background: rgba(57,255,20,.12); }
+</style>
+</head>
+<body>
+<div class="scout-wrap">
+
+  <div class="scout-topbar">
+    <a class="return-btn" href="/">← RETURN TO ASFA</a>
+    <div class="scout-brand">
+      <div class="t">SCOUT</div>
+      <div class="s">PART-TIME RECON // INDEED UK</div>
+    </div>
+  </div>
+
+  <!-- ── Hero radar ─────────────────────────────────────────────────────── -->
+  <div class="hero">
+    <canvas id="scout-radar-hero" width="400" height="400" aria-label="Scout job radar"></canvas>
+    <button class="scan-btn" id="scan-btn" type="button">⚡ SCAN NOW</button>
+    <div class="scan-status" id="scan-status"></div>
+  </div>
+
+  <!-- ── Jobs ───────────────────────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Found Jobs</h2>
+      <div class="filter-bar">
+        <label for="loc-filter">LOCATION</label>
+        <select id="loc-filter">
+          <option value="">All</option>
+          <option>Erith</option><option>Bexleyheath</option><option>Bluewater</option>
+          <option>Dartford</option><option>Charlton</option><option>Woolwich</option>
+          <option>Belvedere</option><option>Plumstead</option>
+        </select>
+        <label class="toggle">
+          <input type="checkbox" id="new-only">
+          <span class="track"></span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:.62rem;letter-spacing:1.5px;color:var(--scout);">NEW ONLY</span>
+        </label>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Title</th><th>Company</th><th>Location</th><th>Posted</th><th>Status</th><th>Apply</th></tr>
+      </thead>
+      <tbody id="jobs-body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- ── Applications ──────────────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-head"><h2>Applications</h2></div>
+    <table>
+      <thead>
+        <tr><th>Company</th><th>Role</th><th>Location</th><th>Method</th><th>Date Applied</th><th>Status</th></tr>
+      </thead>
+      <tbody id="apps-body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+  /* ── HTTP helpers (session-cookie auth gate needs credentials) ───────── */
+  async function apiGet(url) { return (await fetch(url, { credentials: "include" })).json(); }
+  async function apiSend(url, body, method = "POST") {
+    return (await fetch(url, {
+      method, credentials: "include",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}),
+    })).json();
+  }
+  const esc = (s) => (s == null ? "" : String(s)).replace(/[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  /* ── Animated radar (pure canvas, 400x400) ───────────────────────────── */
+  (function () {
+    const canvas = document.getElementById("scout-radar-hero");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const GREEN = "57,255,20";
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const S = canvas.width;
+    canvas.width = canvas.height = S * dpr; ctx.scale(dpr, dpr);
+    const cx = S / 2, cy = S / 2, R = S / 2 - 8;
+
+    const blips = [];
+    for (let i = 0; i < 9; i++)
+      blips.push({ a: Math.random() * Math.PI * 2, r: (0.18 + Math.random() * 0.78) * R, life: 0 });
+    const relocate = (b) => { b.a = Math.random() * Math.PI * 2; b.r = (0.18 + Math.random() * 0.78) * R; };
+    function crossed(prev, cur, t) {
+      const TAU = Math.PI * 2;
+      prev = ((prev % TAU) + TAU) % TAU; cur = ((cur % TAU) + TAU) % TAU; t = ((t % TAU) + TAU) % TAU;
+      return prev <= cur ? (t > prev && t <= cur) : (t > prev || t <= cur);
+    }
+    function grid() {
+      ctx.clearRect(0, 0, S, S);
+      ctx.strokeStyle = `rgba(${GREEN},0.22)`; ctx.lineWidth = 1;
+      for (let i = 1; i <= 4; i++) { ctx.beginPath(); ctx.arc(cx, cy, (R * i) / 4, 0, Math.PI * 2); ctx.stroke(); }
+      ctx.beginPath();
+      ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
+      ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
+      const d = R * Math.SQRT1_2;
+      ctx.moveTo(cx - d, cy - d); ctx.lineTo(cx + d, cy + d);
+      ctx.moveTo(cx - d, cy + d); ctx.lineTo(cx + d, cy - d);
+      ctx.strokeStyle = `rgba(${GREEN},0.12)`; ctx.stroke();
+    }
+    function sweep(angle) {
+      let grad = null;
+      try { grad = ctx.createConicGradient(angle, cx, cy); } catch (e) {}
+      if (grad) {
+        grad.addColorStop(0.00, `rgba(${GREEN},0.42)`);
+        grad.addColorStop(0.07, `rgba(${GREEN},0.12)`);
+        grad.addColorStop(0.18, `rgba(${GREEN},0.0)`);
+        grad.addColorStop(1.00, `rgba(${GREEN},0.0)`);
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.fillStyle = grad; ctx.fill();
+      }
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(angle) * R, cy + Math.sin(angle) * R);
+      ctx.strokeStyle = `rgba(${GREEN},0.9)`; ctx.lineWidth = 2; ctx.stroke();
+    }
+    let angle = 0, prev = 0, last = performance.now();
+    function frame(now) {
+      const dt = Math.min((now - last) / 1000, 0.1); last = now;
+      prev = angle; angle = (angle + dt * 1.2) % (Math.PI * 2);
+      grid(); sweep(angle);
+      for (const b of blips) {
+        if (crossed(prev, angle, b.a)) b.life = 1;
+        if (b.life > 0) {
+          const x = cx + Math.cos(b.a) * b.r, y = cy + Math.sin(b.a) * b.r;
+          ctx.beginPath(); ctx.arc(x, y, 3.6, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${GREEN},${b.life.toFixed(3)})`;
+          ctx.shadowColor = `rgba(${GREEN},${b.life.toFixed(3)})`; ctx.shadowBlur = 12;
+          ctx.fill(); ctx.shadowBlur = 0;
+          b.life *= 0.965;
+          if (b.life < 0.03 && Math.random() < 0.04) { b.life = 0; relocate(b); }
+        }
+      }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  })();
+
+  /* ── Jobs table + filters ────────────────────────────────────────────── */
+  async function loadJobs() {
+    const loc = document.getElementById("loc-filter").value;
+    const newOnly = document.getElementById("new-only").checked;
+    const qs = new URLSearchParams();
+    if (loc) qs.set("location", loc);
+    if (newOnly) qs.set("new_only", "true");
+    const jobs = await apiGet("/api/scout/jobs" + (qs.toString() ? "?" + qs : ""));
+    const body = document.getElementById("jobs-body");
+    if (!Array.isArray(jobs) || !jobs.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">No jobs match — hit ⚡ SCAN NOW.</td></tr>';
+      return;
+    }
+    body.innerHTML = jobs.map((j) => `
+      <tr>
+        <td>${j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>` : esc(j.title)}
+          ${j.is_new ? '<span class="tag-new">● NEW</span>' : ""}</td>
+        <td>${esc(j.company)}</td>
+        <td>${esc(j.location)}</td>
+        <td class="muted">${esc(j.posted_date) || "—"}</td>
+        <td>${j.applied ? '<span class="applied-badge">✓ APPLIED</span>' : '<span class="muted">open</span>'}</td>
+        <td>${j.applied ? "" : `<button class="apply-btn" data-id="${j.id}">APPLY</button>`}</td>
+      </tr>`).join("");
+    body.querySelectorAll(".apply-btn").forEach((b) =>
+      b.addEventListener("click", async () => {
+        await apiSend("/api/scout/apply", { job_id: Number(b.dataset.id) });
+        loadJobs();
+      }));
+  }
+
+  /* ── Applications table ──────────────────────────────────────────────── */
+  function statusBadge(status) {
+    const s = (status || "pending").toLowerCase();
+    const cls = ["pending", "applied", "rejected", "interviewed"].includes(s) ? s : "pending";
+    return `<span class="badge ${cls}">${esc(s)}</span>`;
+  }
+  async function loadApps() {
+    const apps = await apiGet("/api/scout/applications");
+    const body = document.getElementById("apps-body");
+    if (!Array.isArray(apps) || !apps.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">No applications logged yet.</td></tr>';
+      return;
+    }
+    body.innerHTML = apps.map((a) => `
+      <tr>
+        <td>${esc(a.company)}</td>
+        <td>${esc(a.role)}</td>
+        <td>${esc(a.location) || "—"}</td>
+        <td>${esc(a.method) || "—"}</td>
+        <td class="muted">${esc(a.applied_date) || "—"}</td>
+        <td>${statusBadge(a.status)}</td>
+      </tr>`).join("");
+  }
+
+  /* ── Scan ────────────────────────────────────────────────────────────── */
+  document.getElementById("scan-btn").addEventListener("click", async () => {
+    const btn = document.getElementById("scan-btn");
+    const status = document.getElementById("scan-status");
+    btn.disabled = true; status.textContent = "SCANNING…";
+    try {
+      const res = await apiGet("/api/scout/scan");
+      const n = res.new_jobs ?? 0;
+      status.textContent = `▸ ${n} NEW JOB${n === 1 ? "" : "S"} FOUND${res.error ? " (partial)" : ""}`;
+      btn.classList.add("flash"); setTimeout(() => btn.classList.remove("flash"), 600);
+      await loadJobs();
+    } catch (e) {
+      status.textContent = "SCAN FAILED";
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => { status.textContent = ""; }, 7000);
+    }
+  });
+
+  document.getElementById("loc-filter").addEventListener("change", loadJobs);
+  document.getElementById("new-only").addEventListener("change", loadJobs);
+
+  loadJobs();
+  loadApps();
+</script>
+</body>
+</html>

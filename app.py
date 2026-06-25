@@ -956,6 +956,87 @@ def api_mission_complete(mission_id):
     return jsonify(result)
 
 
+# ── Scout — part-time job hunter ───────────────────────────────────────────────
+
+@app.route("/scout")
+def scout_page():
+    return render_template("scout.html")
+
+
+@app.route("/api/scout/jobs")
+def api_scout_jobs():
+    location = request.args.get("location") or None
+    new_only = request.args.get("new_only") == "true"
+    return jsonify(db.get_scout_jobs(location=location, new_only=new_only))
+
+
+@app.route("/api/scout/scan")
+def api_scout_scan():
+    """Trigger a manual Indeed scrape. Always returns 200 with a count so the
+    frontend gets valid JSON even if the scrape is blocked/empty."""
+    from services import scout
+    try:
+        count = scout.scan()
+    except Exception as e:
+        logger.error("scout scan failed: %s", e)
+        return jsonify({"new_jobs": 0, "error": str(e)[:200]})
+    return jsonify({"new_jobs": count})
+
+
+@app.route("/api/scout/apply", methods=["POST"])
+def api_scout_apply():
+    d = request.get_json(force=True) or {}
+    job_id = d.get("job_id")
+    if not job_id:
+        return jsonify({"error": "job_id required"}), 400
+    db.mark_scout_job_applied(job_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/scout/applications", methods=["GET", "POST"])
+def api_scout_applications():
+    if request.method == "POST":
+        d = request.get_json(force=True) or {}
+        company = (d.get("company") or "").strip()
+        role = (d.get("role") or "").strip()
+        if not company or not role:
+            return jsonify({"error": "company and role required"}), 400
+        db.add_scout_application(
+            company=company,
+            role=role,
+            location=d.get("location", ""),
+            method=d.get("method", ""),
+            applied_date=d.get("applied_date") or _today(),
+            status=d.get("status", "pending"),
+            notes=d.get("notes", ""),
+        )
+        return jsonify({"ok": True})
+    return jsonify(db.get_scout_applications())
+
+
+@app.route("/api/scout/applications/<int:app_id>", methods=["PUT"])
+def api_scout_application_update(app_id):
+    d = request.get_json(force=True) or {}
+    status = (d.get("status") or "").strip()
+    if not status:
+        return jsonify({"error": "status required"}), 400
+    db.update_scout_application_status(app_id, status, d.get("notes"))
+    return jsonify({"ok": True})
+
+
+def scout_daily_scan():
+    """06:00 daily — scrape Indeed for new part-time roles and ping the bell."""
+    try:
+        from services import scout
+        count = scout.scan()
+        logger.info("Scout daily scan: %d new jobs", count)
+        if count:
+            db.add_notification(
+                f"🔎 Scout found {count} new job{'s' if count != 1 else ''}.", "scout")
+    except Exception as e:
+        logger.error("scout daily scan failed: %s", e)
+
+
 # ── Background services (started once, even under gunicorn) ───────────────────
 
 def _generate_startup_briefing():
@@ -976,7 +1057,13 @@ def _start_background():
 
     from services.scheduler import start_scheduler
     from services.telegram_bot import start_bot
-    start_scheduler()
+    sched = start_scheduler()
+    # Scout job scan, daily at 06:00 (registered here to keep the scout feature
+    # self-contained without editing services/scheduler.py).
+    try:
+        sched.add_job(scout_daily_scan, "cron", hour=6, minute=0, id="scout_daily_scan")
+    except Exception as e:
+        logger.error("failed to register scout daily scan: %s", e)
     start_bot()
     threading.Thread(target=_generate_startup_briefing, daemon=True).start()
 
