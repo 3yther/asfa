@@ -15,7 +15,9 @@ document.addEventListener("DOMContentLoaded", () => {
   buildScoreTicks();
   initNav();
   loadAll();
-  initCardPulse();
+  initTelemetry();      // Phase D — per-card pulse + freshness stamps + fresh/stale states
+  initMission();        // Phase D — mission status bar + health indicators
+  initConstellation();  // Phase E — agents orbit the central core
   setStatusDate();
   wireControls();
   // Trading-bot data auto-refreshes every 10 minutes.
@@ -443,16 +445,247 @@ function initNav() {
 // ── Card data-update pulse ──────────────────────────────────────────────────────
 // Highlights a card briefly whenever its content changes (fresh data arriving),
 // so motion is purposeful rather than decorative. Bursts are debounced to one pulse.
-function initCardPulse() {
-  document.querySelectorAll(".grid .card").forEach(card => {
-    let t = null;
-    const obs = new MutationObserver(() => {
-      if (t) return;
-      card.classList.add("pulse");
-      t = setTimeout(() => { card.classList.remove("pulse"); t = null; }, 1200);
+// ── Phase D — live telemetry: per-card pulse, "updated X ago", fresh/stale ──────
+function initTelemetry() {
+  const cards = [...document.querySelectorAll(".grid .card")]
+    .filter(c => c.id !== "constellation-card");   // constellation is a live viz of its own
+
+  function agoText(ms) {
+    const s = Math.floor(ms / 1000);
+    if (s < 5)  return "just now";
+    if (s < 60) return s + "s ago";
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + "m ago";
+    return Math.floor(m / 60) + "h ago";
+  }
+
+  const tracked = cards.map(card => {
+    const stamp = document.createElement("div");
+    stamp.className = "card-stamp";
+    stamp.textContent = "updated just now";
+    card.appendChild(stamp);
+    const rec = { card, stamp, last: Date.now(), pulseT: null };
+
+    const obs = new MutationObserver(muts => {
+      // Ignore the once-per-second stamp text we write ourselves.
+      if (muts.every(m => stamp === m.target || stamp.contains(m.target))) return;
+      rec.last = Date.now();
+      if (!rec.pulseT) {
+        card.classList.add("pulse");
+        rec.pulseT = setTimeout(() => { card.classList.remove("pulse"); rec.pulseT = null; }, 1100);
+      }
     });
     obs.observe(card, { childList: true, subtree: true, characterData: true });
+    return rec;
   });
+
+  function tick() {
+    const now = Date.now();
+    for (const r of tracked) {
+      const age = now - r.last;
+      const txt = "updated " + agoText(age);
+      if (r.stamp.textContent !== txt) r.stamp.textContent = txt;
+      r.card.classList.toggle("is-fresh", age < 60 * 1000);
+      r.card.classList.toggle("is-stale", age > 5 * 60 * 1000);
+    }
+  }
+  tick();
+  setInterval(tick, 1000);
+}
+
+// ── Phase D — mission status bar (day / time / status) + health indicators ──────
+function initMission() {
+  const readout   = document.getElementById("mb-readout");
+  const indicator = document.getElementById("mb-indicator");
+  if (!readout) return;
+
+  const LAUNCH = Date.UTC(2026, 5, 11);   // Day 0 — 2026-06-11 (month is 0-based)
+  let status = "ALL SYSTEMS NOMINAL";
+  let state  = "nominal";                 // nominal | warn | crit
+
+  function setHealth(key, st) {
+    const dot = document.querySelector(`.mb-hpod[data-key="${key}"] .mb-hdot`);
+    if (dot) dot.dataset.state = st;
+  }
+
+  function tick() {
+    const now = new Date();
+    const day = Math.floor((Date.now() - LAUNCH) / 86400000);
+    const hh = String(now.getUTCHours()).padStart(2, "0");
+    const mm = String(now.getUTCMinutes()).padStart(2, "0");
+    readout.textContent = `MISSION DAY ${day} // ${hh}:${mm} UTC // ${status}`;
+    if (indicator) indicator.dataset.state = state === "nominal" ? "nominal" : state;
+  }
+
+  async function poll() {
+    let alerts = [];
+    try {
+      const d = await apiGet("/api/agents");
+      alerts = d.alerts || [];
+      setHealth("connectivity", "ok");      // a successful round-trip = link is up
+    } catch {
+      setHealth("connectivity", "crit");
+      status = "ATTENTION REQUIRED"; state = "crit";
+      setHealth("security", "warn");
+      tick();
+      return;
+    }
+    const lvl = a => (a.level || a.severity || "").toLowerCase();
+    const crit = alerts.some(a => lvl(a) === "crit" || lvl(a) === "critical");
+    const warn = alerts.some(a => ["warn", "warning", "high", "med", "medium"].includes(lvl(a)));
+    if (crit)      { status = "ATTENTION REQUIRED"; state = "crit"; }
+    else if (warn) { status = "ALL SYSTEMS NOMINAL"; state = "warn"; }
+    else           { status = "ALL SYSTEMS NOMINAL"; state = "nominal"; }
+    // Security health mirrors Sentinel / alert findings.
+    setHealth("security", crit ? "crit" : warn ? "warn" : "ok");
+    tick();
+  }
+
+  setHealth("power", "ok");   // power is always green while the page is running
+  tick();
+  setInterval(tick, 1000);
+  poll();
+  setInterval(poll, 30 * 1000);
+}
+
+// ── Phase E — agent constellation: agents orbit a central core ──────────────────
+function initConstellation() {
+  const stage   = document.getElementById("constellation-stage");
+  const nodesEl = document.getElementById("constellation-nodes");
+  const svg     = document.getElementById("constellation-links");
+  const meta    = document.getElementById("constellation-meta");
+  if (!stage || !nodesEl) return;
+
+  const SVGNS  = "http://www.w3.org/2000/svg";
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // Faint glow lines connect related systems (drawn on hover, fade after 2s).
+  const RELATED = {
+    nexus: ["sentinel", "warden", "oracle"],
+    sentinel: ["nexus", "axiom"],
+    axiom: ["sentinel", "ghost", "oracle"],
+    ghost: ["axiom", "pyro"],
+    pyro: ["ghost", "pixel"],
+    pixel: ["pyro"],
+    quant: ["ledger"],
+    ledger: ["quant"],
+    oracle: ["nexus", "axiom", "auto-docs"],
+    "auto-docs": ["oracle"],
+    warden: ["nexus", "incident-responder"],
+    "incident-responder": ["warden"],
+    forge: [],
+  };
+
+  let nodes = [], byId = {};
+  let base = 0, last = performance.now();
+  let hoverId = null, hoverUntil = 0;
+
+  function tierRadii() {
+    const w = stage.clientWidth, h = stage.clientHeight;
+    const maxR = Math.max(120, Math.min(w, h) / 2 - 58);
+    return [maxR * 0.56, maxR * 0.78, maxR * 1.0];   // inner / mid / outer
+  }
+
+  async function build() {
+    let agents = [];
+    try { const d = await apiGet("/api/agents"); agents = d.agents || []; }
+    catch { return; }
+    if (!agents.length) return;
+
+    // Rank by last_active (most recent first); never-active / locked sink down.
+    const ranked = agents.slice().sort(
+      (a, b) => _parseAgentTs(b.last_active) - _parseAgentTs(a.last_active));
+    const radii  = tierRadii();
+    const tierOf = i => (i < 5 ? 0 : i < 10 ? 1 : 2);
+
+    const counts = [0, 0, 0];
+    ranked.forEach((_, i) => counts[tierOf(i)]++);
+    const idx = [0, 0, 0];
+
+    nodesEl.innerHTML = "";
+    nodes = []; byId = {};
+    let activeCount = 0;
+
+    ranked.forEach((a, i) => {
+      const tier = tierOf(i);
+      const k = idx[tier]++;
+      // Evenly spaced around 360°, each tier phase-shifted so they don't align.
+      const offset = tier * 0.6 + (k / counts[tier]) * Math.PI * 2;
+
+      const el = document.createElement("a");
+      el.className = "cnode";
+      el.href = "/mission-control";
+      el.dataset.status = a.status || "idle";
+      el.dataset.tier = String(tier);
+      el.dataset.id = a.id;
+      el.title = `${a.name} — ${a.role || ""} · ${a.status || "idle"}`;
+      el.innerHTML =
+        `<span class="cnode-disc">${esc(a.icon || "•")}</span>` +
+        `<span class="cnode-label">${esc(a.name)}</span>`;
+      const focusLines = () => { hoverId = a.id; hoverUntil = performance.now() + 2000; };
+      el.addEventListener("mouseenter", focusLines);
+      el.addEventListener("focus", focusLines);
+      nodesEl.appendChild(el);
+
+      const node = { id: a.id, el, radius: radii[tier], offset, tier };
+      nodes.push(node); byId[a.id] = node;
+      if ((a.status || "") === "active") activeCount++;
+    });
+
+    if (meta) {
+      meta.textContent = `${activeCount}/${ranked.length} ACTIVE`;
+      meta.classList.add("constellation-meta-active");
+    }
+  }
+
+  function relayout() {
+    const radii = tierRadii();
+    nodes.forEach(n => { n.radius = radii[n.tier]; });
+  }
+
+  function pos(n, b) {
+    const ang = n.offset + b;
+    return { x: Math.cos(ang) * n.radius, y: Math.sin(ang) * n.radius, ang };
+  }
+
+  function drawLines(b, now) {
+    if (!svg) return;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    if (!hoverId || now > hoverUntil) return;
+    const host = byId[hoverId];
+    if (!host) return;
+    const cx = stage.clientWidth / 2, cy = stage.clientHeight / 2;
+    const op = Math.min(1, (hoverUntil - now) / 500);   // fade out over last 0.5s
+    const hp = pos(host, b);
+    (RELATED[hoverId] || []).forEach(rid => {
+      const r = byId[rid]; if (!r) return;
+      const rp = pos(r, b);
+      const ln = document.createElementNS(SVGNS, "line");
+      ln.setAttribute("x1", cx + hp.x); ln.setAttribute("y1", cy + hp.y);
+      ln.setAttribute("x2", cx + rp.x); ln.setAttribute("y2", cy + rp.y);
+      ln.setAttribute("opacity", op.toFixed(2));
+      svg.appendChild(ln);
+    });
+  }
+
+  function frame(now) {
+    const dt = Math.min((now - last) / 1000, 0.05); last = now;
+    if (!reduce) base = (base + dt * (Math.PI * 2 / 60)) % (Math.PI * 2);   // 60s / rotation
+    for (const n of nodes) {
+      const p = pos(n, base);
+      n.el.style.transform = `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px)`;
+      n.el.classList.toggle("cnode-cresting", Math.sin(p.ang) < -0.93);     // near top of orbit
+    }
+    drawLines(base, now);
+    requestAnimationFrame(frame);
+  }
+
+  build();
+  requestAnimationFrame(frame);
+
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(relayout, 150); });
+  setInterval(build, 60 * 1000);   // refresh roster + status
 }
 
 // ── Load all data ──────────────────────────────────────────────────────────────
