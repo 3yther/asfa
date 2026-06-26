@@ -29,6 +29,19 @@
 </head>
 <body>
 
+<!-- ── Mission status bar (Phase D) — fixed at the very top ─────────────── -->
+<div class="mission-bar" id="mission-bar">
+  <div class="mb-left">
+    <span class="mb-indicator" id="mb-indicator" data-state="nominal" aria-hidden="true"></span>
+    <span class="mb-readout mono" id="mb-readout">MISSION DAY — // --:-- UTC // BOOTING</span>
+  </div>
+  <div class="mb-health" id="mb-health" title="System health">
+    <span class="mb-hpod" data-key="power"><i class="mb-hdot" data-state="ok"></i>POWER</span>
+    <span class="mb-hpod" data-key="connectivity"><i class="mb-hdot" data-state="warn"></i>CONNECTIVITY</span>
+    <span class="mb-hpod" data-key="security"><i class="mb-hdot" data-state="warn"></i>SECURITY</span>
+  </div>
+</div>
+
 <!-- ── Page corner decorations (subtle) ────────────────────────────────── -->
 <div class="page-corner pc-tl" aria-hidden="true"></div>
 <div class="page-corner pc-tr" aria-hidden="true"></div>
@@ -164,6 +177,25 @@
 
 <!-- ── Main bento grid ────────────────────────────────────────────────── -->
 <main class="grid" id="main-grid">
+
+  <!-- ROW 0: Agent Constellation (Phase E) — agents orbit a central core -->
+  <section class="card constellation-card" id="constellation-card" data-tabs="home">
+    <div class="card-head">
+      <h2>Agent Constellation</h2>
+      <span class="hud-label" id="constellation-meta">— ACTIVE</span>
+    </div>
+    <div class="constellation-stage" id="constellation-stage">
+      <!-- Connecting glows between related systems (Phase E) -->
+      <svg class="constellation-links" id="constellation-links" aria-hidden="true"></svg>
+      <!-- Central core (mirrors the orb aesthetic) -->
+      <div class="constellation-core" id="constellation-core">
+        <span class="cc-pulse"></span>
+        <span class="cc-label mono">CORE</span>
+      </div>
+      <!-- Orbiting agent nodes injected by JS -->
+      <div class="constellation-nodes" id="constellation-nodes"></div>
+    </div>
+  </section>
 
   <!-- ROW 1: Morning Briefing — hero full width -->
   <section class="card" id="briefing-card" data-tabs="home">

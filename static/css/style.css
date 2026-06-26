@@ -1,19 +1,24 @@
 /* ASFA — JARVIS HUD interface */
 :root {
   --bg:       #000408;
-  --card-bg:  rgba(9, 15, 24, 0.72);
+  /* Phase B — slightly more transparent, more elegant card glass */
+  --card-bg:  rgba(9, 15, 24, 0.55);
+  --card-bg-solid: rgba(9, 15, 24, 0.6);
   --purple:   #7C3AED;
   --primary:     #00d9ff;
   --primary-hi:  #5fe6ff;
   --magenta:  #ff006e;
   --indigo:   #4F46E5;
   --grad:     linear-gradient(135deg, #1f6f88, #00d9ff);
-  --text:     #C9D1D9;
+  /* Phase B — softened body/secondary text (less harsh than full white) */
+  --text:     #b0d9f5;
+  --text-sec: #b0d9f5;
   --muted:    #5b6b7a;
   --green:    #3FB950;
-  --amber:    #d4af37;
+  /* Phase B — warm accents: gold = good/healthy, amber = warning, red = critical */
   --gold:     #d4af37;
-  --red:      #F85149;
+  --amber:    #f59e0b;
+  --red:      #ff3030;
   --radius:   4px;
   --cyan:     #22d3ee;
   --cyan-hi:  #67e8f9;
@@ -32,8 +37,14 @@ body {
   background-size: 52px 52px;
   color: var(--text);
   font-family: 'Inter', -apple-system, sans-serif;
+  /* Phase B — readable body type: 0.95rem, softer letter-spacing, roomier line-height */
+  font-size: .95rem;
+  line-height: 1.6;
+  letter-spacing: .5px;
   min-height: 100vh;
   overflow-x: hidden;
+  /* Phase D — leave room for the fixed mission-status bar at the very top */
+  padding-top: 44px;
   padding-bottom: 90px;
 }
 
@@ -66,10 +77,11 @@ body {
 
 .hud-logo-block {}
 .hud-logo {
+  /* Phase B — H1: 2.5rem / 800, cyan with a subtle (softened) glow */
   font-family: 'Inter', sans-serif;
-  font-size: 2.1rem; font-weight: 800; letter-spacing: 1px;
+  font-size: 2.5rem; font-weight: 800; letter-spacing: 1px;
   color: var(--primary);
-  text-shadow: 0 0 26px rgba(0,217,255,.45), 0 0 6px rgba(0,217,255,.25);
+  text-shadow: 0 0 18px rgba(0,217,255,.32), 0 0 5px rgba(0,217,255,.18);
 }
 .hud-logo .lb, .hud-logo .rb { color: var(--primary); opacity: .55; font-size: 1.5rem; font-weight: 400; }
 .hud-subtitle {
@@ -289,12 +301,14 @@ body {
 
 /* ── Main bento grid ──────────────────────────────────────────────────── */
 .grid {
+  /* Phase B — more breathing room: 28px gap, roomier section padding */
   position: relative; z-index: 1;
   display: grid; grid-template-columns: repeat(12, 1fr);
-  gap: 24px; padding: 22px 36px 40px;
+  gap: 28px; padding: 40px 36px 48px;
   max-width: 1700px; margin: 0 auto;
 }
 
+#constellation-card { grid-column: span 12; }
 #briefing-card   { grid-column: span 12; }
 #score-card      { grid-column: span 4; }
 #bots-card       { grid-column: span 8; }
@@ -318,12 +332,13 @@ body {
   backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
   border: 1px solid rgba(140,170,200,.07);
   border-radius: 14px;
-  padding: 24px;
+  /* Phase B — roomier padding (28px) */
+  padding: 28px;
   /* Idle widgets sit slightly dimmed; active/hovered ones brighten. */
   opacity: 0; transform: translateY(14px);
   animation: card-in .55s cubic-bezier(.22,1,.36,1) forwards;
   box-shadow: 0 8px 30px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.02);
-  transition: box-shadow .3s ease, border-color .3s ease, transform .3s ease, filter .3s ease;
+  transition: box-shadow .3s ease, border-color .3s ease, transform .3s ease, filter .3s ease, opacity .4s ease;
   filter: saturate(.94) brightness(.96);
 }
 .card:hover {
@@ -349,23 +364,34 @@ body {
   border-bottom: 1px solid rgba(140,170,200,.08);
 }
 .card-head h2 {
+  /* Phase B — H2: 1.3rem / 700, cyan with refined glow */
   font-family: 'Inter', sans-serif;
-  font-size: 1.02rem; font-weight: 700;
+  font-size: 1.3rem; font-weight: 700;
   letter-spacing: .2px; text-transform: none;
   color: var(--primary);
-  text-shadow: 0 0 18px rgba(0,217,255,.28);
+  text-shadow: 0 0 12px rgba(0,217,255,.22);
+}
+/* Phase B — H3: widget / sub-section headers */
+.card h3, .widget-header {
+  font-family: 'Inter', sans-serif;
+  font-size: 1.1rem; font-weight: 600;
+  color: var(--primary);
+  text-shadow: 0 0 10px rgba(0,217,255,.2);
 }
 .card-actions { display: flex; gap: 6px; }
 
 .muted  { color: var(--muted); }
 .small  { font-size: .78rem; }
+/* Phase B — data / metrics: JetBrains Mono, 0.9rem, cyan */
 .mono   { font-family: 'JetBrains Mono', monospace; }
+.data, .metric { font-family: 'JetBrains Mono', monospace; font-size: .9rem; color: var(--primary); }
 .hud-label {
   font-family: 'JetBrains Mono', monospace;
   font-size: .58rem; letter-spacing: 2px; color: var(--muted);
   text-transform: uppercase;
 }
-.glow   { text-shadow: 0 0 14px rgba(0,217,255,.6); }
+/* Phase B — softened glow */
+.glow   { text-shadow: 0 0 10px rgba(0,217,255,.45); }
 .green-text { color: var(--green); text-shadow: 0 0 10px rgba(63,185,80,.5); }
 
 /* ── Buttons ──────────────────────────────────────────────────────────── */
@@ -1015,4 +1041,174 @@ body.locked-in #main-grid .card:hover { opacity: .9; }
 }
 @media (prefers-reduced-motion: reduce) {
   .market-dot.market-open, .system-dot.on { animation: none; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   PHASE D — Mission status bar, health indicators, live telemetry
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* Fixed mission-status bar at the very top of the viewport */
+.mission-bar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+  height: 44px; display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 0 20px;
+  background: rgba(0, 4, 8, 0.96);
+  border-bottom: 1px solid rgba(0,217,255,.14);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  font-family: 'JetBrains Mono', monospace;
+}
+.mb-left { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.mb-readout {
+  font-size: .85rem; letter-spacing: 1.5px; color: var(--primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-shadow: 0 0 8px rgba(0,217,255,.25);
+}
+/* Small glowing status indicator — green / amber / red by mission state */
+.mb-indicator {
+  width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px;
+  background: var(--green); box-shadow: 0 0 8px var(--green);
+  animation: blink-dot 2.2s ease-in-out infinite;
+}
+.mb-indicator[data-state="warn"] { background: var(--amber); box-shadow: 0 0 9px var(--amber); }
+.mb-indicator[data-state="crit"] { background: var(--red);   box-shadow: 0 0 10px var(--red); animation: blink-dot 1s ease-in-out infinite; }
+
+/* Health indicator widget (top-right): POWER / CONNECTIVITY / SECURITY */
+.mb-health { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; }
+.mb-hpod {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: .6rem; letter-spacing: 1.5px; color: var(--muted);
+  text-transform: uppercase;
+}
+.mb-hdot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--green); box-shadow: 0 0 7px var(--green);
+}
+.mb-hdot[data-state="warn"] { background: var(--amber); box-shadow: 0 0 7px var(--amber); }
+.mb-hdot[data-state="crit"] { background: var(--red);   box-shadow: 0 0 8px var(--red); }
+@media (max-width: 620px) {
+  .mb-hpod { font-size: 0; gap: 0; }           /* collapse labels, keep dots */
+  .mb-readout { font-size: .68rem; letter-spacing: 1px; }
+}
+
+/* Mission bar pushes the sticky header / page corners down by its height */
+.header     { top: 44px; }
+.status-bar { top: 44px; }
+.pc-tl { top: 56px; }
+.pc-tr { top: 56px; }
+
+/* ── Live telemetry on cards ──────────────────────────────────────────── */
+/* Tiny "updated X ago" stamp in the corner of each card */
+.card-stamp {
+  position: absolute; bottom: 7px; right: 11px; z-index: 2;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .52rem; letter-spacing: .5px; color: var(--muted);
+  opacity: .5; pointer-events: none; user-select: none;
+}
+/* Fresh data (<1 min) glows a touch brighter; stale data (>5 min) dims to 60% */
+.card.is-fresh {
+  filter: saturate(1.04) brightness(1.05);
+  border-color: rgba(0,217,255,.20);
+}
+.card.is-stale { opacity: .6; }
+.card.is-stale .card-stamp { opacity: .7; color: var(--amber); }
+
+/* Data-update shimmer — a quick cyan sweep from left to right */
+.card.pulse::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background: linear-gradient(100deg, transparent 20%, rgba(0,217,255,.11) 50%, transparent 80%);
+  background-size: 220% 100%; background-position: 180% 0;
+  animation: card-sweep .6s ease; pointer-events: none;
+}
+@keyframes card-sweep {
+  from { background-position: 180% 0; }
+  to   { background-position: -80% 0; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   PHASE E — Agent constellation (agents orbit a central core)
+   ════════════════════════════════════════════════════════════════════════ */
+.constellation-stage {
+  position: relative;
+  width: 100%;
+  height: clamp(540px, 62vh, 720px);
+  margin-top: 6px;
+}
+.constellation-links {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 1; overflow: visible;
+}
+/* Central core — mirrors the orb aesthetic, breathes with the dashboard */
+.constellation-core {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 116px; height: 116px; border-radius: 50%; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 50% 42%, rgba(0,217,255,.30), rgba(0,217,255,.06) 60%, rgba(0,4,8,.0) 75%);
+  box-shadow: inset 0 0 30px rgba(0,217,255,.25), 0 0 40px rgba(0,217,255,.18);
+}
+.cc-pulse {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 1px solid rgba(0,217,255,.45);
+  animation: cc-breathe var(--pulse-cycle, 6s) cubic-bezier(.45,0,.55,1) infinite;
+}
+@keyframes cc-breathe {
+  0%,100% { transform: scale(1);    opacity: .55; box-shadow: 0 0 22px rgba(0,217,255,.25); }
+  50%     { transform: scale(1.14); opacity: .95; box-shadow: 0 0 38px rgba(0,217,255,.40); }
+}
+.cc-label {
+  font-size: .6rem; letter-spacing: 3px; color: var(--primary);
+  text-shadow: 0 0 10px rgba(0,217,255,.6); opacity: .85;
+}
+.constellation-nodes { position: absolute; inset: 0; z-index: 3; }
+
+/* A single orbiting agent node */
+.cnode {
+  position: absolute; top: 50%; left: 50%;
+  width: var(--cnode-size, 46px); height: var(--cnode-size, 46px);
+  margin: calc(var(--cnode-size, 46px) / -2) 0 0 calc(var(--cnode-size, 46px) / -2);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  cursor: pointer; text-decoration: none;
+  will-change: transform;
+  transition: filter .2s ease;
+}
+.cnode-disc {
+  width: var(--cnode-size, 46px); height: var(--cnode-size, 46px);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: calc(var(--cnode-size, 46px) * .42);
+  border: 1.5px solid currentColor;
+  background: radial-gradient(circle at 50% 38%, rgba(0,217,255,.12), rgba(9,15,24,.85) 70%);
+  box-shadow: 0 0 var(--cnode-glow, 14px) currentColor, inset 0 0 12px rgba(0,0,0,.5);
+  color: var(--green);
+}
+/* Status colour-coding */
+.cnode[data-status="active"] .cnode-disc { color: var(--green); }
+.cnode[data-status="idle"]   .cnode-disc { color: var(--primary); opacity: .9; }
+.cnode[data-status="locked"] .cnode-disc { color: var(--muted); box-shadow: inset 0 0 12px rgba(0,0,0,.5); filter: grayscale(.5); }
+.cnode-label {
+  margin-top: 5px; font-family: 'JetBrains Mono', monospace;
+  font-size: .54rem; letter-spacing: 1px; color: var(--text-sec);
+  white-space: nowrap; opacity: .82; text-shadow: 0 0 6px rgba(0,0,0,.8);
+}
+/* Depth: outer tiers sit visually "farther" — smaller + softer */
+.cnode[data-tier="0"] { --cnode-size: 52px; --cnode-glow: 16px; }
+.cnode[data-tier="1"] { --cnode-size: 44px; --cnode-glow: 12px; }
+.cnode[data-tier="2"] { --cnode-size: 36px; --cnode-glow: 9px; }
+.cnode[data-tier="2"] .cnode-label { opacity: .62; }
+/* Brighter as a node sweeps past the top of its orbit */
+.cnode.cnode-cresting { filter: brightness(1.25) drop-shadow(0 0 10px rgba(0,217,255,.5)); z-index: 5; }
+.cnode:hover, .cnode:focus-visible { filter: brightness(1.3); z-index: 6; outline: none; }
+
+/* Connecting glow lines (drawn into the SVG by JS) */
+.constellation-links line {
+  stroke: rgba(0,217,255,.55);
+  stroke-width: 1.4;
+  filter: drop-shadow(0 0 4px rgba(0,217,255,.6));
+}
+.constellation-meta-active { color: var(--green); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-pulse { animation: none; }
+}
+@media (max-width: 760px) {
+  .constellation-stage { height: clamp(420px, 80vw, 560px); }
 }
