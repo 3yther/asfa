@@ -17,6 +17,7 @@ os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 # safe — we still only ever request the SCOPES we ask for.
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
+import requests
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 import database as db
@@ -872,6 +873,75 @@ def _mc_alerts(agents: list, live: dict) -> list:
 @app.route("/mission-control")
 def mission_control():
     return render_template("mission_control.html")
+
+
+@app.route("/api/mission-control/health")
+def mission_control_health():
+    """System health for the Mission Control facility view.
+
+    power        — static placeholder, always OK for now.
+    connectivity — OK if Polygon.io marketstatus returns 200; WARN if reachable
+                   but non-200 (e.g. missing/invalid key, rate-limited); FAIL on
+                   network error or if the database probe fails.
+    security     — CRIT if any critical Sentinel alert in the last 24h, WARN if
+                   only warnings, else OK.
+    """
+    details = {
+        "polygon_api": "FAIL",
+        "database": "FAIL",
+        "sentinel_alerts": 0,
+        "sentinel_critical": False,
+    }
+
+    # Database — SELECT 1
+    db_ok = db.ping()
+    details["database"] = "OK" if db_ok else "FAIL"
+
+    # Connectivity — probe Polygon.io marketstatus
+    connectivity = "FAIL"
+    try:
+        poly_key = os.environ.get("POLYGON_API_KEY", "")
+        resp = requests.get(
+            "https://api.polygon.io/v1/marketstatus/now",
+            params={"apiKey": poly_key} if poly_key else None,
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            details["polygon_api"] = "OK"
+            connectivity = "OK"
+        else:
+            # Reached Polygon but the call didn't succeed (auth/rate-limit/etc.)
+            details["polygon_api"] = "FAIL"
+            connectivity = "WARN"
+    except requests.RequestException as e:
+        logger.warning("Polygon connectivity check failed: %s", e)
+        details["polygon_api"] = "FAIL"
+        connectivity = "FAIL"
+
+    # A dead database means we can't trust connectivity either.
+    if not db_ok:
+        connectivity = "FAIL"
+
+    # Security — recent Sentinel alerts
+    security = "OK"
+    if db_ok:
+        try:
+            alerts = db.count_recent_alerts(hours=24)
+            details["sentinel_alerts"] = alerts["critical"] + alerts["warning"]
+            if alerts["critical"] > 0:
+                security = "CRIT"
+                details["sentinel_critical"] = True
+            elif alerts["warning"] > 0:
+                security = "WARN"
+        except Exception as e:
+            logger.warning("Sentinel alert check failed: %s", e)
+
+    return jsonify({
+        "power": "OK",
+        "connectivity": connectivity,
+        "security": security,
+        "details": details,
+    })
 
 
 @app.route("/api/agents")
