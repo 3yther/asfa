@@ -547,12 +547,11 @@ def api_focus_line():
         except Exception:
             pass
 
-    # 3. No water logged today.
+    # 3. No water logged today. Read straight from the DB so logging via
+    #    /api/asfa/water-intake is reflected immediately (no stale habits row).
     if not text:
         try:
-            habits = db.get_habits(1)
-            today_h = next((h for h in habits if h["date"] == _today()), {})
-            if (today_h.get("water_ml") or 0) <= 0:
+            if db.get_water_logged(_today()) <= 0:
                 text = "You haven't logged any water today."
         except Exception:
             pass
@@ -713,7 +712,8 @@ def api_supplements():
         d = request.get_json(force=True) or {}
         name = (d.get("name") or "").lower()
         if name not in {k for k, _ in db.SUPPLEMENTS}:
-            return jsonify({"error": "unknown supplement"}), 400
+            return jsonify({"error": "unknown supplement",
+                            "valid": [k for k, _ in db.SUPPLEMENTS]}), 400
         if d.get("taken", True):
             # One log per supplement per day.
             if name not in db.get_supplements_today(_today()):

@@ -488,6 +488,14 @@ class FacilityScene extends Phaser.Scene {
     const pts=[{x:r.x,y:r.y},{x:r.x,y:n.y},{x:n.x,y:n.y}];
     return pts.filter((p,i)=>i===0||p.x!==pts[i-1].x||p.y!==pts[i-1].y);
   }
+  /* BUG 2: corridor-constrained route room A → Nexus hub → room B.
+     Every room connects through NEXUS, so agents travel the L-shaped corridors
+     (roomCenter(A) → Nexus → roomCenter(B)) instead of cutting diagonally across
+     other rooms. Consecutive duplicate points are stripped by walkChar's filter. */
+  corridorRoute(fromId, toId){
+    if(fromId===toId) return [roomCenter(fromId)];
+    return this.pathToNexus(fromId).concat(this.pathToNexus(toId).slice().reverse());
+  }
   drawCorridors(){
     const g=this.corridorLayer;
     const drawSeg=(x1,y1,x2,y2,width)=>{
@@ -696,7 +704,7 @@ class FacilityScene extends Phaser.Scene {
     if(!t) return;
     if(!ch){
       const kit=(a.id==='nexus')?0:this.kitFor(a.id);
-      const sp=this.add.sprite(t.spot.x, t.spot.y, 'chars', this.kitFrame[kit]).setScale(3).setDepth(7).setAlpha(0); // FIX 3: 3x
+      const sp=this.add.sprite(t.spot.x, t.spot.y, 'chars', this.kitFrame[kit]).setOrigin(0.5,1).setScale(3).setDepth(7).setAlpha(0); // FIX 3: 3x scale + bottom-centre origin (BUG 1) so the full 48×72 sprite shows and flips around its base
       this.charLayer.add(sp);
       const ring=this.add.graphics().setDepth(6.5); this.charLayer.add(ring);
       ch={id:a.id, sprite:sp, ring, kit, roomId:t.roomId}; MC.chars[a.id]=ch;
@@ -710,7 +718,8 @@ class FacilityScene extends Phaser.Scene {
     if(ch.roomId!==t.roomId){
       this.stopBob(ch);
       const fromIdle=ch.roomId==='quarters';
-      this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, roomCenter('nexus'), t.spot], ()=>{ ch.roomId=t.roomId; this.settle(ch, t.roomId); });
+      const fromId=ch.roomId;
+      this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, ...this.corridorRoute(fromId, t.roomId), t.spot], ()=>{ ch.roomId=t.roomId; this.settle(ch, t.roomId); });
       ch.roomId=t.roomId; this.redrawRing(ch);
       if(!fromIdle && t.roomId==='quarters') this.puff(ch.sprite.x, ch.sprite.y, COL.slate);
     } else if(!first){
@@ -729,7 +738,7 @@ class FacilityScene extends Phaser.Scene {
     g.lineStyle(1,0xffffff,0.5); g.strokeCircle(0,0,13);
   }
   update(){
-    for(const id in MC.chars){ const ch=MC.chars[id]; if(ch.ring && ch.sprite.active){ ch.ring.setPosition(ch.sprite.x, ch.sprite.y+26); } }
+    for(const id in MC.chars){ const ch=MC.chars[id]; if(ch.ring && ch.sprite.active){ ch.ring.setPosition(ch.sprite.x, ch.sprite.y-10); } } // BUG 1: origin is now bottom-centre, so the base ring sits just above the feet
   }
   settle(ch, roomId){
     const sp=ch.sprite; sp.play('idle'+ch.kit);
@@ -751,12 +760,13 @@ class FacilityScene extends Phaser.Scene {
       if(!ch.sprite.active){ return; }
       if(!a || a.status!=='active' || ch.roomId==='quarters'){ this.scheduleVisit(ch); return; }
       const home=ch.targetSpot||roomCenter(ch.roomId);
-      this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, roomCenter('nexus')], ()=>{
+      const roomId=ch.roomId;
+      this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, ...this.corridorRoute(roomId,'nexus')], ()=>{
         ch.sprite.play('idle'+ch.kit);
         this.time.delayedCall(Phaser.Math.Between(3000,5000), ()=>{
           if(!ch.sprite.active) return;
           const dest=ch.targetSpot||home;
-          this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, dest], ()=>{ this.settle(ch, ch.roomId); this.scheduleVisit(ch); });
+          this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, ...this.corridorRoute('nexus',roomId), dest], ()=>{ this.settle(ch, ch.roomId); this.scheduleVisit(ch); });
         });
       });
     });
@@ -768,12 +778,12 @@ class FacilityScene extends Phaser.Scene {
       if(!ch.sprite.active){ return; }
       if(!a || a.status!=='active'){ this.scheduleNexusRoam(ch); return; }
       const dests=ROOM_IDS.filter(id=>id!=='nexus'&&id!=='quarters');
-      const dest=roomCenter(Phaser.Utils.Array.GetRandom(dests));
-      this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, dest], ()=>{
+      const destRoom=Phaser.Utils.Array.GetRandom(dests);
+      this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, ...this.corridorRoute('nexus',destRoom)], ()=>{
         ch.sprite.play('idle'+ch.kit);
         this.time.delayedCall(Phaser.Math.Between(2500,4500), ()=>{
           if(!ch.sprite.active) return;
-          this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, roomCenter('nexus')], ()=>{ this.settle(ch,'nexus'); this.scheduleNexusRoam(ch); });
+          this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, ...this.corridorRoute(destRoom,'nexus')], ()=>{ this.settle(ch,'nexus'); this.scheduleNexusRoam(ch); });
         });
       });
     });
