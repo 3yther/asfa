@@ -665,6 +665,47 @@ def mark_notifications_read():
         cur.execute("UPDATE notifications SET is_read = 1 WHERE is_read = 0")
 
 
+def ping():
+    """Lightweight DB connectivity check (SELECT 1). Returns True on success,
+    False on any failure. Used by the mission-control health endpoint."""
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        return True
+    except Exception:
+        return False
+
+
+def count_recent_alerts(hours=24):
+    """Count recent notification alerts by severity for the mission-control
+    health check. Critical and warning are matched on the notifications.kind
+    column within the last `hours` (compared against UTC created_at). Returns
+    {"critical": int, "warning": int}."""
+    cutoff = (datetime.utcnow() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    critical = warning = 0
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT LOWER(kind) AS k, COUNT(*) AS n FROM notifications "
+            f"WHERE created_at >= {ph} GROUP BY LOWER(kind)",
+            (cutoff,),
+        )
+        for r in cur.fetchall():
+            kind = (r["k"] or "")
+            n = r["n"]
+            # Match only explicit severity kinds. The generic "alert" kind is a
+            # catch-all for routine proactive notifications (bot/wellness nudges),
+            # so it is deliberately NOT treated as a critical security alert.
+            if kind in ("critical", "crit"):
+                critical += n
+            elif kind in ("warning", "warn"):
+                warning += n
+    return {"critical": critical, "warning": warning}
+
+
 # ── Key-value store (scheduler state, snapshots) ───────────────────────────────
 
 def kv_get(key, default=None):
