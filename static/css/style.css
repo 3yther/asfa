@@ -308,12 +308,12 @@ body {
   max-width: 1700px; margin: 0 auto;
 }
 
-#constellation-card { grid-column: span 12; }
 #briefing-card   { grid-column: span 12; }
 #score-card      { grid-column: span 4; }
 #bots-card       { grid-column: span 8; }
-#calendar-card   { grid-column: span 6; }
-#inbox-card      { grid-column: span 6; }
+#scout-card      { grid-column: span 4; }
+#calendar-card   { grid-column: span 4; }
+#inbox-card      { grid-column: span 4; }
 #news-card       { grid-column: span 12; }
 #water-card      { grid-column: span 4; }
 #sleep-card      { grid-column: span 4; }
@@ -321,9 +321,9 @@ body {
 #money-card      { grid-column: span 4; }
 #pbs-card        { grid-column: span 4; }
 #reflection-card { grid-column: span 4; }
+#supplements-card { grid-column: span 12; }
 #goals-card      { grid-column: span 12; }
-#chat-card       { grid-column: span 8; }
-#supplements-card { grid-column: span 4; }
+#chat-card       { grid-column: span 12; }
 
 /* ── Cards — refined sci-fi (soft shadow, translucent, no neon edges) ──── */
 .card {
@@ -721,7 +721,7 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
 @media (max-width: 760px) {
   .grid { grid-template-columns: 1fr; padding: 10px 12px 110px; gap: 10px; }
   #briefing-card, #score-card, #bots-card,
-  #calendar-card, #inbox-card, #news-card,
+  #scout-card, #calendar-card, #inbox-card, #news-card,
   #water-card, #sleep-card, #bodyweight-card,
   #money-card, #pbs-card, #reflection-card,
   #goals-card, #chat-card, #supplements-card { grid-column: span 1; }
@@ -751,11 +751,11 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
   .grid { grid-template-columns: repeat(6,1fr); }
   #score-card { grid-column: span 2; }
   #bots-card  { grid-column: span 4; }
-  #calendar-card, #inbox-card { grid-column: span 3; }
+  #scout-card, #calendar-card, #inbox-card { grid-column: span 2; }
   #water-card, #sleep-card, #bodyweight-card { grid-column: span 2; }
   #money-card, #pbs-card, #reflection-card { grid-column: span 2; }
-  #chat-card { grid-column: span 4; }
-  #supplements-card { grid-column: span 2; }
+  #supplements-card { grid-column: span 6; }
+  #chat-card { grid-column: span 6; }
 }
 @media (min-width: 761px) { .bottom-nav { display: none; } }
 
