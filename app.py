@@ -60,7 +60,7 @@ app.config["SESSION_COOKIE_SECURE"] = os.environ.get("GOOGLE_REDIRECT_URI", "").
 # only authorises the *server* to reach those accounts — it does not gate users.
 APP_PASSWORD = os.environ.get("APP_PASSWORD")
 # Endpoints reachable without a session. Everything else requires login.
-_PUBLIC_ENDPOINTS = {"login", "static"}
+_PUBLIC_ENDPOINTS = {"login", "static", "mission_control_health"}
 
 
 @app.before_request
