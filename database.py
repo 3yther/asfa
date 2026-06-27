@@ -195,6 +195,21 @@ def log_sleep(date: str, hours: float):
             cur.execute("UPDATE habits SET sleep_hours = ? WHERE date = ?", (hours, date))
 
 
+def get_water_logged(date: str) -> int:
+    """Fresh count of total water (ml) logged for a given day, read straight
+    from the DB so alerts never see stale/cached habit rows."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute("SELECT water_ml FROM habits WHERE date = %s", (date,))
+        else:
+            cur.execute("SELECT water_ml FROM habits WHERE date = ?", (date,))
+        row = cur.fetchone()
+        if not row:
+            return 0
+        return int(row["water_ml"] or 0)
+
+
 def get_habits(days: int = 7):
     with get_db() as conn:
         cur = conn.cursor()
