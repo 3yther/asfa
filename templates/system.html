@@ -18,8 +18,19 @@
 <main class="screen-placeholder">
   <h1 class="screen-title">System Status</h1>
   <p class="screen-sub">Infrastructure &amp; service health</p>
-  <div class="screen-empty">System monitoring (coming soon)</div>
+  <div class="screen-empty sci-fi-panel">System monitoring (coming soon)</div>
 </main>
+
+<script>
+  // Add corner elements to all sci-fi panels
+  document.querySelectorAll('.sci-fi-panel').forEach(el => {
+    ['corner-bl', 'corner-br'].forEach(cls => {
+      const div = document.createElement('div');
+      div.className = cls;
+      el.appendChild(div);
+    });
+  });
+</script>
 
 </body>
 </html>
