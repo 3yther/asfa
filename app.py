@@ -5,11 +5,51 @@ import json
 import logging
 import os
 import re
+import sys
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ── Critical environment validation ─────────────────────────────────────────────
+# Fail fast in production: a missing APP_PASSWORD (the only access gate) or
+# DATABASE_URL (prod Postgres) should crash the boot loudly rather than silently
+# degrade. We only hard-exit in prod — locally the app intentionally runs on
+# SQLite with no APP_PASSWORD (it just stays locked), so we warn instead of
+# exiting to keep `python app.py` working. POLYGON_API_KEY is optional (one
+# graceful-fallback feature), so it's always a warning, never fatal.
+_IS_PROD = bool(
+    os.getenv("RAILWAY_ENVIRONMENT")
+    or os.getenv("RAILWAY_PROJECT_ID")
+    or os.getenv("RAILWAY_SERVICE_ID")
+)
+_REQUIRED_PROD = ["APP_PASSWORD", "DATABASE_URL"]
+_WARN_OPTIONAL = ["POLYGON_API_KEY"]
+
+_missing_required = [v for v in _REQUIRED_PROD if not os.getenv(v)]
+_missing_optional = [v for v in _WARN_OPTIONAL if not os.getenv(v)]
+
+if _IS_PROD and _missing_required:
+    print(
+        "FATAL: Missing required environment variables: "
+        f"{', '.join(_missing_required)}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+if not _IS_PROD and _missing_required:
+    print(
+        "WARNING: Missing env vars (ok for local SQLite dev, REQUIRED in prod): "
+        f"{', '.join(_missing_required)}",
+        file=sys.stderr,
+    )
+if _missing_optional:
+    print(
+        "WARNING: Missing optional env vars (features degrade gracefully): "
+        f"{', '.join(_missing_optional)}",
+        file=sys.stderr,
+    )
 
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 # Google often returns scopes in a different order / adds `openid`, which makes
@@ -29,6 +69,7 @@ from services.gmail import (get_email_by_id, get_flow, get_unread_emails,
                             is_authenticated, save_credentials)
 from services.news import get_finance_news, get_top_news
 from services.obsidian_sync import OBSIDIAN_VAULT_PATH, sync_to_obsidian
+from services.security import init_rate_limiter
 from services import spotify
 from services.weather import get_forecast, get_weather
 
@@ -53,6 +94,16 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("GOOGLE_REDIRECT_URI", "").startswith("https")
+
+# Jinja autoescaping guards against XSS in server-rendered templates. It's ON by
+# default for .html in Flask; assert it so an accidental future override fails
+# loudly at boot rather than silently opening an injection hole.
+assert app.jinja_env.autoescape, "Jinja autoescape is OFF — XSS vulnerability!"
+
+# Brute-force protection. Coarse default limits app-wide; the /login route adds
+# a tighter explicit limit below. In-memory storage is correct for our single
+# gunicorn worker (see services/security.py).
+limiter = init_rate_limiter(app)
 
 # ── App access gate ────────────────────────────────────────────────────────────
 # The dashboard exposes personal Gmail/Calendar/finance data, so the whole app
@@ -81,6 +132,7 @@ def _require_login():
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute")
 def login():
     next_url = request.args.get("next") or "/"
     # Only allow same-site relative paths as the post-login redirect target.
@@ -94,6 +146,12 @@ def login():
             return redirect(next_url)
         return render_template("login.html", error="Incorrect passphrase.", next_url=next_url), 401
     return render_template("login.html", error=None, next_url=next_url)
+
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    """Rate-limit responses (e.g. >5 login attempts/min) return clean JSON."""
+    return jsonify({"error": "too many login attempts, try again in 1 minute"}), 429
 
 
 @app.route("/logout", methods=["POST", "GET"])
