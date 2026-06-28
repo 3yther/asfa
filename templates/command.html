@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>ASFA // AI COMMAND CENTRE</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="mask-icon" href="{{ url_for('static', filename='favicon.svg') }}" color="#00d9ff">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+  /* Scout radar widget — neon green scope on the dashboard */
+  #scout-card { width: 100%; }
+  #scout-card .scout-radar-wrap { display: flex; justify-content: center; padding: 4px 0 10px; }
+  #scout-card .scout-radar {
+    width: 250px; height: 250px; max-width: 100%; border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, rgba(0,217,255,.06), rgba(0,4,8,.9) 72%);
+    box-shadow: 0 0 24px rgba(0,217,255,.18), inset 0 0 30px rgba(0,217,255,.08);
+  }
+  #scout-card .scout-radar-meta {
+    font-size: .62rem; letter-spacing: 1px; color: var(--muted);
+    display: flex; flex-direction: column; gap: 3px; text-align: center;
+  }
+  #scout-card .scout-hi { color: #00d9ff; text-shadow: 0 0 6px rgba(0,217,255,.5); }
+</style>
+</head>
+<body class="nav-with-mission">
+
+{% include "nav.html" with context %}
+
+<!-- ── Mission status bar (Phase D) — fixed at the very top ─────────────── -->
+<div class="mission-bar" id="mission-bar">
+  <div class="mb-left">
+    <span class="mb-indicator" id="mb-indicator" data-state="nominal" aria-hidden="true"></span>
+    <span class="mb-readout mono" id="mb-readout">MISSION DAY — // --:-- UTC // BOOTING</span>
+  </div>
+  <div class="mb-health" id="mb-health" title="System health">
+    <span class="mb-hpod" data-key="power"><i class="mb-hdot" data-state="ok"></i>POWER</span>
+    <span class="mb-hpod" data-key="connectivity"><i class="mb-hdot" data-state="warn"></i>CONNECTIVITY</span>
+    <span class="mb-hpod" data-key="security"><i class="mb-hdot" data-state="warn"></i>SECURITY</span>
+  </div>
+</div>
+
+<!-- ── Page corner decorations (subtle) ────────────────────────────────── -->
+<div class="page-corner pc-tl" aria-hidden="true"></div>
+<div class="page-corner pc-tr" aria-hidden="true"></div>
+<div class="page-corner pc-bl" aria-hidden="true"></div>
+<div class="page-corner pc-br" aria-hidden="true"></div>
+
+<!-- ── Header ─────────────────────────────────────────────────────────── -->
+<header class="header">
+
+  <div class="header-left">
+    <div class="hud-logo-block">
+      <div class="hud-logo"><span class="lb">[</span>ASFA<span class="rb">]</span></div>
+      <div class="hud-subtitle">AI PERSONAL ASSISTANT</div>
+    </div>
+    <div class="header-chips">
+      {% if google_connected %}
+        <span class="hud-chip chip-ok"><span class="chip-dot"></span>GOOGLE::OK</span>
+      {% else %}
+        <a class="hud-chip chip-action" href="/auth/google">CONNECT::GOOGLE</a>
+      {% endif %}
+      {% if spotify_connected %}
+        <span class="hud-chip chip-ok" id="spotify-chip" title="Spotify">
+          <span class="chip-dot dot-idle" id="spotify-dot"></span><span id="spotify-label">SPOTIFY</span>
+        </span>
+      {% else %}
+        <a class="hud-chip chip-action" href="/auth/spotify">CONNECT::SPOTIFY</a>
+      {% endif %}
+      <button class="hud-chip chip-btn" id="bell-btn">
+        ALERTS<span class="badge hidden" id="bell-badge">0</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Central Orb ───────────────────────────────────────────────────── -->
+  <div class="orb-stage" id="orb-stage">
+    <!-- Soft dust drifting around the orb -->
+    <canvas id="orb-dust" class="orb-dust" width="480" height="480"></canvas>
+    <!-- Outer ring: CCW, dashed -->
+    <svg class="orb-ring-svg orb-ring-outer" viewBox="0 0 290 290">
+      <circle cx="145" cy="145" r="138" fill="none"
+        stroke="rgba(34,211,238,0.30)" stroke-width="1"
+        stroke-dasharray="5 11"/>
+      <circle cx="145" cy="7"   r="4" fill="rgba(34,211,238,0.85)"/>
+      <circle cx="283" cy="145" r="4" fill="rgba(34,211,238,0.85)"/>
+      <circle cx="145" cy="283" r="4" fill="rgba(34,211,238,0.85)"/>
+      <circle cx="7"   cy="145" r="4" fill="rgba(34,211,238,0.85)"/>
+    </svg>
+    <!-- Mid ring: CW, sparse dash -->
+    <svg class="orb-ring-svg orb-ring-mid" viewBox="0 0 290 290">
+      <circle cx="145" cy="145" r="132" fill="none"
+        stroke="rgba(79,70,229,0.32)" stroke-width="1"
+        stroke-dasharray="2 14"/>
+      <circle cx="145" cy="13" r="2.5" fill="rgba(103,232,249,0.7)"/>
+      <circle cx="277" cy="145" r="2.5" fill="rgba(103,232,249,0.7)"/>
+    </svg>
+    <!-- Inner ring: CCW, finer dash -->
+    <svg class="orb-ring-svg orb-ring-inner" viewBox="0 0 240 240">
+      <circle cx="120" cy="120" r="114" fill="none"
+        stroke="rgba(124,58,237,0.45)" stroke-width="1.5"
+        stroke-dasharray="2 8"/>
+      <line x1="120" y1="6"   x2="120" y2="22"  stroke="rgba(124,58,237,0.9)" stroke-width="2.5"/>
+      <line x1="234" y1="120" x2="218" y2="120" stroke="rgba(124,58,237,0.9)" stroke-width="2.5"/>
+      <line x1="120" y1="234" x2="120" y2="218" stroke="rgba(124,58,237,0.9)" stroke-width="2.5"/>
+      <line x1="6"   y1="120" x2="22"  y2="120" stroke="rgba(124,58,237,0.9)" stroke-width="2.5"/>
+      <line x1="186.7" y1="13.3" x2="180" y2="25" stroke="rgba(124,58,237,0.45)" stroke-width="1"/>
+      <line x1="226.7" y1="53.3" x2="215" y2="60" stroke="rgba(124,58,237,0.45)" stroke-width="1"/>
+      <line x1="226.7" y1="186.7" x2="215" y2="180" stroke="rgba(124,58,237,0.45)" stroke-width="1"/>
+      <line x1="186.7" y1="226.7" x2="180" y2="215" stroke="rgba(124,58,237,0.45)" stroke-width="1"/>
+      <line x1="53.3"  y1="226.7" x2="60"  y2="215" stroke="rgba(124,58,237,0.45)" stroke-width="1"/>
+      <line x1="13.3"  y1="186.7" x2="25"  y2="180" stroke="rgba(124,58,237,0.45)" stroke-width="1"/>
+      <line x1="13.3"  y1="53.3"  x2="25"  y2="60"  stroke="rgba(124,58,237,0.45)" stroke-width="1"/>
+      <line x1="53.3"  y1="13.3"  x2="60"  y2="25"  stroke="rgba(124,58,237,0.45)" stroke-width="1"/>
+    </svg>
+    <!-- Orb core -->
+    <div id="orb" class="orb orb-idle" title="Tap to speak">
+      <div class="orb-aura-red"></div>
+      <canvas id="orb-canvas" width="330" height="330"></canvas>
+      <div class="orb-glow-ring"></div>
+    </div>
+  </div>
+
+  <div class="header-right">
+    <div class="clock-block">
+      <div class="clock mono" id="clock">00:00:00.00</div>
+      <div class="clock-label">LOCAL TIME</div>
+    </div>
+    <div class="weather-block">
+      <div class="weather-val" id="weather-chip">——</div>
+      <div class="clock-label">WEATHER</div>
+    </div>
+    <div class="orb-hint-block">
+      <div class="orb-hint" id="orb-hint">TAP ORB :: SPEAK</div>
+    </div>
+  </div>
+
+</header>
+
+<!-- ── Status bar ─────────────────────────────────────────────────────── -->
+<div class="status-bar">
+  <span class="sb-item"><span class="sb-dot"></span>SYSTEM ONLINE</span>
+  <span class="sb-sep">◆</span>
+  <span class="sb-item"><span class="sb-dot"></span>SECURE</span>
+  <span class="sb-sep">◆</span>
+  <span class="sb-item"><span class="sb-dot"></span>ENCRYPTED</span>
+  <span class="sb-sep">◆</span>
+  <span class="sb-item"><span class="sb-dot sb-blink"></span>AUTO-LIVE</span>
+  <span class="sb-sep">◆</span>
+  <span class="sb-item mono" id="sb-date">——</span>
+</div>
+
+<!-- ── "What now?" focus line + focus controls ────────────────────────── -->
+<div class="focus-bar" id="focus-bar">
+  <div class="focus-line" id="focus-line">—</div>
+  <div class="focus-actions">
+    <span class="focus-today-chip" id="focus-today-chip" title="Focus time logged today">◷ 0h 0m</span>
+    <button class="fx-btn" id="obsidian-btn" type="button" title="Sync agents, P&amp;L &amp; insights to your Obsidian vault">⬡ OBSIDIAN</button>
+    <button class="fx-btn" id="obsidian-open-btn" type="button" title="Open the Obsidian vault (Mac)">⬡ OPEN VAULT</button>
+    <a class="fx-btn spaceship-btn" href="/mission-control" title="Open Spaceship Mission Control">🚀 SPACESHIP CONTROL</a>
+    <a class="fx-btn scout-btn" href="/scout" title="Open Scout — part-time job hunter">🔎 SCOUT</a>
+    <button class="fx-btn" id="think-btn" type="button">◍ THINK</button>
+    <button class="fx-btn fx-btn-mag" id="lockin-btn" type="button">▣ LOCK IN</button>
+  </div>
+</div>
+
+<!-- ── Notifications panel ────────────────────────────────────────────── -->
+<div class="notif-panel hidden" id="notif-panel">
+  <div class="notif-head">
+    <span class="hud-label">&gt; NOTIFICATIONS</span>
+    <button id="notif-clear" class="text-btn">MARK READ</button>
+  </div>
+  <div id="notif-list" class="notif-list"><div class="muted">NO NOTIFICATIONS</div></div>
+</div>
+
+<!-- ── Main bento grid ────────────────────────────────────────────────── -->
+<main class="grid" id="main-grid">
+
+  <!-- ROW 1: Morning Briefing — hero full width -->
+  <section class="card" id="briefing-card" data-tabs="home">
+    <div class="card-head">
+      <h2>Morning Briefing</h2>
+      <div class="card-actions">
+        <button class="btn btn-ghost" id="briefing-refresh">↻ REFRESH</button>
+        <button class="btn btn-grad" id="briefing-play">▶ PLAY</button>
+      </div>
+    </div>
+    <div class="briefing-layout">
+      <div class="scanline hidden" id="briefing-scan"></div>
+      <div class="briefing-body" id="briefing-body"><span class="muted">GENERATING BRIEFING…</span></div>
+      <div class="briefing-sysinfo">
+        <div class="sysinfo-box">
+          <div class="sysinfo-title">SYSTEM STATUS</div>
+          <div class="sysinfo-row"><span class="si-label">UPTIME ///</span><span class="si-val mono" id="uptime-val">00:00:00</span></div>
+          <div class="sysinfo-row"><span class="si-label">DATA SRC ///</span><span class="si-val mono">AV + GPT-4</span></div>
+          <div class="sysinfo-row"><span class="si-label">LAST SYNC //</span><span class="si-val mono" id="last-sync">AUTO</span></div>
+          <div class="sysinfo-row"><span class="si-label">STATUS ////</span><span class="si-val mono green-text">ONLINE</span></div>
+          <div class="sysinfo-row"><span class="si-label">VOICE ////</span><span class="si-val mono" id="voice-status">READY</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROW 2: Performance Index (1/3) + Tactical Bots (2/3) -->
+  <section class="card" id="score-card" data-tabs="home">
+    <div class="card-head"><h2>Performance Index</h2></div>
+    <div class="score-hud">
+      <div class="score-wrap">
+        <svg class="score-ring" viewBox="0 0 180 180" id="score-ring-svg">
+          <circle class="ring-bg" cx="90" cy="90" r="72"/>
+          <circle class="ring-fg" id="score-arc" cx="90" cy="90" r="72"/>
+          <!-- Tick marks injected by JS -->
+        </svg>
+        <div class="score-inner">
+          <div class="score-index-label">PERF. INDEX</div>
+          <div class="score-num glow mono" id="score-num">000</div>
+          <div class="score-denom mono">/100</div>
+        </div>
+      </div>
+      <div class="score-contributions">
+        <div class="contrib-row">
+          <span class="contrib-label">HYDRATION //</span>
+          <div class="contrib-track"><div class="contrib-fill" id="contrib-water"></div></div>
+          <span class="contrib-pct mono" id="contrib-water-pct">0%</span>
+        </div>
+        <div class="contrib-row">
+          <span class="contrib-label">REST //////</span>
+          <div class="contrib-track"><div class="contrib-fill" id="contrib-sleep"></div></div>
+          <span class="contrib-pct mono" id="contrib-sleep-pct">0%</span>
+        </div>
+        <div class="contrib-row">
+          <span class="contrib-label">OBJECTIVES /</span>
+          <div class="contrib-track"><div class="contrib-fill" id="contrib-goals"></div></div>
+          <span class="contrib-pct mono" id="contrib-goals-pct">0%</span>
+        </div>
+      </div>
+      <canvas id="score-chart" height="55" style="margin-top:14px"></canvas>
+    </div>
+  </section>
+
+  <section class="card" id="bots-card" data-tabs="home">
+    <div class="card-head">
+      <h2>Tactical Bots</h2>
+      <button class="btn btn-ghost" id="bots-refresh">↻</button>
+    </div>
+    <div id="bots-body" class="bots-body"><span class="muted">ESTABLISHING LINK…</span></div>
+  </section>
+
+  <!-- ROW 2b: Market clock · Trading systems health · Validation countdown -->
+  <section class="card" id="market-card" data-tabs="home">
+    <div class="card-head"><h2>Market Session</h2></div>
+    <div class="market-state">
+      <span class="market-dot" id="market-dot"></span>
+      <span class="market-status mono" id="market-status">——</span>
+    </div>
+    <div class="market-count mono" id="market-count">—</div>
+  </section>
+
+  <section class="card" id="systems-card" data-tabs="home">
+    <div class="card-head"><h2>Trading Systems</h2></div>
+    <div id="systems-body" class="systems-body"><span class="muted">PINGING…</span></div>
+  </section>
+
+  <section class="card" id="validation-card" data-tabs="home">
+    <div class="card-head"><h2>Validation</h2></div>
+    <div class="val-day mono" id="val-day">—</div>
+    <div class="val-bar"><div class="val-fill" id="val-fill"></div></div>
+    <div class="val-note mono">Let them run. No changes until validation completes.</div>
+  </section>
+
+  <!-- Scout radar — compact live job-hunt scope (links to full /scout page) -->
+  <section class="card scout-card" id="scout-card" data-tabs="home">
+    <div class="card-head">
+      <h2>Scout // Radar</h2>
+      <a class="btn btn-ghost" href="/scout" title="Open Scout job hunter">⤢</a>
+    </div>
+    <div class="scout-radar-wrap">
+      <canvas id="scout-radar" class="scout-radar" width="250" height="250"
+              aria-label="Scout job radar"></canvas>
+    </div>
+    <div class="scout-radar-meta mono">
+      <div>SCOUT — Last scan: <span id="scout-last-scan" class="scout-hi">—</span></div>
+      <div>Jobs found: <span id="scout-jobs-count" class="scout-hi">—</span></div>
+    </div>
+  </section>
+
+  <!-- ROW 3: Mission Schedule + Comms -->
+  <section class="card" id="calendar-card" data-tabs="home">
+    <div class="card-head"><h2>Mission Schedule</h2></div>
+    <div id="calendar-body"><span class="muted">—</span></div>
+    <form id="event-form" class="inline-form">
+      <input type="text" id="ev-title" placeholder="Add mission…" required>
+      <input type="datetime-local" id="ev-start" required>
+      <button class="btn btn-grad" type="submit">＋</button>
+    </form>
+  </section>
+
+  <section class="card" id="inbox-card" data-tabs="home">
+    <div class="card-head"><h2>Comms Inbox</h2></div>
+    <div id="inbox-body"><span class="muted">—</span></div>
+    <div id="suggested-events"></div>
+  </section>
+
+  <!-- ROW 4: Intel Feed — full width -->
+  <section class="card" id="news-card" data-tabs="home">
+    <div class="card-head"><h2>Intel Feed</h2></div>
+    <div class="news-headlines" id="news-headlines"></div>
+    <div class="ticker-bar">
+      <span class="ticker-tag mono">LIVE ▸</span>
+      <div class="ticker-inner">
+        <div class="ticker-track" id="ticker-track"><span class="muted">LOADING FEED…</span></div>
+      </div>
+      <div class="ticker-fade"></div>
+    </div>
+  </section>
+
+  <!-- ROW 5: Biometrics row -->
+  <section class="card" id="water-card" data-tabs="home habits">
+    <div class="card-head"><h2>Biometrics // Hydration</h2><span class="streak" id="water-streak"></span></div>
+    <div class="bio-gauge-wrap">
+      <svg class="bio-gauge" viewBox="0 0 100 100">
+        <circle class="bg-arc" cx="50" cy="50" r="40" fill="none" stroke="rgba(139,148,158,.12)" stroke-width="8" stroke-dasharray="188.5 251.3" stroke-dashoffset="-31.4" stroke-linecap="round"/>
+        <circle class="fg-arc" id="water-arc" cx="50" cy="50" r="40" fill="none" stroke="#00d9ff" stroke-width="8" stroke-dasharray="0 251.3" stroke-dashoffset="-31.4" stroke-linecap="round" style="filter:drop-shadow(0 0 5px #00d9ff);transition:stroke-dasharray 1s cubic-bezier(.25,1,.35,1)"/>
+      </svg>
+      <div class="bio-gauge-label">
+        <div class="mono glow" id="water-num" style="font-size:1.4rem;font-weight:700">0</div>
+        <div class="mono muted" style="font-size:.65rem">ML</div>
+      </div>
+    </div>
+    <div class="bio-target mono muted">TARGET: 2000ML</div>
+    <div class="quick-row">
+      <button class="btn btn-ghost water-add" data-ml="250">+250</button>
+      <button class="btn btn-ghost water-add" data-ml="500">+500</button>
+      <button class="btn btn-ghost water-add" data-ml="750">+750</button>
+    </div>
+  </section>
+
+  <section class="card" id="sleep-card" data-tabs="habits">
+    <div class="card-head"><h2>Biometrics // Rest</h2></div>
+    <form id="sleep-form" class="inline-form">
+      <input type="number" id="sleep-hours" step="0.5" min="0" max="24" placeholder="HOURS LAST NIGHT">
+      <button class="btn btn-grad" type="submit">LOG</button>
+    </form>
+    <canvas id="sleep-chart" height="110" style="margin-top:14px"></canvas>
+  </section>
+
+  <section class="card" id="bodyweight-card" data-tabs="body">
+    <div class="card-head"><h2>Biometrics // Mass</h2></div>
+    <form id="weight-form" class="inline-form">
+      <input type="number" id="bw-kg" step="0.1" placeholder="KG TODAY">
+      <button class="btn btn-grad" type="submit">LOG</button>
+    </form>
+    <canvas id="weight-chart" height="110" style="margin-top:14px"></canvas>
+  </section>
+
+  <!-- ROW 6: Financial + PBs + Reflection -->
+  <section class="card" id="money-card" data-tabs="home money">
+    <div class="card-head"><h2>Financial Report</h2></div>
+    <div class="money-totals">
+      <div class="money-stat">
+        <div class="hud-label">WEEKLY ///</div>
+        <div class="money-val mono glow" id="money-week">£0.00</div>
+      </div>
+      <div class="money-stat">
+        <div class="hud-label">MONTHLY //</div>
+        <div class="money-val mono glow" id="money-month">£0.00</div>
+      </div>
+    </div>
+    <form id="spend-form" class="stack-form">
+      <div class="row2">
+        <input type="number" id="sp-amount" step="0.01" placeholder="£ AMOUNT" required>
+        <select id="sp-category">
+          <option>food</option><option>transport</option><option>shopping</option>
+          <option>bills</option><option>fun</option><option>other</option>
+        </select>
+      </div>
+      <input type="text" id="sp-note" placeholder="NOTE (OPTIONAL)">
+      <button class="btn btn-grad full" type="submit">LOG EXPENDITURE</button>
+    </form>
+    <canvas id="money-chart" height="130" style="margin-top:14px"></canvas>
+    <div id="spend-recent" class="small" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card" id="pbs-card" data-tabs="body">
+    <div class="card-head"><h2>Personal Records</h2></div>
+    <div id="pbs-body"><span class="muted">NO RECORDS YET</span></div>
+  </section>
+
+  <section class="card" id="reflection-card" data-tabs="habits">
+    <div class="card-head"><h2>Reflection Log</h2></div>
+    <div class="hud-label" style="margin-bottom:6px">DAILY RATING ///</div>
+    <form id="reflection-form">
+      <input type="range" id="refl-score" min="1" max="10" value="7">
+      <div class="refl-score-label mono" id="refl-score-label">7/10</div>
+      <textarea id="refl-text" placeholder="MISSION DEBRIEF…"></textarea>
+      <button class="btn btn-grad full" type="submit">COMMIT LOG</button>
+    </form>
+    <div id="refl-recent" class="small muted"></div>
+  </section>
+
+  <!-- Daily supplements checklist — resets at day rollover -->
+  <section class="card" id="supplements-card" data-tabs="habits">
+    <div class="card-head">
+      <h2>Supplements</h2>
+      <span class="streak" id="supp-streak"></span>
+      <span class="hud-label" id="supp-count">0/3</span>
+    </div>
+    <div id="supplements-body" class="supp-list">
+      <div class="muted mono">// LOADING…</div>
+    </div>
+  </section>
+
+  <!-- ROW 7: Objectives — full width -->
+  <section class="card" id="goals-card" data-tabs="home">
+    <div class="card-head"><h2>Operational Objectives</h2></div>
+    <div id="goals-body"><span class="muted">NO OBJECTIVES DEFINED</span></div>
+    <form id="goal-form" class="inline-form">
+      <input type="text" id="goal-title" placeholder="NEW OBJECTIVE…" required>
+      <button class="btn btn-grad" type="submit">＋</button>
+    </form>
+    <button class="btn btn-ghost full" id="review-btn">▶ WEEKLY REVIEW REPORT</button>
+    <div id="review-body" class="review-body hidden"></div>
+  </section>
+
+  <!-- ROW 8: Command Interface -->
+  <section class="card chat-card" id="chat-card" data-tabs="chat">
+    <div class="card-head">
+      <h2>Command Interface</h2>
+      <label class="btn btn-ghost" for="photo-input">📷 UPLOAD</label>
+      <input type="file" id="photo-input" accept="image/*" hidden>
+    </div>
+    <div class="chat-log" id="chat-log"></div>
+    <form id="chat-form" class="inline-form">
+      <input type="text" id="chat-input" placeholder="ENTER COMMAND…" autocomplete="off">
+      <button class="btn btn-grad" type="submit">SEND ▶</button>
+    </form>
+  </section>
+
+
+</main>
+
+<!-- ── Bottom nav ─────────────────────────────────────────────────────── -->
+<nav class="bottom-nav">
+  <div class="nav-pill" id="nav-pill"></div>
+  <button class="nav-btn active" data-tab="home">⬡<span>HOME</span></button>
+  <button class="nav-btn" data-tab="habits">◎<span>HABITS</span></button>
+  <button class="nav-btn" data-tab="body">⬜<span>BODY</span></button>
+  <button class="nav-btn" data-tab="money">◈<span>FUNDS</span></button>
+  <button class="nav-btn" data-tab="chat">▷<span>CMD</span></button>
+</nav>
+
+<div class="toast hidden" id="toast"></div>
+
+<!-- ── THINK MODE — calm full-screen breathing space ──────────────────── -->
+<div id="think-mode" class="think-mode" aria-hidden="true">
+  <div class="think-orb-wrap">
+    <svg class="think-ring" viewBox="0 0 220 220" aria-hidden="true">
+      <circle class="think-ring-track" cx="110" cy="110" r="100"/>
+      <circle class="think-ring-prog" id="think-ring-prog" cx="110" cy="110" r="100"/>
+    </svg>
+    <div class="think-orb"></div>
+  </div>
+  <div class="think-text" id="think-text">Take a moment.</div>
+  <div class="think-controls" id="think-controls">
+    <div class="think-timers">
+      <button class="think-tbtn" data-min="5" type="button">5</button>
+      <button class="think-tbtn" data-min="10" type="button">10</button>
+      <button class="think-tbtn" data-min="15" type="button">15</button>
+      <button class="think-tbtn" data-min="20" type="button">20</button>
+      <span class="think-remaining mono" id="think-remaining"></span>
+    </div>
+    <button class="think-ambient" id="think-ambient" type="button">▷ AMBIENT</button>
+  </div>
+  <div class="think-exit mono">CLICK ANYWHERE · ESC TO EXIT</div>
+</div>
+
+<!-- ── LOCK IN — focus session bar ────────────────────────────────────── -->
+<div id="lockin-bar" class="lockin-bar" aria-hidden="true">
+  <span class="lockin-dot"></span>
+  <span class="lockin-label mono">FOCUS</span>
+  <span class="lockin-time mono" id="lockin-time">00:00</span>
+  <span class="lockin-phase mono" id="lockin-phase"></span>
+  <span class="lockin-spacer"></span>
+  <button class="lockin-pomo" id="lockin-pomo" type="button" aria-pressed="false">POMODORO</button>
+  <button class="lockin-end" id="lockin-end" type="button">END SESSION</button>
+</div>
+
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+<!-- Scout radar — pure-canvas animated scope + live scan stats (no libraries) -->
+<script>
+(function () {
+  const canvas = document.getElementById("scout-radar");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const GREEN = "0,217,255";
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const S = canvas.width;                 // logical size (250)
+  canvas.width = canvas.height = S * dpr; // backing store for crispness
+  ctx.scale(dpr, dpr);
+  const cx = S / 2, cy = S / 2, R = S / 2 - 6;
+
+  // Latent blips: lit when the sweep crosses them, then fade. Occasionally
+  // relocated so the scope feels alive.
+  const blips = [];
+  for (let i = 0; i < 7; i++) {
+    blips.push({ a: Math.random() * Math.PI * 2, r: (0.18 + Math.random() * 0.78) * R, life: 0 });
+  }
+  function relocate(b) { b.a = Math.random() * Math.PI * 2; b.r = (0.18 + Math.random() * 0.78) * R; }
+
+  function crossed(prev, cur, t) {
+    const TAU = Math.PI * 2;
+    prev = ((prev % TAU) + TAU) % TAU; cur = ((cur % TAU) + TAU) % TAU; t = ((t % TAU) + TAU) % TAU;
+    return prev <= cur ? (t > prev && t <= cur) : (t > prev || t <= cur);
+  }
+
+  function grid() {
+    ctx.clearRect(0, 0, S, S);
+    ctx.strokeStyle = `rgba(${GREEN},0.22)`;
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 4; i++) {
+      ctx.beginPath(); ctx.arc(cx, cy, (R * i) / 4, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
+    ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
+    // diagonals
+    const d = R * Math.SQRT1_2;
+    ctx.moveTo(cx - d, cy - d); ctx.lineTo(cx + d, cy + d);
+    ctx.moveTo(cx - d, cy + d); ctx.lineTo(cx + d, cy - d);
+    ctx.strokeStyle = `rgba(${GREEN},0.12)`;
+    ctx.stroke();
+  }
+
+  function sweep(angle) {
+    let grad;
+    try { grad = ctx.createConicGradient(angle, cx, cy); }
+    catch (e) { grad = null; }
+    if (grad) {
+      grad.addColorStop(0.00, `rgba(${GREEN},0.42)`);
+      grad.addColorStop(0.07, `rgba(${GREEN},0.12)`);
+      grad.addColorStop(0.18, `rgba(${GREEN},0.0)`);
+      grad.addColorStop(1.00, `rgba(${GREEN},0.0)`);
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fillStyle = grad; ctx.fill();
+    }
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(angle) * R, cy + Math.sin(angle) * R);
+    ctx.strokeStyle = `rgba(${GREEN},0.9)`;
+    ctx.lineWidth = 2; ctx.stroke();
+  }
+
+  let angle = 0, prev = 0, last = performance.now();
+  function frame(now) {
+    const dt = Math.min((now - last) / 1000, 0.1); last = now;
+    prev = angle; angle = (angle + dt * 1.3) % (Math.PI * 2);
+    grid();
+    sweep(angle);
+    for (const b of blips) {
+      if (crossed(prev, angle, b.a)) b.life = 1;
+      if (b.life > 0) {
+        const x = cx + Math.cos(b.a) * b.r, y = cy + Math.sin(b.a) * b.r;
+        ctx.beginPath(); ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${GREEN},${b.life.toFixed(3)})`;
+        ctx.shadowColor = `rgba(${GREEN},${b.life.toFixed(3)})`; ctx.shadowBlur = 10;
+        ctx.fill(); ctx.shadowBlur = 0;
+        b.life *= 0.965;
+        if (b.life < 0.03 && Math.random() < 0.04) { b.life = 0; relocate(b); }
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // Live stats from the new-jobs feed.
+  function fmt(ts) {
+    if (!ts) return "never";
+    const d = new Date(ts.replace(" ", "T"));
+    if (isNaN(d)) return ts;
+    return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+  async function refreshStats() {
+    try {
+      const r = await fetch("/api/scout/jobs?new_only=true", { credentials: "include" });
+      const jobs = await r.json();
+      const countEl = document.getElementById("scout-jobs-count");
+      const scanEl = document.getElementById("scout-last-scan");
+      if (countEl) countEl.textContent = Array.isArray(jobs) ? jobs.length : 0;
+      const latest = Array.isArray(jobs) && jobs.length
+        ? jobs.map((j) => j.found_date).filter(Boolean).sort().slice(-1)[0] : null;
+      if (scanEl) scanEl.textContent = fmt(latest);
+    } catch (e) { /* leave placeholders */ }
+  }
+  refreshStats();
+  setInterval(refreshStats, 60000);
+})();
+</script>
+
+</body>
+</html>
