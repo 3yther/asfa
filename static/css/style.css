@@ -365,6 +365,7 @@ body {
   border-color: #00d9ff;
   border-style: solid;
   opacity: 0;
+  pointer-events: none;
   animation: corner-draw-in 0.4s ease forwards;
 }
 
