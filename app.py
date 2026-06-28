@@ -116,12 +116,28 @@ def _today():
 # ── Pages ──────────────────────────────────────────────────────────────────────
 
 @app.route("/")
-def index():
+def command():
     return render_template(
-        "index.html",
+        "command.html",
+        active="command",
         google_connected=is_authenticated(),
         spotify_connected=spotify.is_connected(),
     )
+
+
+@app.route("/agents")
+def agents():
+    return render_template("agents.html", active="agents")
+
+
+@app.route("/approvals")
+def approvals():
+    return render_template("approvals.html", active="approvals")
+
+
+@app.route("/system")
+def system():
+    return render_template("system.html", active="system")
 
 
 # ── Briefing ───────────────────────────────────────────────────────────────────
@@ -883,7 +899,7 @@ def _mc_alerts(agents: list, live: dict) -> list:
 
 @app.route("/mission-control")
 def mission_control():
-    return render_template("mission_control.html")
+    return render_template("mission_control.html", active="mission")
 
 
 @app.route("/api/mission-control/health")

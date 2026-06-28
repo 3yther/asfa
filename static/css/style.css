@@ -1123,3 +1123,80 @@ body.locked-in #main-grid .card:hover { opacity: .9; }
   from { background-position: 180% 0; }
   to   { background-position: -80% 0; }
 }
+
+/* ── Top navigation bar — five-screen nav (shared) ───────────────────────── */
+.asfa-nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 1200;
+  height: 44px; display: flex; align-items: center; gap: 16px; padding: 0 20px;
+  background: rgba(0, 4, 8, 0.97);
+  border-bottom: 1px solid rgba(34,211,238,.30);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  font-family: 'JetBrains Mono', monospace;
+}
+.asfa-nav .nav-left,
+.asfa-nav .nav-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; min-width: 0; }
+.asfa-nav .nav-right { justify-content: flex-end; }
+.asfa-nav .nav-logo {
+  font-weight: 700; letter-spacing: 2px; font-size: .9rem; text-decoration: none;
+  color: var(--cyan); text-shadow: 0 0 8px rgba(34,211,238,.4);
+}
+.asfa-nav .nav-logo .lb,
+.asfa-nav .nav-logo .rb { color: var(--gold); }
+.asfa-nav .nav-day {
+  font-size: .58rem; letter-spacing: 1.5px; color: var(--muted); text-transform: uppercase;
+}
+.asfa-nav .nav-clock {
+  font-size: .7rem; letter-spacing: 1px; white-space: nowrap;
+  color: var(--cyan-hi); text-shadow: 0 0 6px rgba(34,211,238,.3);
+}
+.asfa-nav .nav-tabs {
+  display: flex; align-items: center; gap: 4px;
+  flex: 1 1 auto; justify-content: center; overflow-x: auto; scrollbar-width: none;
+}
+.asfa-nav .nav-tabs::-webkit-scrollbar { display: none; }
+.asfa-nav .nav-tab {
+  font-family: 'JetBrains Mono', monospace; font-size: .62rem; letter-spacing: 2px;
+  color: var(--muted); text-decoration: none; text-transform: uppercase;
+  padding: 6px 12px; border-radius: 3px; border: 1px solid transparent;
+  white-space: nowrap; transition: color .18s, background .18s, border-color .18s;
+}
+.asfa-nav .nav-tab:hover { color: var(--cyan-hi); background: rgba(34,211,238,.06); }
+.asfa-nav .nav-tab.active {
+  color: var(--cyan); border-color: rgba(34,211,238,.45);
+  background: rgba(34,211,238,.08);
+  box-shadow: 0 0 12px rgba(34,211,238,.15), inset 0 -2px 0 var(--cyan);
+  text-shadow: 0 0 8px rgba(34,211,238,.4);
+}
+
+/* Command screen also carries the mission-bar, so push everything below BOTH bars */
+body.nav-with-mission { padding-top: 88px; }
+body.nav-with-mission .mission-bar { top: 44px; }
+body.nav-with-mission .header     { top: 88px; }
+body.nav-with-mission .status-bar { top: 88px; }
+body.nav-with-mission .pc-tl,
+body.nav-with-mission .pc-tr      { top: 100px; }
+
+/* Empty placeholder screens (agents / approvals / system) */
+.screen-placeholder { max-width: 1100px; margin: 0 auto; padding: 56px 24px; }
+.screen-placeholder .screen-title {
+  font-family: 'JetBrains Mono', monospace; font-size: 1rem; letter-spacing: 4px;
+  color: var(--cyan); text-shadow: 0 0 10px rgba(34,211,238,.3);
+  text-transform: uppercase; margin: 0 0 6px;
+}
+.screen-placeholder .screen-sub {
+  font-size: .68rem; letter-spacing: 1.5px; color: var(--muted);
+  text-transform: uppercase; margin: 0 0 32px;
+}
+.screen-empty {
+  border: 1px dashed rgba(34,211,238,.22); border-radius: 6px;
+  padding: 60px 24px; text-align: center; color: var(--muted);
+  font-family: 'JetBrains Mono', monospace; font-size: .72rem; letter-spacing: 2px;
+  background: rgba(0,217,255,.02);
+}
+
+@media (max-width: 680px) {
+  .asfa-nav { gap: 8px; padding: 0 10px; }
+  .asfa-nav .nav-day { display: none; }
+  .asfa-nav .nav-tab { padding: 6px 7px; font-size: .55rem; letter-spacing: 1px; }
+  .asfa-nav .nav-clock { font-size: .6rem; }
+}
