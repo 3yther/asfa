@@ -1587,3 +1587,12 @@ function fmtTs(dt) {
     return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }).toUpperCase();
   } catch { return "—"; }
 }
+
+// Add corner elements to all sci-fi panels
+document.querySelectorAll('.sci-fi-panel').forEach(el => {
+  ['corner-bl', 'corner-br'].forEach(cls => {
+    const div = document.createElement('div');
+    div.className = cls;
+    el.appendChild(div);
+  });
+});
