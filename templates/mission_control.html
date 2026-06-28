@@ -26,7 +26,34 @@
   ::-webkit-scrollbar-track{background:transparent;}
   ::-webkit-scrollbar-thumb{background:#39ff1433;}
 
-  .fac{display:flex;flex-direction:column;height:100vh;}
+  /* Facility sits below the shared five-screen nav (44px fixed bar). */
+  .fac{display:flex;flex-direction:column;height:calc(100vh - 44px);margin-top:44px;}
+
+  /* ── Shared top navigation bar (self-contained — MC doesn't load style.css) ── */
+  .asfa-nav{
+    position:fixed;top:0;left:0;right:0;z-index:1200;height:44px;
+    display:flex;align-items:center;gap:16px;padding:0 20px;
+    background:rgba(0,4,8,.97);border-bottom:1px solid rgba(0,255,255,.30);
+    backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+    font-family:'JetBrains Mono',monospace;
+  }
+  .asfa-nav .nav-left,.asfa-nav .nav-right{display:flex;align-items:center;gap:10px;flex:0 0 auto;min-width:0;}
+  .asfa-nav .nav-right{justify-content:flex-end;}
+  .asfa-nav .nav-logo{font-weight:700;letter-spacing:2px;font-size:.9rem;text-decoration:none;color:var(--cyan);text-shadow:0 0 8px rgba(0,255,255,.4);}
+  .asfa-nav .nav-logo .lb,.asfa-nav .nav-logo .rb{color:var(--gold);}
+  .asfa-nav .nav-day{font-size:.58rem;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;}
+  .asfa-nav .nav-clock{font-size:.7rem;letter-spacing:1px;white-space:nowrap;color:var(--cyan);text-shadow:0 0 6px rgba(0,255,255,.3);}
+  .asfa-nav .nav-tabs{display:flex;align-items:center;gap:4px;flex:1 1 auto;justify-content:center;overflow-x:auto;scrollbar-width:none;}
+  .asfa-nav .nav-tabs::-webkit-scrollbar{display:none;}
+  .asfa-nav .nav-tab{font-family:'JetBrains Mono',monospace;font-size:.62rem;letter-spacing:2px;color:var(--muted);text-decoration:none;text-transform:uppercase;padding:6px 12px;border-radius:3px;border:1px solid transparent;white-space:nowrap;transition:color .18s,background .18s,border-color .18s;}
+  .asfa-nav .nav-tab:hover{color:var(--cyan);background:rgba(0,255,255,.06);}
+  .asfa-nav .nav-tab.active{color:var(--cyan);border-color:rgba(0,255,255,.45);background:rgba(0,255,255,.08);box-shadow:0 0 12px rgba(0,255,255,.15),inset 0 -2px 0 var(--cyan);text-shadow:0 0 8px rgba(0,255,255,.4);}
+  @media (max-width:680px){
+    .asfa-nav{gap:8px;padding:0 10px;}
+    .asfa-nav .nav-day{display:none;}
+    .asfa-nav .nav-tab{padding:6px 7px;font-size:.55rem;letter-spacing:1px;}
+    .asfa-nav .nav-clock{font-size:.6rem;}
+  }
 
   /* ── TOP BAR ─────────────────────────────────────────── */
   .topbar{
@@ -51,7 +78,7 @@
   .tb-status.alert{color:var(--red);animation:critpulse 1s ease-in-out infinite;}
   @keyframes critpulse{0%,100%{opacity:1;}50%{opacity:.4;}}
 
-  .offline-banner{position:fixed;top:44px;left:0;right:0;z-index:90;text-align:center;background:#ef444422;color:var(--red);border-bottom:1px solid var(--red);padding:6px;font-size:.66rem;letter-spacing:2px;display:none;}
+  .offline-banner{position:fixed;top:88px;left:0;right:0;z-index:90;text-align:center;background:#ef444422;color:var(--red);border-bottom:1px solid var(--red);padding:6px;font-size:.66rem;letter-spacing:2px;display:none;}
   .offline-banner.show{display:block;}
 
   .main{display:flex;flex:1;overflow:hidden;min-height:0;}
@@ -173,6 +200,7 @@
 </style>
 </head>
 <body>
+{% include "nav.html" with context %}
 <div class="fac">
   <div class="topbar">
     <a class="tb-home" href="/">⌂ DASH</a>
