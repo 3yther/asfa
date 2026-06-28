@@ -10,13 +10,15 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/sounds.js') }}" defer></script>
 </head>
 <body>
 
 {% include "nav.html" with context %}
 
 <main class="screen-placeholder">
-  <h1 class="screen-title">Approvals Inbox</h1>
+  <h1 class="screen-title" data-decode>Approvals Inbox</h1>
   <p class="screen-sub">Pending actions awaiting your sign-off</p>
   <div class="screen-empty sci-fi-panel">No pending approvals</div>
 </main>
