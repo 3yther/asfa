@@ -75,12 +75,13 @@ for proactive reminders and daily summaries.
   near the top and calls `db.init_db()` during startup, before/while the route
   functions reference `db`. Reordering this caused a `NameError: 'db'`
   (see Known Issues Fixed).
-- **APScheduler runs 12 jobs** (`services/scheduler.py:start_scheduler`):
+- **APScheduler runs 13 jobs** (`services/scheduler.py:start_scheduler`):
   morning briefing (09:00 UTC), bedtime reminder (mon–fri 22:30 + sun/sat 00:00),
   market-open reminder (mon–fri 14:00), reflection prompt (22:00),
   daily summary (21:00 UTC), obsidian sync (midnight), supplement reminders
   (09:00 + 20:00), water check (every 30 min), bot-trade poll (every 5 min),
-  weekly review (sun 18:00). Single gunicorn worker so jobs run once.
+  weekly review (sun 18:00), DB backup (03:00 Europe/London → private repo).
+  Single gunicorn worker so jobs run once.
 - **OAuth state must be validated.** Both Google and Spotify flows generate a
   `state`, store it in the session, and verify the returned `state` matches on
   callback (rejecting with 400 on mismatch) to prevent CSRF / auth-code injection.

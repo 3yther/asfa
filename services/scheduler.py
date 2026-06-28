@@ -248,6 +248,20 @@ def obsidian_sync_job():
         logger.error("obsidian sync job failed: %s", e)
 
 
+def db_backup():
+    """03:00 Europe/London — dump the prod Postgres DB and push it to the private
+    backups repo. No-op on local SQLite. run_backup() never raises."""
+    from services.backup import run_backup
+    res = run_backup()
+    if not res.get("ok"):
+        logger.error("DB backup failed: %s", res.get("error"))
+    elif res.get("method") == "skipped":
+        logger.info("DB backup skipped: %s", res.get("reason"))
+    else:
+        logger.info("DB backup ok: %s — %s bytes, %s tables, %s rows",
+                    res.get("file"), res.get("bytes"), res.get("tables"), res.get("rows"))
+
+
 def weekly_review():
     from services.ai import generate_weekly_review
     try:
@@ -283,6 +297,9 @@ def start_scheduler():
     sched.add_job(water_check, "interval", minutes=30)
     sched.add_job(poll_bot_trades, "interval", minutes=5)
     sched.add_job(weekly_review, "cron", day_of_week="sun", hour=18, minute=0)
+    # Daily production-DB backup at 03:00 Europe/London (quiet hours).
+    sched.add_job(db_backup, "cron", hour=3, minute=0,
+                  timezone="Europe/London", id="db_backup")
     sched.start()
     _scheduler = sched
     logger.info("Scheduler started with %d jobs", len(sched.get_jobs()))
