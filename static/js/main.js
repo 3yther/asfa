@@ -547,6 +547,17 @@ function initMission() {
 }
 
 // ── Load all data ──────────────────────────────────────────────────────────────
+// Trigger a brief glow pulse on a card when its data updates (Visual Pass 3+4).
+// Cards opt in via a data-card="<id>" attribute in the template.
+function glowCard(cardId) {
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const card = document.querySelector(`[data-card="${cardId}"]`);
+  if (!card) return;
+  card.classList.remove('card-updated');
+  void card.offsetWidth; // force reflow so the animation re-triggers
+  card.classList.add('card-updated');
+}
+
 function loadAll() {
   fetchBriefing();
   fetchScore();
@@ -580,6 +591,7 @@ async function fetchBriefing() {
     if (uv) uv.textContent = uptime();
     const ls = document.getElementById("last-sync");
     if (ls) ls.textContent = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    glowCard("briefing");
   } catch { /* silent */ }
 }
 
@@ -594,6 +606,7 @@ async function fetchScore() {
   try {
     const d = await apiGet("/api/score");
     renderScore(d);
+    glowCard("score");
   } catch { /* silent */ }
 }
 
@@ -641,6 +654,7 @@ async function fetchBots() {
   try {
     const d = await apiGet("/api/asfa/bot-status");
     body.innerHTML = renderTradingActivity(d);
+    glowCard("bots");
   } catch {
     // Even on failure, fall back to the static dashboard links.
     body.innerHTML = renderBotLinks({
@@ -716,6 +730,7 @@ async function fetchHabits() {
     const today = d.today || {};
     renderWater(today.water_ml || 0, WATER_TARGET, d.water_streak || 0);
     renderSleep(today.sleep_hours || 0);
+    glowCard("hydration");
   } catch { /* silent */ }
 }
 
@@ -881,6 +896,7 @@ async function fetchNews() {
       const txt = articles.map(a => esc(a.title || "")).join('<span class="ticker-sep">///</span>');
       ticker.innerHTML = txt + '<span class="ticker-sep">///</span>' + txt;
     }
+    glowCard("news");
   } catch { /* silent */ }
 }
 
@@ -899,6 +915,7 @@ async function fetchMoney() {
         `<div class="list-item"><span class="time">${esc(cat.toUpperCase())}</span><span class="mono">£${amt.toFixed(2)}</span></div>`
       ).join("") || `<div class="list-item muted mono">// NO DATA</div>`;
     }
+    glowCard("money");
   } catch { /* silent */ }
 }
 
@@ -961,6 +978,7 @@ async function fetchSupplements() {
   try {
     const d = await apiGet("/api/supplements");
     renderSupplements(el, d);
+    glowCard("supplements");
   } catch { el.innerHTML = `<div class="muted mono">// SUPPLEMENTS OFFLINE</div>`; }
 }
 
@@ -1125,6 +1143,7 @@ async function fetchSystems() {
         <span class="system-meta mono">${esc(b.online ? (b.last_signal || b.status || "online") : "offline")}</span>
       </a>`
     ).join("") || `<span class="muted mono">// NO SYSTEMS</span>`;
+    glowCard("systems");
   } catch { el.innerHTML = `<span class="muted mono">// LINK DOWN</span>`; }
 }
 
@@ -1143,6 +1162,7 @@ async function fetchValidation() {
       dayEl.textContent = `VALIDATION: Day ${d.day} of ${d.total}`;
     }
     if (fill) fill.style.width = `${d.pct || 0}%`;
+    glowCard("validation");
   } catch { dayEl.textContent = "VALIDATION: —"; }
 }
 
