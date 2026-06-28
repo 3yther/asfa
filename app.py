@@ -572,6 +572,17 @@ def api_bots_health():
     return jsonify(get_bots_health())
 
 
+# ── Database backup (manual trigger) ───────────────────────────────────────────
+
+@app.route("/api/asfa/backup/run-now", methods=["POST"])
+def api_backup_run_now():
+    """Manually trigger a production DB backup. Auth-required (not in
+    _PUBLIC_ENDPOINTS). No-op on local SQLite; dumps + pushes on Railway/Postgres."""
+    from services.backup import run_backup
+    res = run_backup()
+    return jsonify(res), (200 if res.get("ok") else 500)
+
+
 # ── Obsidian sync (local markdown daily logs) ──────────────────────────────────
 
 @app.route("/api/asfa/obsidian/sync-now")
