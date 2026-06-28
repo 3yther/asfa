@@ -4,8 +4,8 @@
    own UTC clock + mission-day counter so it works on pages without main.js. #}
 <nav class="asfa-nav" aria-label="Primary">
   <div class="nav-left">
-    <a class="nav-logo" href="/"><span class="lb">[</span>ASFA<span class="rb">]</span></a>
-    <span class="nav-day" id="nav-day">DAY --</span>
+    <a class="nav-logo" href="/"><span class="lb">[</span><span data-decode>ASFA</span><span class="rb">]</span></a>
+    <span class="nav-day" id="nav-day" data-decode>DAY --</span>
   </div>
   <div class="nav-tabs">
     <a class="nav-tab {{ 'active' if active == 'command' }}"    href="/">COMMAND</a>
@@ -15,6 +15,8 @@
     <a class="nav-tab {{ 'active' if active == 'mission' }}"    href="/mission-control">MISSION&nbsp;CONTROL</a>
   </div>
   <div class="nav-right">
+    <button id="sound-toggle" type="button" title="Toggle UI sounds"
+      onclick="if(window.SoundFX){SoundFX.toggle(); this.textContent = SoundFX.isEnabled() ? '🔊' : '🔇';}">🔇</button>
     <span class="nav-clock" id="nav-clock">--:--:-- UTC</span>
   </div>
 </nav>

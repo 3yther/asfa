@@ -1261,3 +1261,28 @@ body.nav-with-mission .pc-tr      { top: 100px; }
   .asfa-nav .nav-tab { padding: 6px 7px; font-size: .55rem; letter-spacing: 1px; }
   .asfa-nav .nav-clock { font-size: .6rem; }
 }
+
+/* ── Visual Pass 3+4 ─────────────────────────────────────────────────────── */
+
+/* State glow — cards pulse briefly when their data updates (see glowCard()) */
+@keyframes data-update-glow {
+  0%   { box-shadow: 0 0 0 rgba(0,217,255,0); }
+  30%  { box-shadow: 0 0 18px rgba(0,217,255,0.35); }
+  100% { box-shadow: 0 0 0 rgba(0,217,255,0); }
+}
+
+.card-updated {
+  animation: data-update-glow 1.2s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-updated { animation: none; }
+}
+
+/* Sound toggle button in the nav bar — muted/idle by default */
+.asfa-nav #sound-toggle {
+  background: none; border: none; color: var(--muted, #5a7488);
+  cursor: pointer; font-size: 13px; padding: 0 8px; line-height: 1;
+  transition: color .15s ease, text-shadow .15s ease;
+}
+.asfa-nav #sound-toggle:hover { color: var(--cyan, #00d9ff); text-shadow: 0 0 8px rgba(0,217,255,.4); }
