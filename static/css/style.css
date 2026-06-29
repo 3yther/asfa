@@ -27,10 +27,15 @@
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html { color-scheme: dark; }
+/* Dark fill lives on the root so it paints bottom-most, behind the
+   fixed #starfield-bg canvas (z-index:-1). Keeps a no-flash backdrop
+   while letting the starfield show through a transparent body. */
+html { color-scheme: dark; background: var(--bg); }
 
 body {
-  background: var(--bg);
+  /* transparent so the fixed starfield canvas behind the body is visible;
+     only the faint grid overlay below is painted on the body itself */
+  background: transparent;
   background-image:
     linear-gradient(rgba(124,58,237,.018) 1px, transparent 1px),
     linear-gradient(90deg, rgba(124,58,237,.018) 1px, transparent 1px);
