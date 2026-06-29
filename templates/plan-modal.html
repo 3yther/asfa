@@ -1,0 +1,32 @@
+{# ── Plan Approval modal (Phase 5 UI) ───────────────────────────────────────
+   Overlay that shows a decomposed plan, its approval controls, and live
+   execution results. Hidden until PlanModal.openPlan(id) is called. Include
+   this once per page that needs it and load static/js/plan-modal.js. #}
+<div id="plan-modal" class="hidden" aria-hidden="true">
+  <div class="plan-modal-content sci-fi-panel" role="dialog" aria-modal="true" aria-label="Plan approval">
+    <button class="plan-modal-close" id="plan-modal-close" type="button" title="Close" aria-label="Close">✕</button>
+
+    <!-- Progress bar -->
+    <div class="plan-progress"><div class="plan-progress-bar" id="plan-progress-bar"></div></div>
+
+    <!-- Status badge -->
+    <span class="plan-status-badge status-pending" id="plan-status-badge">pending_approval</span>
+
+    <!-- Section A — request + Claude's reasoning -->
+    <div class="plan-request" id="plan-request">—</div>
+    <div class="plan-reasoning" id="plan-reasoning"></div>
+
+    <!-- Step timeline (rendered by JS) -->
+    <div class="plan-timeline" id="plan-timeline">
+      <div class="muted mono">// LOADING PLAN…</div>
+    </div>
+
+    <!-- Section B — controls -->
+    <div class="plan-controls">
+      <button class="btn-approve" id="plan-approve-btn" type="button">▣ APPROVE</button>
+      <button class="btn-reject"  id="plan-reject-btn"  type="button">REJECT</button>
+      <button class="btn-execute hidden" id="plan-execute-btn" type="button">▶ EXECUTE</button>
+    </div>
+    <div class="plan-feedback" id="plan-feedback"></div>
+  </div>
+</div>
