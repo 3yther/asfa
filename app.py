@@ -440,6 +440,8 @@ def api_water_intake():
         db.log_episodic("hydration", "water_logged",
                         f"Logged {amount}ml of water ({total}/2000ml today)",
                         payload={"amount_ml": amount, "total_ml": total, "date": date})
+        # Phase 4: logging water energises the hydration agent.
+        db.update_energy("hydration", 5)
     except Exception as e:
         logger.error("hydration episodic log failed: %s", e)
 
@@ -675,6 +677,8 @@ def api_backup_run_now():
                      reason="manual backup trigger",
                      details=res, duration_ms=dur_ms)
         db.update_error_budget("backup", ok)
+        # Phase 4: energy economy — reward a clean backup, penalise a failure.
+        db.update_energy("backup", 5 if ok else -10)
     except Exception as e:
         logger.error("backup audit log failed: %s", e)
     return jsonify(res), (200 if res.get("ok") else 500)
@@ -1106,6 +1110,57 @@ def api_agent_log(agent_id):
         db.add_agent_log(agent_id, message, xp_earned)
         return jsonify({"ok": True, "log": db.get_agent_log(agent_id, 20)})
     return jsonify(db.get_agent_log(agent_id, 20))
+
+
+# ── Phase 4: agent intelligence (heartbeat, diaries, energy) ───────────────────
+
+@app.route("/api/agents/status")
+def api_agents_status():
+    """Heartbeat results for all agents (status, energy, budget health)."""
+    from services.heartbeat import run_heartbeat
+    return jsonify(run_heartbeat())
+
+
+@app.route("/api/agents/energy")
+def api_agents_energy():
+    """Energy levels for all agents: [{agent_id, energy, last_updated}, ...]."""
+    return jsonify(db.get_all_energy())
+
+
+@app.route("/api/agents/diary/generate-all", methods=["POST"])
+def api_agents_diary_generate_all():
+    """Trigger diary generation for all 13 agents (uses the Claude API)."""
+    from services.agent_intelligence import generate_all_diaries
+    return jsonify(generate_all_diaries())
+
+
+@app.route("/api/agents/<agent_id>/diary")
+def api_agent_diary(agent_id):
+    """Most recent reflective diary entry for an agent."""
+    reflections = db.get_agent_reflections(agent_id, period="daily", limit=1)
+    if not reflections:
+        return jsonify({"error": "no diary entry yet", "agent_id": agent_id}), 404
+    r = reflections[0]
+    stats = r.get("stats")
+    if isinstance(stats, str):
+        try:
+            stats = json.loads(stats)
+        except (TypeError, ValueError):
+            pass
+    return jsonify({
+        "agent_id": agent_id,
+        "summary": r.get("summary"),
+        "stats": stats,
+        "created_at": r.get("created_at"),
+    })
+
+
+@app.route("/api/agents/<agent_id>/diary/generate", methods=["POST"])
+def api_agent_diary_generate(agent_id):
+    """Trigger immediate diary generation for one agent (uses the Claude API)."""
+    from services.agent_intelligence import generate_diary_entry
+    result = generate_diary_entry(agent_id)
+    return jsonify(result), (200 if result.get("ok") else 500)
 
 
 @app.route("/api/battles", methods=["POST"])

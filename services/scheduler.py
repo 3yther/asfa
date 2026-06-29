@@ -12,7 +12,9 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 import database as db
 from services import alerts, insights, telegram_bot
+from services.agent_intelligence import generate_all_diaries
 from services.bots import get_bots_status, get_trading_activity
+from services.heartbeat import run_heartbeat
 
 logger = logging.getLogger(__name__)
 _scheduler = None
@@ -46,6 +48,8 @@ def audited(agent_id: str, action: str):
                     db.log_audit(agent_id, action, outcome,
                                  reason="scheduled job", duration_ms=dur_ms)
                     db.update_error_budget(agent_id, outcome == "success")
+                    # Phase 4: energy economy — reward success, penalise failure.
+                    db.update_energy(agent_id, 5 if outcome == "success" else -10)
                 except Exception as e:
                     logger.error(f"audit log failed for {agent_id}.{action}: {e}")
         return wrapper
@@ -336,6 +340,13 @@ def start_scheduler():
     # Daily production-DB backup at 03:00 Europe/London (quiet hours).
     sched.add_job(db_backup, "cron", hour=3, minute=0,
                   timezone="Europe/London", id="db_backup")
+    # Phase 4: daily reflective diary generation — 02:00 Europe/London.
+    sched.add_job(generate_all_diaries, trigger="cron", hour=2, minute=0,
+                  timezone="Europe/London", id="agent_diaries_daily",
+                  replace_existing=True)
+    # Phase 4: agent heartbeat / proactive health check every 30 minutes.
+    sched.add_job(run_heartbeat, trigger="interval", minutes=30,
+                  id="agent_heartbeat", replace_existing=True)
     sched.start()
     _scheduler = sched
     logger.info("Scheduler started with %d jobs", len(sched.get_jobs()))

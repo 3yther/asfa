@@ -1330,6 +1330,11 @@ def _ensure_agent_data_tables():
             successful_runs INTEGER DEFAULT 0,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+        """CREATE TABLE IF NOT EXISTS agent_energy (
+            agent_id TEXT PRIMARY KEY,
+            energy REAL DEFAULT 100.0,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
     ]
     with get_db() as conn:
         cur = conn.cursor()
@@ -1607,10 +1612,79 @@ def get_budget_health(agent_id):
     return budget["health"] if budget else "healthy"
 
 
+# ── Energy economy ─────────────────────────────────────────────────────────────
+# Phase 4: each agent has an energy reserve (0-100) that rises on success and
+# falls on failure/skip, giving a quick at-a-glance morale/health signal.
+
+def init_energy(agent_id, starting_energy=100.0):
+    """Initialize energy for an agent (idempotent — leaves existing rows)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO agent_energy (agent_id, energy) VALUES (%s,%s) "
+                "ON CONFLICT (agent_id) DO NOTHING",
+                (agent_id, float(starting_energy)))
+        else:
+            cur.execute(
+                "INSERT OR IGNORE INTO agent_energy (agent_id, energy) VALUES (?,?)",
+                (agent_id, float(starting_energy)))
+
+
+def get_energy(agent_id):
+    """Get current energy row for an agent ({agent_id, energy, last_updated}) or
+    None if it has never been initialised."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM agent_energy WHERE agent_id = {ph}", (agent_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def update_energy(agent_id, delta: float):
+    """Add or subtract energy from an agent (auto-inits if missing), clamped to
+    0-100. Convention: +5 on success, -10 on failure, -2 on skip/timeout.
+    Returns the new energy level."""
+    _ensure_agent_data_tables()
+    init_energy(agent_id)
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT energy FROM agent_energy WHERE agent_id = {ph}", (agent_id,))
+        row = cur.fetchone()
+        current = float(row["energy"]) if row and row["energy"] is not None else 100.0
+        new_energy = max(0.0, min(100.0, current + float(delta)))
+        if USE_POSTGRES:
+            cur.execute(
+                "UPDATE agent_energy SET energy = %s, last_updated = NOW() "
+                "WHERE agent_id = %s",
+                (new_energy, agent_id))
+        else:
+            cur.execute(
+                "UPDATE agent_energy SET energy = ?, last_updated = CURRENT_TIMESTAMP "
+                "WHERE agent_id = ?",
+                (new_energy, agent_id))
+    return new_energy
+
+
+def get_all_energy():
+    """Get energy levels for all agents (ordered by agent_id)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM agent_energy ORDER BY agent_id")
+        return [dict(r) for r in cur.fetchall()]
+
+
 def init_agent_data():
     """Create the agent data-layer tables, seed relationships, and initialise an
-    error budget for every known agent. Safe to call on every boot."""
+    error budget and energy reserve for every known agent. Safe to call on every
+    boot."""
     _ensure_agent_data_tables()
     seed_relationships()
     for aid in AGENT_IDS:
         init_error_budget(aid)
+        init_energy(aid)
