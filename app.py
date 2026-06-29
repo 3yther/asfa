@@ -168,6 +168,10 @@ db.init_agents_db()
 # Agent data layer (Phase 3) — three-tier memory, audit trail, error budgets.
 # Creates the new tables, seeds relationships, and inits per-agent error budgets.
 db.init_agent_data()
+# Skill executor (Phase 6) — register real skill implementations so approved
+# plans invoke actual agent code instead of simulating.
+from services.skill_executor import init_all_skills
+init_all_skills()
 
 
 def _today():
