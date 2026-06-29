@@ -1335,6 +1335,41 @@ def _ensure_agent_data_tables():
             energy REAL DEFAULT 100.0,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+        # Phase 5: control surfaces — skill registry, plans, execution results.
+        """CREATE TABLE IF NOT EXISTS agent_skills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL,
+            skill_name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            input_schema TEXT,
+            output_schema TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(agent_id, skill_name)
+        )""",
+        """CREATE TABLE IF NOT EXISTS execution_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id TEXT UNIQUE NOT NULL,
+            user_request TEXT NOT NULL,
+            decomposition TEXT,
+            status TEXT DEFAULT 'pending_approval',
+            reasoning TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            approved_at TIMESTAMP,
+            completed_at TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS plan_executions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id TEXT NOT NULL,
+            step_index INTEGER NOT NULL,
+            agent_id TEXT NOT NULL,
+            skill_name TEXT NOT NULL,
+            input_params TEXT,
+            output TEXT,
+            status TEXT,
+            error TEXT,
+            duration_ms INTEGER,
+            executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
     ]
     with get_db() as conn:
         cur = conn.cursor()
@@ -1679,12 +1714,248 @@ def get_all_energy():
         return [dict(r) for r in cur.fetchall()]
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# CONTROL SURFACES — skill registry, execution plans, plan results
+# Phase 5: gives ASFA agents a declared capability surface (skills), and a
+# user-request → decomposed plan → approval → execution audit chain. Same
+# self-initialising idempotent pattern as the rest of the agent data layer.
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── Skill registry ─────────────────────────────────────────────────────────────
+
+def register_skill(agent_id, skill_name, description, input_schema=None, output_schema=None):
+    """Register a skill for an agent (idempotent on agent_id + skill_name)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO agent_skills "
+                "(agent_id, skill_name, description, input_schema, output_schema) "
+                "VALUES (%s,%s,%s,%s,%s) "
+                "ON CONFLICT (agent_id, skill_name) DO UPDATE SET "
+                "description = EXCLUDED.description, "
+                "input_schema = EXCLUDED.input_schema, "
+                "output_schema = EXCLUDED.output_schema",
+                (agent_id, skill_name, description,
+                 _json_or_none(input_schema), _json_or_none(output_schema)))
+        else:
+            cur.execute(
+                "INSERT INTO agent_skills "
+                "(agent_id, skill_name, description, input_schema, output_schema) "
+                "VALUES (?,?,?,?,?) "
+                "ON CONFLICT(agent_id, skill_name) DO UPDATE SET "
+                "description = excluded.description, "
+                "input_schema = excluded.input_schema, "
+                "output_schema = excluded.output_schema",
+                (agent_id, skill_name, description,
+                 _json_or_none(input_schema), _json_or_none(output_schema)))
+
+
+def get_agent_skills(agent_id):
+    """Get all skills for an agent (ordered by skill name)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM agent_skills WHERE agent_id = {ph} ORDER BY skill_name",
+            (agent_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_all_skills():
+    """Get all skills across all agents (ordered by agent then skill name)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM agent_skills ORDER BY agent_id, skill_name")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def skill_exists(agent_id, skill_name):
+    """Check if a skill exists for an agent."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT 1 FROM agent_skills WHERE agent_id = {ph} AND skill_name = {ph}",
+            (agent_id, skill_name))
+        return cur.fetchone() is not None
+
+
+# ── Execution plans ──────────────────────────────────────────────────────────────
+
+def create_plan(plan_id, user_request, decomposition, reasoning):
+    """Create a new execution plan (status defaults to pending_approval).
+    decomposition/reasoning are stored as-is; pass a JSON string for decomposition."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"INSERT INTO execution_plans "
+            f"(plan_id, user_request, decomposition, reasoning) "
+            f"VALUES ({ph},{ph},{ph},{ph})",
+            (plan_id, user_request, _json_or_none(decomposition), reasoning))
+
+
+def get_plan(plan_id):
+    """Get plan details (decomposition is returned as the stored JSON string)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM execution_plans WHERE plan_id = {ph}", (plan_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def approve_plan(plan_id):
+    """Mark plan as approved and stamp approved_at."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        ts = "NOW()" if USE_POSTGRES else "CURRENT_TIMESTAMP"
+        cur.execute(
+            f"UPDATE execution_plans SET status = 'approved', approved_at = {ts} "
+            f"WHERE plan_id = {ph}",
+            (plan_id,))
+
+
+def reject_plan(plan_id):
+    """Mark plan as rejected."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"UPDATE execution_plans SET status = 'rejected' WHERE plan_id = {ph}",
+            (plan_id,))
+
+
+def set_plan_status(plan_id, status):
+    """Set an arbitrary plan status (e.g. executing, complete, failed). Stamps
+    completed_at when moving to a terminal state."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if status in ("complete", "failed"):
+            ts = "NOW()" if USE_POSTGRES else "CURRENT_TIMESTAMP"
+            cur.execute(
+                f"UPDATE execution_plans SET status = {ph}, completed_at = {ts} "
+                f"WHERE plan_id = {ph}",
+                (status, plan_id))
+        else:
+            cur.execute(
+                f"UPDATE execution_plans SET status = {ph} WHERE plan_id = {ph}",
+                (status, plan_id))
+
+
+# ── Plan execution results ──────────────────────────────────────────────────────
+
+def log_plan_execution(plan_id, step_index, agent_id, skill_name, input_params,
+                       output, status, error=None, duration_ms=None):
+    """Log execution of a single plan step."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"INSERT INTO plan_executions "
+            f"(plan_id, step_index, agent_id, skill_name, input_params, output, "
+            f"status, error, duration_ms) "
+            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+            (plan_id, step_index, agent_id, skill_name,
+             _json_or_none(input_params), _json_or_none(output), status, error,
+             int(duration_ms) if duration_ms is not None else None))
+
+
+def get_plan_results(plan_id):
+    """Get all execution results for a plan (ordered by step)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM plan_executions WHERE plan_id = {ph} "
+            f"ORDER BY step_index, id",
+            (plan_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+# ── Skill seed ────────────────────────────────────────────────────────────────
+# Declared capability surface for each of the 13 agents in AGENT_IDS.
+AGENT_SKILLS = {
+    "scout": [
+        ("scan_jobs", "Search for retail positions on Reed and SerpAPI",
+         '{"keywords": "array", "location": "string", "limit": "integer"}',
+         '{"matches": "array", "count": "integer"}'),
+        ("filter_results", "Filter job matches by salary/location/type",
+         '{"jobs": "array", "filters": "object"}',
+         '{"filtered": "array"}'),
+        ("apply_for_role", "Submit application to matched job",
+         '{"job_id": "string", "cv_version": "string"}',
+         '{"success": "boolean", "application_id": "string"}'),
+    ],
+    "sentinel": [
+        ("monitor_alerts", "Watch for critical system events",
+         None, '{"alert_count": "integer", "critical": "array"}'),
+        ("escalate", "Escalate critical alerts to user",
+         '{"alerts": "array", "severity": "string"}', '{"sent": "boolean"}'),
+    ],
+    "quant_bot": [
+        ("scan_signals", "Run momentum strategy on S&P 500",
+         None, '{"signals": "array", "trade_count": "integer"}'),
+        ("execute_trade", "Place trade based on signal",
+         '{"signal": "object", "size": "number"}', '{"order_id": "string", "status": "string"}'),
+    ],
+    "briefing": [
+        ("generate_briefing", "Create morning briefing from overnight data",
+         None, '{"briefing": "string", "items": "integer"}'),
+    ],
+    "hydration": [
+        ("log_intake", "Log water intake event",
+         '{"amount_ml": "number", "timestamp": "string"}', '{"total_today": "number"}'),
+        ("get_status", "Get current hydration status",
+         None, '{"logged_ml": "number", "target_ml": "number", "percent": "number"}'),
+    ],
+    "health": [
+        ("check_endpoint", "Ping a system endpoint for health",
+         '{"endpoint": "string"}', '{"up": "boolean", "latency_ms": "integer"}'),
+    ],
+    "obsidian": [
+        ("sync_vault", "Push daily logs to Obsidian vault",
+         None, '{"synced_files": "integer", "status": "string"}'),
+    ],
+    # Minimal skills for the background jobs
+    "backup": [("backup_db", "Run database backup", None, '{"bytes": "integer"}')],
+    "summary": [("summarize_day", "Create daily summary", None, '{"summary": "string"}')],
+    "supplement": [("log_supplement", "Log supplement intake", '{"name": "string", "dose": "string"}', '{"logged": "boolean"}')],
+    "weekly_review": [("generate_review", "Create weekly review", None, '{"review": "string"}')],
+    "reflection": [("prompt_reflection", "Prompt for daily reflection", None, '{"prompt": "string"}')],
+    "insights": [("generate_insights", "Extract patterns from logs", None, '{"insights": "array"}')],
+}
+
+
+def seed_skills():
+    """Register the declared skills for every agent once. Idempotent."""
+    _ensure_agent_data_tables()
+    for agent_id, skills in AGENT_SKILLS.items():
+        for skill_name, description, input_schema, output_schema in skills:
+            register_skill(agent_id, skill_name, description, input_schema, output_schema)
+
+
 def init_agent_data():
-    """Create the agent data-layer tables, seed relationships, and initialise an
-    error budget and energy reserve for every known agent. Safe to call on every
-    boot."""
+    """Create the agent data-layer tables, seed relationships + skills, and
+    initialise an error budget and energy reserve for every known agent. Safe to
+    call on every boot."""
     _ensure_agent_data_tables()
     seed_relationships()
+    seed_skills()
     for aid in AGENT_IDS:
         init_error_budget(aid)
         init_energy(aid)
