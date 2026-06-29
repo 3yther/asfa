@@ -1458,3 +1458,118 @@ body.nav-with-mission .pc-tr      { top: 100px; }
 .diary-modal-title { color: var(--cyan); font-size: 1rem; letter-spacing: 2px; text-transform: uppercase; margin: 0 0 4px; font-family: 'JetBrains Mono', monospace; }
 .diary-modal-ts { color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: .72rem; margin-bottom: 16px; }
 .diary-modal-body { color: var(--text); font-size: .9rem; line-height: 1.65; white-space: pre-wrap; }
+
+/* ── Plan Approval modal (Phase 5 UI) ─────────────────────────────────────── */
+#plan-modal {
+  position: fixed; inset: 0; z-index: 1000; display: flex;
+  align-items: center; justify-content: center; padding: 24px;
+  background: rgba(0,4,8,.82); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.plan-modal-content {
+  position: relative; width: 100%; max-width: 820px; max-height: 90vh; overflow-y: auto;
+  padding: 30px; border-radius: var(--radius);
+  background: var(--card-bg-solid);
+  border: 1px solid rgba(34,211,238,.35);
+  box-shadow: 0 0 40px rgba(34,211,238,.18);
+}
+.plan-modal-close {
+  position: absolute; top: 14px; right: 16px; background: none; border: none;
+  color: var(--cyan); cursor: pointer; font-size: 22px; line-height: 1;
+}
+.plan-modal-close:hover { color: var(--cyan-hi); }
+
+.plan-progress { height: 4px; background: rgba(139,148,158,.18); border-radius: 2px; margin-bottom: 18px; overflow: hidden; }
+.plan-progress-bar {
+  height: 100%; width: 0%; border-radius: 2px;
+  background: linear-gradient(90deg, var(--cyan), var(--gold));
+  transition: width 300ms ease;
+}
+
+.plan-status-badge {
+  display: inline-block; padding: 6px 12px; border-radius: 20px;
+  font-family: 'JetBrains Mono', monospace; font-size: .62rem; letter-spacing: 1.5px;
+  text-transform: uppercase; font-weight: 700; margin-bottom: 18px;
+}
+.status-pending   { background: rgba(139,148,158,.18); color: var(--muted); }
+.status-approved  { background: rgba(34,211,238,.18);  color: var(--cyan-hi); }
+.status-executing { background: rgba(212,175,55,.18);  color: var(--gold); animation: plan-pulse 1.2s ease-in-out infinite; }
+.status-complete  { background: rgba(63,185,80,.18);   color: var(--green); }
+.status-failed    { background: rgba(239,68,68,.18);   color: #ff6b6b; }
+.status-rejected  { background: rgba(139,148,158,.18); color: var(--muted); }
+@keyframes plan-pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+
+.plan-request {
+  font-size: 1.05rem; font-weight: 700; color: var(--text);
+  line-height: 1.4; margin-bottom: 14px;
+}
+.plan-reasoning {
+  font-style: italic; color: var(--muted); font-size: .82rem;
+  line-height: 1.55; margin-bottom: 26px;
+}
+
+.plan-timeline { display: flex; flex-direction: column; gap: 16px; margin-bottom: 32px; }
+.plan-step {
+  position: relative; padding: 14px 16px 14px 22px;
+  border-left: 2px solid var(--cyan); border-radius: 0 6px 6px 0;
+  background: rgba(34,211,238,.03);
+  transition: border-color 250ms ease, box-shadow 250ms ease, opacity 250ms ease;
+}
+.plan-step.pending   { border-color: var(--muted); opacity: .6; }
+.plan-step.executing { border-color: var(--cyan); box-shadow: inset 0 0 14px rgba(34,211,238,.18); }
+.plan-step.complete  { border-color: var(--green); }
+.plan-step.failed    { border-color: #ff6b6b; }
+.plan-step-icon {
+  position: absolute; left: -8px; top: 16px; width: 13px; height: 13px;
+  border-radius: 50%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan);
+}
+.plan-step.pending   .plan-step-icon { background: var(--muted); box-shadow: none; }
+.plan-step.executing .plan-step-icon { background: var(--cyan); animation: plan-pulse 1s infinite; }
+.plan-step.complete  .plan-step-icon { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.plan-step.failed    .plan-step-icon { background: #ff6b6b; box-shadow: 0 0 8px #ff6b6b; }
+.plan-step-header {
+  font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: .82rem;
+  color: var(--text); display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+}
+.plan-step-num { color: var(--cyan); }
+.plan-step-state { margin-left: auto; font-size: .6rem; letter-spacing: 1px; color: var(--muted); }
+.plan-step-deps { font-family: 'JetBrains Mono', monospace; font-size: .6rem; color: var(--muted); letter-spacing: .5px; margin-bottom: 8px; }
+.plan-code {
+  font-family: 'JetBrains Mono', monospace; font-size: .72rem; line-height: 1.5;
+  padding: 10px 12px; border-radius: 4px; margin: 6px 0 0;
+  max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+.plan-code.input  { background: rgba(34,211,238,.05); color: var(--cyan-hi); }
+.plan-code.output { background: rgba(63,185,80,.05);  color: var(--green); }
+.plan-code-label { font-family: 'JetBrains Mono', monospace; font-size: .56rem; letter-spacing: 1.5px; color: var(--muted); text-transform: uppercase; margin-top: 10px; }
+.plan-step-duration { font-family: 'JetBrains Mono', monospace; font-size: .62rem; color: var(--muted); margin-top: 8px; }
+.plan-step-error { color: #ff6b6b; font-family: 'JetBrains Mono', monospace; font-size: .72rem; margin-top: 8px; white-space: pre-wrap; }
+
+/* JSON syntax tint */
+.jk { color: var(--cyan); }          /* keys    */
+.js { color: var(--gold); }          /* strings */
+.jn { color: var(--cyan-hi); }       /* numbers */
+.jb { color: #ff6b6b; }              /* booleans/null */
+
+.plan-controls { display: flex; gap: 14px; margin-bottom: 14px; }
+.plan-controls button {
+  padding: 12px 22px; border-radius: 6px; border: none; cursor: pointer;
+  font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: .72rem;
+  letter-spacing: 1.5px; text-transform: uppercase; transition: all 220ms ease;
+}
+.plan-controls button:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+.btn-approve { background: var(--cyan); color: #001016; flex: 1; }
+.btn-approve:not(:disabled):hover { box-shadow: 0 0 20px rgba(34,211,238,.65); }
+.btn-reject  { background: rgba(139,148,158,.25); color: var(--text); flex: 0 0 auto; }
+.btn-reject:not(:disabled):hover { background: rgba(239,68,68,.3); color: #ff6b6b; }
+.btn-execute { background: var(--gold); color: #1a1300; flex: 1; }
+.btn-execute:not(:disabled):hover { box-shadow: 0 0 20px rgba(212,175,55,.65); }
+
+.plan-feedback { font-family: 'JetBrains Mono', monospace; font-size: .72rem; color: var(--muted); min-height: 18px; }
+.plan-feedback.error { color: #ff6b6b; }
+.plan-feedback.ok    { color: var(--green); }
+
+/* "Plan a Task" card on the command screen */
+#request-card .req-row { display: flex; gap: 10px; margin-top: 4px; }
+#request-card #request-input { flex: 1; }
+#request-card #decompose-status { margin-top: 10px; font-family: 'JetBrains Mono', monospace; font-size: .72rem; color: var(--muted); min-height: 16px; }
+#request-card #decompose-status.error { color: #ff6b6b; }

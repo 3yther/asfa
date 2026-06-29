@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>ASFA // PLAN</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="mask-icon" href="{{ url_for('static', filename='favicon.svg') }}" color="#00d9ff">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/sounds.js') }}" defer></script>
+</head>
+<body data-open-plan="{{ plan_id }}">
+<canvas id="starfield-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;"></canvas>
+
+{% include "nav.html" with context %}
+
+<main class="screen-placeholder">
+  <h1 class="screen-title" data-decode>Plan</h1>
+  <p class="screen-sub">Decomposition · approval · execution</p>
+  <div class="screen-empty sci-fi-panel">
+    Loading plan… <a href="/">Back to Command</a>
+  </div>
+</main>
+
+{% include "plan-modal.html" %}
+<script src="{{ url_for('static', filename='js/plan-modal.js') }}"></script>
+<script src="/static/js/starfield.js" defer></script>
+</body>
+</html>
