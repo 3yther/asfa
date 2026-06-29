@@ -430,6 +430,17 @@
     <div id="review-body" class="review-body hidden"></div>
   </section>
 
+  <!-- ROW 8: Plan a Task — request → decomposition → approval → execution -->
+  <section class="card sci-fi-panel" id="request-card" data-card="request-input" data-tabs="chat">
+    <div class="card-head"><h2 data-decode>Plan a Task</h2></div>
+    <div class="req-row">
+      <input type="text" id="request-input" autocomplete="off"
+             placeholder="Find me a retail job in Erith and apply if the salary looks good…">
+      <button class="btn btn-grad" id="decompose-btn" type="button">DECOMPOSE ▶</button>
+    </div>
+    <div id="decompose-status"></div>
+  </section>
+
   <!-- ROW 8: Command Interface -->
   <section class="card chat-card sci-fi-panel" id="chat-card" data-tabs="chat">
     <div class="card-head">
@@ -494,6 +505,10 @@
 </div>
 
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+<!-- Plan Approval modal + controller -->
+{% include "plan-modal.html" %}
+<script src="{{ url_for('static', filename='js/plan-modal.js') }}"></script>
 
 <!-- Scout radar — pure-canvas animated scope + live scan stats (no libraries) -->
 <script>

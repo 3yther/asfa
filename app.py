@@ -201,6 +201,12 @@ def system():
     return render_template("system.html", active="system")
 
 
+@app.route("/plans/<plan_id>")
+def plan_view(plan_id):
+    """Standalone page that opens the plan-approval modal for one plan."""
+    return render_template("plan.html", active="command", plan_id=plan_id)
+
+
 # ── Briefing ───────────────────────────────────────────────────────────────────
 
 @app.route("/api/briefing")
