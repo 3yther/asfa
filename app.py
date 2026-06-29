@@ -165,6 +165,9 @@ def logout():
 db.init_db()
 # Mission Control — create the agent ecosystem tables and seed the roster.
 db.init_agents_db()
+# Agent data layer (Phase 3) — three-tier memory, audit trail, error budgets.
+# Creates the new tables, seeds relationships, and inits per-agent error budgets.
+db.init_agent_data()
 
 
 def _today():
@@ -431,6 +434,17 @@ def api_water_intake():
     db.log_water(date, amount)  # keep habits gauge / score / briefing consistent
     db.kv_set("last_water_ts", datetime.now().isoformat())
 
+    # Phase 3: record the intake as an episodic memory for the hydration agent.
+    try:
+        total = db.get_hydration_total(date)
+        db.log_episodic("hydration", "water_logged",
+                        f"Logged {amount}ml of water ({total}/2000ml today)",
+                        payload={"amount_ml": amount, "total_ml": total, "date": date})
+        # Phase 4: logging water energises the hydration agent.
+        db.update_energy("hydration", 5)
+    except Exception as e:
+        logger.error("hydration episodic log failed: %s", e)
+
     return jsonify({
         "ok": True,
         "amount": amount,
@@ -653,7 +667,20 @@ def api_backup_run_now():
     """Manually trigger a production DB backup. Auth-required (not in
     _PUBLIC_ENDPOINTS). No-op on local SQLite; dumps + pushes on Railway/Postgres."""
     from services.backup import run_backup
+    started = datetime.now()
     res = run_backup()
+    # Phase 3: record the manual backup in the audit trail + error budget.
+    try:
+        dur_ms = int((datetime.now() - started).total_seconds() * 1000)
+        ok = bool(res.get("ok"))
+        db.log_audit("backup", "run_now", "success" if ok else "failure",
+                     reason="manual backup trigger",
+                     details=res, duration_ms=dur_ms)
+        db.update_error_budget("backup", ok)
+        # Phase 4: energy economy — reward a clean backup, penalise a failure.
+        db.update_energy("backup", 5 if ok else -10)
+    except Exception as e:
+        logger.error("backup audit log failed: %s", e)
     return jsonify(res), (200 if res.get("ok") else 500)
 
 
@@ -1085,6 +1112,57 @@ def api_agent_log(agent_id):
     return jsonify(db.get_agent_log(agent_id, 20))
 
 
+# ── Phase 4: agent intelligence (heartbeat, diaries, energy) ───────────────────
+
+@app.route("/api/agents/status")
+def api_agents_status():
+    """Heartbeat results for all agents (status, energy, budget health)."""
+    from services.heartbeat import run_heartbeat
+    return jsonify(run_heartbeat())
+
+
+@app.route("/api/agents/energy")
+def api_agents_energy():
+    """Energy levels for all agents: [{agent_id, energy, last_updated}, ...]."""
+    return jsonify(db.get_all_energy())
+
+
+@app.route("/api/agents/diary/generate-all", methods=["POST"])
+def api_agents_diary_generate_all():
+    """Trigger diary generation for all 13 agents (uses the Claude API)."""
+    from services.agent_intelligence import generate_all_diaries
+    return jsonify(generate_all_diaries())
+
+
+@app.route("/api/agents/<agent_id>/diary")
+def api_agent_diary(agent_id):
+    """Most recent reflective diary entry for an agent."""
+    reflections = db.get_agent_reflections(agent_id, period="daily", limit=1)
+    if not reflections:
+        return jsonify({"error": "no diary entry yet", "agent_id": agent_id}), 404
+    r = reflections[0]
+    stats = r.get("stats")
+    if isinstance(stats, str):
+        try:
+            stats = json.loads(stats)
+        except (TypeError, ValueError):
+            pass
+    return jsonify({
+        "agent_id": agent_id,
+        "summary": r.get("summary"),
+        "stats": stats,
+        "created_at": r.get("created_at"),
+    })
+
+
+@app.route("/api/agents/<agent_id>/diary/generate", methods=["POST"])
+def api_agent_diary_generate(agent_id):
+    """Trigger immediate diary generation for one agent (uses the Claude API)."""
+    from services.agent_intelligence import generate_diary_entry
+    result = generate_diary_entry(agent_id)
+    return jsonify(result), (200 if result.get("ok") else 500)
+
+
 @app.route("/api/battles", methods=["POST"])
 def api_battles():
     d = request.get_json(force=True) or {}
@@ -1185,8 +1263,79 @@ def api_scout_application_delete(app_id):
     return jsonify({"ok": True})
 
 
+# ── Agent data layer: memory / audit / error budgets (Phase 3) ────────────────
+# All auth-required (not in _PUBLIC_ENDPOINTS). Read endpoints for the three-tier
+# memory, audit trail, and error budgets, plus episodic logging + budget init.
+
+@app.route("/api/memory/episodic", methods=["GET", "POST"])
+def api_memory_episodic():
+    """GET: recent episodic memories (optional ?agent_id=&limit=).
+    POST: log an episodic event {agent_id, event_type, summary, payload?}."""
+    if request.method == "POST":
+        d = request.get_json(force=True) or {}
+        agent_id = (d.get("agent_id") or "").strip()
+        event_type = (d.get("event_type") or "").strip()
+        summary = (d.get("summary") or "").strip()
+        if not agent_id or not event_type or not summary:
+            return jsonify({"error": "agent_id, event_type, summary required"}), 400
+        db.log_episodic(agent_id, event_type, summary, d.get("payload"))
+        return jsonify({"ok": True})
+    agent_id = request.args.get("agent_id")
+    limit = request.args.get("limit", 20, type=int)
+    if agent_id:
+        return jsonify(db.get_episodic(agent_id, limit))
+    return jsonify(db.get_all_episodic(limit))
+
+
+@app.route("/api/memory/reflective")
+def api_memory_reflective():
+    """Recent reflections for an agent (?agent_id= required, ?period=daily)."""
+    agent_id = request.args.get("agent_id")
+    if not agent_id:
+        return jsonify({"error": "agent_id required"}), 400
+    period = request.args.get("period", "daily")
+    limit = request.args.get("limit", 7, type=int)
+    return jsonify(db.get_agent_reflections(agent_id, period, limit))
+
+
+@app.route("/api/memory/relationships")
+def api_memory_relationships():
+    """All agent relationships (for network visualisation)."""
+    return jsonify(db.get_all_relationships())
+
+
+@app.route("/api/audit")
+def api_audit():
+    """Audit log entries, optionally filtered by ?agent_id=&limit=."""
+    agent_id = request.args.get("agent_id")
+    limit = request.args.get("limit", 50, type=int)
+    return jsonify(db.get_audit_log(agent_id, limit))
+
+
+@app.route("/api/error-budgets")
+def api_error_budgets():
+    """Error budget status for all agents (agent_id, target, current_rate,
+    health, total_runs, successful_runs)."""
+    return jsonify(db.get_all_error_budgets())
+
+
+@app.route("/api/error-budgets/init", methods=["POST"])
+def api_error_budgets_init():
+    """Initialise an error budget for an agent. Body: {agent_id, target?, window_days?}."""
+    d = request.get_json(force=True) or {}
+    agent_id = (d.get("agent_id") or "").strip()
+    if not agent_id:
+        return jsonify({"error": "agent_id required"}), 400
+    target = float(d.get("target", 0.95))
+    window_days = int(d.get("window_days", 7))
+    db.init_error_budget(agent_id, target, window_days)
+    return jsonify({"ok": True, "budget": db.get_error_budget(agent_id)})
+
+
 def scout_daily_scan():
     """06:00 daily — scrape Indeed for new part-time roles and ping the bell."""
+    started = datetime.now()
+    outcome, count = "success", 0
     try:
         from services import scout
         count = scout.scan()
@@ -1195,7 +1344,17 @@ def scout_daily_scan():
             db.add_notification(
                 f"🔎 Scout found {count} new job{'s' if count != 1 else ''}.", "scout")
     except Exception as e:
+        outcome = "failure"
         logger.error("scout daily scan failed: %s", e)
+    # Phase 3: record the run in the audit trail + error budget.
+    try:
+        dur_ms = int((datetime.now() - started).total_seconds() * 1000)
+        db.log_audit("scout", "daily_scan", outcome,
+                     reason="scheduled 06:00 job scan",
+                     details={"new_jobs": count}, duration_ms=dur_ms)
+        db.update_error_budget("scout", outcome == "success")
+    except Exception as e:
+        logger.error("scout audit log failed: %s", e)
 
 
 # ── Background services (started once, even under gunicorn) ───────────────────
