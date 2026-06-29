@@ -1332,6 +1332,125 @@ def api_error_budgets_init():
     return jsonify({"ok": True, "budget": db.get_error_budget(agent_id)})
 
 
+# ── Phase 5: control surfaces — skill registry + plan decomposition ────────────
+
+@app.route("/api/skills")
+def api_skills():
+    """All registered skills, grouped by agent:
+    {agent_id: [{skill_name, description, input_schema, output_schema}, ...]}."""
+    grouped = {}
+    for skill in db.get_all_skills():
+        grouped.setdefault(skill["agent_id"], []).append({
+            "skill_name": skill["skill_name"],
+            "description": skill["description"],
+            "input_schema": skill.get("input_schema"),
+            "output_schema": skill.get("output_schema"),
+        })
+    return jsonify(grouped)
+
+
+@app.route("/api/agents/<agent_id>/skills")
+def api_agent_skills(agent_id):
+    """Skills for one agent: [{skill_name, description, input_schema, output_schema}]."""
+    return jsonify(db.get_agent_skills(agent_id))
+
+
+@app.route("/api/plan/decompose", methods=["POST"])
+def api_plan_decompose():
+    """Decompose a user request into an agent-executable plan (uses Claude).
+    Body: {"request": "..."}. The plan is saved as pending_approval."""
+    d = request.get_json(force=True) or {}
+    user_request = (d.get("request") or "").strip()
+    if not user_request:
+        return jsonify({"ok": False, "error": "request required"}), 400
+    from services.planner import decompose_plan
+    result = decompose_plan(user_request)
+    return jsonify(result), (200 if result.get("ok") else 500)
+
+
+@app.route("/api/plan/<plan_id>")
+def api_plan_get(plan_id):
+    """Plan details. decomposition is parsed back into a JSON array."""
+    plan = db.get_plan(plan_id)
+    if not plan:
+        return jsonify({"error": "plan not found"}), 404
+    decomposition = plan.get("decomposition")
+    if isinstance(decomposition, str):
+        try:
+            decomposition = json.loads(decomposition)
+        except (TypeError, ValueError):
+            pass
+    return jsonify({
+        "plan_id": plan.get("plan_id"),
+        "user_request": plan.get("user_request"),
+        "decomposition": decomposition,
+        "status": plan.get("status"),
+        "reasoning": plan.get("reasoning"),
+        "created_at": plan.get("created_at"),
+        "approved_at": plan.get("approved_at"),
+        "completed_at": plan.get("completed_at"),
+    })
+
+
+@app.route("/api/plan/<plan_id>/approve", methods=["POST"])
+def api_plan_approve(plan_id):
+    """Approve a plan, making it eligible for execution."""
+    plan = db.get_plan(plan_id)
+    if not plan:
+        return jsonify({"ok": False, "error": "plan not found"}), 404
+    db.approve_plan(plan_id)
+    return jsonify({"ok": True, "plan_id": plan_id, "status": "approved"})
+
+
+@app.route("/api/plan/<plan_id>/reject", methods=["POST"])
+def api_plan_reject(plan_id):
+    """Reject a plan."""
+    plan = db.get_plan(plan_id)
+    if not plan:
+        return jsonify({"ok": False, "error": "plan not found"}), 404
+    db.reject_plan(plan_id)
+    return jsonify({"ok": True, "plan_id": plan_id, "status": "rejected"})
+
+
+@app.route("/api/plan/<plan_id>/execute", methods=["POST"])
+def api_plan_execute(plan_id):
+    """Execute an approved plan (steps are simulated for now)."""
+    from services.planner import execute_plan
+    result = execute_plan(plan_id)
+    if not result.get("ok"):
+        # 404 when missing, 409 when not in an approved state.
+        code = 404 if result.get("error") == "Plan not found" else 409
+        return jsonify(result), code
+    return jsonify(result)
+
+
+@app.route("/api/plan/<plan_id>/results")
+def api_plan_results(plan_id):
+    """Execution results for a plan: [{step, agent, skill, input, output,
+    status, duration}, ...]."""
+    out = []
+    for r in db.get_plan_results(plan_id):
+        def _maybe_json(v):
+            if isinstance(v, str):
+                try:
+                    return json.loads(v)
+                except (TypeError, ValueError):
+                    return v
+            return v
+        out.append({
+            "step": r.get("step_index"),
+            "agent": r.get("agent_id"),
+            "skill": r.get("skill_name"),
+            "input": _maybe_json(r.get("input_params")),
+            "output": _maybe_json(r.get("output")),
+            "status": r.get("status"),
+            "error": r.get("error"),
+            "duration": r.get("duration_ms"),
+            "executed_at": r.get("executed_at"),
+        })
+    return jsonify(out)
+
+
 def scout_daily_scan():
     """06:00 daily — scrape Indeed for new part-time roles and ping the bell."""
     started = datetime.now()
