@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#000408">
-<title>ASFA // AGENTS REGISTRY</title>
+<title>ASFA // AGENTS</title>
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <link rel="mask-icon" href="{{ url_for('static', filename='favicon.svg') }}" color="#00d9ff">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -19,23 +19,22 @@
 
 {% include "nav.html" with context %}
 
-<main class="screen-placeholder">
-  <h1 class="screen-title" data-decode>Agents Registry</h1>
-  <p class="screen-sub">Roster of autonomous agents — coming online</p>
-  <div class="screen-empty sci-fi-panel">No agents loaded</div>
+<main class="agents-screen">
+  <h1 class="screen-title" data-decode>Agents</h1>
+  <p class="screen-sub">Live status, energy &amp; health across the agent roster</p>
+
+  <!-- Heartbeat summary bar -->
+  <div id="heartbeat-summary" class="sci-fi-panel heartbeat-bar">
+    <div class="hb-item hb-fail">Loading agent heartbeat…</div>
+  </div>
+
+  <!-- Agent grid (cards injected by agents-dashboard.js) -->
+  <div id="agents-grid" class="agents-grid">
+    <div class="screen-empty sci-fi-panel">Initialising agents…</div>
+  </div>
 </main>
 
-<script>
-  // Add corner elements to all sci-fi panels
-  document.querySelectorAll('.sci-fi-panel').forEach(el => {
-    ['corner-bl', 'corner-br'].forEach(cls => {
-      const div = document.createElement('div');
-      div.className = cls;
-      el.appendChild(div);
-    });
-  });
-</script>
-
+<script src="{{ url_for('static', filename='js/agents-dashboard.js') }}" defer></script>
 <script src="/static/js/starfield.js" defer></script>
 </body>
 </html>
