@@ -297,6 +297,136 @@ def _send_email(jobs: list) -> bool:
         return False
 
 
+def scan_jobs_reed(keywords, location="", limit=20) -> list:
+    """Param-driven Reed search used by the skill executor (the `scan_jobs`
+    skill). Unlike scan(), this honors the caller's keywords/location instead of
+    the fixed REED_KEYWORDS/LOCATIONS lists, does not apply the
+    target-company/recency filter, and returns the matched jobs as a list of
+    dicts (newest results first, capped at `limit`). Newly-seen jobs are also
+    persisted via add_scout_job (deduped by url) so the dashboard sees them.
+
+    keywords may be a string or a list of strings. Best-effort: returns [] if
+    REED_API_KEY is unset or every request fails. Salary is returned as a
+    numeric annual figure (0 if unknown) so filter_results can compare it.
+    """
+    api_key = os.getenv("REED_API_KEY")
+    if not api_key:
+        logger.info("scout.scan_jobs_reed: REED_API_KEY not set — returning []")
+        return []
+
+    if isinstance(keywords, str):
+        keywords = [keywords]
+    keywords = [k for k in (keywords or []) if k] or ["retail"]
+    locations = [location] if location else LOCATIONS
+
+    found_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    collected: list = []
+    seen_urls: set = set()
+
+    for loc in locations:
+        for keyword in keywords:
+            if len(collected) >= limit:
+                return collected[:limit]
+            params = {
+                "keywords": keyword,
+                "locationName": loc,
+                "distancefromLocation": 10,
+                "partTime": "true",
+            }
+            try:
+                resp = requests.get(
+                    REED_BASE, params=params, auth=(api_key, ""),
+                    timeout=REQUEST_TIMEOUT,
+                )
+            except requests.RequestException as e:
+                logger.warning("scout scan_jobs_reed fetch failed (%s/%s): %s",
+                               loc, keyword, e)
+                continue
+            if resp.status_code != 200:
+                logger.warning("scout scan_jobs_reed %s/%s -> HTTP %s",
+                               loc, keyword, resp.status_code)
+                continue
+            try:
+                results = resp.json().get("results", []) or []
+            except ValueError:
+                logger.warning("scout scan_jobs_reed %s/%s -> invalid JSON",
+                               loc, keyword)
+                continue
+
+            for r in results:
+                url = r.get("jobUrl") or ""
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                salary_num = r.get("maximumSalary") or r.get("minimumSalary") or 0
+                try:
+                    salary_num = float(salary_num)
+                except (TypeError, ValueError):
+                    salary_num = 0.0
+                posted = r.get("date") or ""
+                job = {
+                    "id": r.get("jobId"),
+                    "title": r.get("jobTitle") or "",
+                    "company": r.get("employerName") or "",
+                    "location": r.get("locationName") or loc,
+                    "salary": salary_num,
+                    "url": url,
+                    "posted_date": posted,
+                    "source": "reed",
+                }
+                # Persist (deduped by url) so finds surface on the dashboard.
+                db.add_scout_job(
+                    title=job["title"], company=job["company"],
+                    location=job["location"],
+                    salary=str(salary_num) if salary_num else "",
+                    job_type="part time", url=url,
+                    description=(r.get("jobDescription") or "").strip(),
+                    source="reed", posted_date=posted, found_date=found_date,
+                    is_new=1 if _is_recent(posted) else 0,
+                )
+                collected.append(job)
+                if len(collected) >= limit:
+                    return collected[:limit]
+    return collected[:limit]
+
+
+def apply_for_job(job_id, cv_version="default", job=None) -> dict:
+    """Record an application to a previously-scanned job. Marks the scout_jobs
+    row applied (if found) and inserts a scout_applications row. Returns
+    {"id": application/job id, "status": "submitted"}.
+
+    `job`, if supplied, is the full job dict (company/title/location) threaded
+    from an upstream scan/filter step — it's preferred for the application
+    record. Otherwise job_id is matched against stored scout_jobs row ids. If
+    neither resolves to job details, a bare application keyed by job_id is still
+    recorded so the action is auditable.
+    """
+    applied_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if not isinstance(job, dict):
+        job = next(
+            (j for j in db.get_scout_jobs() if str(j.get("id")) == str(job_id)),
+            None,
+        )
+    if job:
+        db.add_scout_application(
+            company=job.get("company", ""),
+            role=job.get("title", ""),
+            location=job.get("location", ""),
+            method=f"scout/cv:{cv_version}",
+            applied_date=applied_date,
+            status="submitted",
+        )
+        db.mark_scout_job_applied(job.get("id"))
+        return {"id": job.get("id"), "status": "submitted"}
+
+    db.add_scout_application(
+        company="", role=str(job_id), location="",
+        method=f"scout/cv:{cv_version}", applied_date=applied_date,
+        status="submitted",
+    )
+    return {"id": job_id, "status": "submitted"}
+
+
 def scan() -> int:
     """Run a full pass over both sources. Saves new, non-duplicate, qualifying
     jobs, emails them if any were found, and returns the count inserted."""

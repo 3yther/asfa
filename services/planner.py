@@ -9,7 +9,6 @@ ANTHROPIC_API_KEY is unset.
 """
 import json
 import os
-import time
 import uuid
 
 import anthropic
@@ -132,17 +131,30 @@ Think step-by-step. Only decompose into steps that are actually executable by th
         return {"ok": False, "error": str(e)}
 
 
+def _needs_resolution(value, missing_ok: bool = False) -> bool:
+    """True if a param value should be replaced by a depended-on step's output:
+    an unresolved "{{...}}" template placeholder, or (when missing_ok) absent."""
+    if value is None:
+        return missing_ok
+    return isinstance(value, str) and "{{" in value
+
+
 def execute_plan(plan_id: str) -> dict:
     """
-    Execute all steps in an approved plan, logging each step's result.
+    Execute all steps in an approved plan — for real this time.
 
-    This is a stub — real execution would invoke agents via RPC, subprocess, or
-    HTTP. For now each step is logged as a simulated success so the approval →
-    execution → results chain is fully exercised end to end.
+    Each step is routed to its agent's registered skill implementation via the
+    skill executor, the real output is logged to plan_executions and the agent
+    audit trail, and energy is adjusted (+5 success / -10 failure). Outputs from
+    depended-on steps are threaded into the next step's params (e.g. scan_jobs's
+    `matches` become filter_results's `jobs`) so a multi-step plan actually
+    flows data end to end.
 
-    Returns {"ok": True, "plan_id": ..., "results": [{step, status}, ...]} or
+    Returns {"ok": True, "plan_id": ..., "results": [...]} or
     {"ok": False, "error": "..."}.
     """
+    from services.skill_executor import execute_skill
+
     plan = db.get_plan(plan_id)
     if not plan:
         return {"ok": False, "error": "Plan not found"}
@@ -157,27 +169,70 @@ def execute_plan(plan_id: str) -> dict:
 
     db.set_plan_status(plan_id, "executing")
     results = []
+    step_outputs = {}  # step_index -> output dict, for dependency threading
 
-    for step in decomposition:
-        started = time.monotonic()
-        agent = step.get("agent", "")
-        skill = step.get("skill", "")
-        params = step.get("params", {})
-        # For now, just log that we would execute this. Real implementation
-        # would actually call the agent's skill here.
-        output = {"simulated": True, "message": f"Would execute {agent}.{skill}"}
-        dur_ms = int((time.monotonic() - started) * 1000)
+    for idx, step in enumerate(decomposition):
+        agent_id = step.get("agent", "")
+        skill_name = step.get("skill", "")
+        step_index = step.get("step", idx)
+        params = dict(step.get("params", {}) or {})
+
+        # Thread outputs from depended-on steps into this step's params. The
+        # planner decides params at decomposition time and can't know upstream
+        # results, so it leaves placeholders like "{{step_0.matches}}". We
+        # resolve the common feeds (a job list, and a single job_id) from the
+        # depended-on step's real output, overriding any placeholder value.
+        for dep in step.get("depends_on", []) or []:
+            dep_out = step_outputs.get(dep)
+            if not isinstance(dep_out, dict):
+                continue
+            job_list = dep_out.get("matches")
+            if job_list is None:
+                job_list = dep_out.get("filtered")
+            if job_list is not None and _needs_resolution(params.get("jobs"), missing_ok=True):
+                params["jobs"] = job_list
+            if _needs_resolution(params.get("job_id")) and job_list:
+                # Thread both the id and the full job dict, so the apply step can
+                # record the real company/title even though scan ids are the
+                # upstream provider's, not scout_jobs row ids.
+                params["job_id"] = job_list[0].get("id")
+                params.setdefault("job", job_list[0])
+
+        # Execute the skill (this calls real code now).
+        skill_result = execute_skill(agent_id, skill_name, params)
+        status = "success" if skill_result["success"] else "failure"
+
         db.log_plan_execution(
             plan_id,
-            step.get("step", len(results)),
-            agent,
-            skill,
+            step_index,
+            agent_id,
+            skill_name,
             json.dumps(params),
-            json.dumps(output),
-            "success",
-            duration_ms=dur_ms,
+            json.dumps(skill_result["output"]) if skill_result["success"] else None,
+            status,
+            error=skill_result.get("error"),
+            duration_ms=skill_result["duration_ms"],
         )
-        results.append({"step": step.get("step", len(results)), "status": "success"})
+
+        db.log_audit(
+            agent_id, f"execute_skill:{skill_name}", status,
+            reason=f"Plan step {step_index}",
+            details={"params": params, "output": skill_result["output"]},
+            duration_ms=skill_result["duration_ms"],
+        )
+
+        db.update_energy(agent_id, +5 if skill_result["success"] else -10)
+
+        step_outputs[step_index] = skill_result.get("output") or {}
+        results.append({
+            "step": step_index,
+            "agent": agent_id,
+            "skill": skill_name,
+            "status": status,
+            "output": skill_result["output"],
+            "error": skill_result.get("error"),
+            "duration_ms": skill_result["duration_ms"],
+        })
 
     db.set_plan_status(plan_id, "complete")
     return {"ok": True, "plan_id": plan_id, "results": results}
