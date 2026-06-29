@@ -1238,3 +1238,379 @@ def delete_scout_application(app_id) -> None:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
         cur.execute(f"DELETE FROM scout_applications WHERE id = {ph}", (app_id,))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# AGENT DATA LAYER — three-tier memory, audit trail, error budgets
+# Phase 3: the data layer that makes ASFA agents intelligent. Self-initialising,
+# same pattern as Mission Control / scout / supplements: idempotent CREATE on
+# first use plus a one-time seed, so it works on SQLite and a fresh Postgres.
+# Nothing here touches existing tables.
+# ════════════════════════════════════════════════════════════════════════════
+
+_AGENT_DATA_READY = False
+
+# Logical ASFA agents tracked by the data layer. These are the background jobs /
+# features that act on the user's behalf. Error budgets are initialised for all
+# of them at startup.
+AGENT_IDS = [
+    "scout",          # part-time job hunter (scout.scan)
+    "sentinel",       # proactive / predictive alerts
+    "quant_bot",      # trading bot poll
+    "briefing",       # morning briefing
+    "hydration",      # water intake + nudges
+    "health",         # health endpoint monitor
+    "obsidian",       # vault sync
+    "backup",         # DB backup
+    "summary",        # daily summary
+    "supplement",     # supplement reminders
+    "weekly_review",  # weekly review
+    "reflection",     # end-of-day reflection prompt
+    "insights",       # insight generation
+]
+
+# Known relationships between agents (directed). Seeded once at startup.
+_RELATIONSHIP_SEED = [
+    ("scout", "sentinel", "triggers", "Scout alerts Sentinel on new job matches", 0.8),
+    ("sentinel", "briefing", "triggers", "Sentinel feeds alerts into Morning Briefing", 0.9),
+    ("quant_bot", "sentinel", "triggers", "Quant bot alerts Sentinel on trade signals", 0.7),
+    ("briefing", "obsidian", "collaborates", "Briefing data synced to Obsidian vault", 0.6),
+    ("hydration", "sentinel", "monitors", "Sentinel monitors hydration compliance", 0.5),
+    ("health", "sentinel", "monitors", "Sentinel monitors health endpoint", 0.9),
+]
+
+
+def _ensure_agent_data_tables():
+    global _AGENT_DATA_READY
+    if _AGENT_DATA_READY:
+        return
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS agent_memory_episodic (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            payload TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS agent_memory_reflective (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL,
+            period TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            stats TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS agent_memory_relationship (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL,
+            related_agent_id TEXT NOT NULL,
+            relationship_type TEXT NOT NULL,
+            description TEXT,
+            strength REAL DEFAULT 1.0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(agent_id, related_agent_id, relationship_type)
+        )""",
+        """CREATE TABLE IF NOT EXISTS agent_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            reason TEXT,
+            outcome TEXT NOT NULL,
+            details TEXT,
+            duration_ms INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS agent_error_budgets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL UNIQUE,
+            target_success_rate REAL DEFAULT 0.95,
+            window_days INTEGER DEFAULT 7,
+            total_runs INTEGER DEFAULT 0,
+            successful_runs INTEGER DEFAULT 0,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+    ]
+    with get_db() as conn:
+        cur = conn.cursor()
+        for stmt in stmts:
+            if USE_POSTGRES:
+                stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+            cur.execute(stmt)
+    _AGENT_DATA_READY = True
+
+
+def _json_or_none(value):
+    """Serialise a dict/list to JSON, pass through strings, else None."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+# ── Episodic memory ────────────────────────────────────────────────────────────
+
+def log_episodic(agent_id, event_type, summary, payload=None):
+    """Log an episodic memory event for an agent."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"INSERT INTO agent_memory_episodic (agent_id, event_type, summary, payload) "
+            f"VALUES ({ph},{ph},{ph},{ph})",
+            (agent_id, event_type, summary, _json_or_none(payload)))
+
+
+def get_episodic(agent_id, limit=20):
+    """Get recent episodic memories for an agent (newest first)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM agent_memory_episodic WHERE agent_id = {ph} "
+            f"ORDER BY id DESC LIMIT {ph}",
+            (agent_id, limit))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_all_episodic(limit=50):
+    """Get recent episodic memories across all agents (newest first)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM agent_memory_episodic ORDER BY id DESC LIMIT {ph}",
+            (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+# ── Reflective memory ──────────────────────────────────────────────────────────
+# NOTE: named save_agent_reflection / get_agent_reflections to avoid colliding
+# with the existing user-facing save_reflection / get_reflections helpers above.
+
+def save_agent_reflection(agent_id, period, summary, stats=None):
+    """Save a reflective summary for an agent."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"INSERT INTO agent_memory_reflective (agent_id, period, summary, stats) "
+            f"VALUES ({ph},{ph},{ph},{ph})",
+            (agent_id, period, summary, _json_or_none(stats)))
+
+
+def get_agent_reflections(agent_id, period='daily', limit=7):
+    """Get recent reflections for an agent (newest first)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM agent_memory_reflective WHERE agent_id = {ph} AND period = {ph} "
+            f"ORDER BY id DESC LIMIT {ph}",
+            (agent_id, period, limit))
+        return [dict(r) for r in cur.fetchall()]
+
+
+# ── Relationship memory ────────────────────────────────────────────────────────
+
+def upsert_relationship(agent_id, related_agent_id, relationship_type,
+                        description=None, strength=1.0):
+    """Create or update a relationship between two agents (idempotent)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO agent_memory_relationship "
+                "(agent_id, related_agent_id, relationship_type, description, strength) "
+                "VALUES (%s,%s,%s,%s,%s) "
+                "ON CONFLICT (agent_id, related_agent_id, relationship_type) "
+                "DO UPDATE SET description=%s, strength=%s, updated_at=NOW()",
+                (agent_id, related_agent_id, relationship_type, description, strength,
+                 description, strength))
+        else:
+            cur.execute(
+                "UPDATE agent_memory_relationship "
+                "SET description=?, strength=?, updated_at=CURRENT_TIMESTAMP "
+                "WHERE agent_id=? AND related_agent_id=? AND relationship_type=?",
+                (description, strength, agent_id, related_agent_id, relationship_type))
+            if cur.rowcount == 0:
+                cur.execute(
+                    "INSERT INTO agent_memory_relationship "
+                    "(agent_id, related_agent_id, relationship_type, description, strength) "
+                    "VALUES (?,?,?,?,?)",
+                    (agent_id, related_agent_id, relationship_type, description, strength))
+
+
+def get_relationships(agent_id):
+    """Get all relationships originating from an agent."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM agent_memory_relationship WHERE agent_id = {ph} ORDER BY id",
+            (agent_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_all_relationships():
+    """Get all agent relationships (for network visualization later)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM agent_memory_relationship ORDER BY id")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def seed_relationships():
+    """Seed the known agent relationships once. Idempotent via upsert."""
+    _ensure_agent_data_tables()
+    for r in _RELATIONSHIP_SEED:
+        upsert_relationship(*r)
+
+
+# ── Audit trail ────────────────────────────────────────────────────────────────
+
+def log_audit(agent_id, action, outcome, reason=None, details=None, duration_ms=None):
+    """Log an agent action to the audit trail."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"INSERT INTO agent_audit_log "
+            f"(agent_id, action, reason, outcome, details, duration_ms) "
+            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph})",
+            (agent_id, action, reason, outcome, _json_or_none(details),
+             int(duration_ms) if duration_ms is not None else None))
+
+
+def get_audit_log(agent_id=None, limit=50):
+    """Get audit log entries, optionally filtered by agent (newest first)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if agent_id:
+            cur.execute(
+                f"SELECT * FROM agent_audit_log WHERE agent_id = {ph} "
+                f"ORDER BY id DESC LIMIT {ph}",
+                (agent_id, limit))
+        else:
+            cur.execute(
+                f"SELECT * FROM agent_audit_log ORDER BY id DESC LIMIT {ph}",
+                (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+# ── Error budgets ──────────────────────────────────────────────────────────────
+
+def init_error_budget(agent_id, target_success_rate=0.95, window_days=7):
+    """Initialize error budget for an agent (idempotent — leaves existing rows)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO agent_error_budgets (agent_id, target_success_rate, window_days) "
+                "VALUES (%s,%s,%s) ON CONFLICT (agent_id) DO NOTHING",
+                (agent_id, target_success_rate, window_days))
+        else:
+            cur.execute(
+                "INSERT OR IGNORE INTO agent_error_budgets "
+                "(agent_id, target_success_rate, window_days) VALUES (?,?,?)",
+                (agent_id, target_success_rate, window_days))
+
+
+def update_error_budget(agent_id, success: bool):
+    """Record a run result and update the error budget. Auto-inits if missing."""
+    _ensure_agent_data_tables()
+    init_error_budget(agent_id)
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        inc = 1 if success else 0
+        if USE_POSTGRES:
+            cur.execute(
+                "UPDATE agent_error_budgets SET total_runs = total_runs + 1, "
+                "successful_runs = successful_runs + %s, last_updated = NOW() "
+                "WHERE agent_id = %s",
+                (inc, agent_id))
+        else:
+            cur.execute(
+                "UPDATE agent_error_budgets SET total_runs = total_runs + 1, "
+                "successful_runs = successful_runs + ?, last_updated = CURRENT_TIMESTAMP "
+                "WHERE agent_id = ?",
+                (inc, agent_id))
+
+
+def _budget_with_health(row) -> dict:
+    """Enrich an error-budget row with current_rate and health."""
+    d = dict(row)
+    total = int(d.get("total_runs") or 0)
+    ok = int(d.get("successful_runs") or 0)
+    target = float(d.get("target_success_rate") or 0.95)
+    rate = (ok / total) if total else 1.0
+    if rate >= target:
+        health = "healthy"
+    elif rate >= target - 0.10:
+        health = "warning"
+    else:
+        health = "critical"
+    d["current_rate"] = round(rate, 4)
+    d["target"] = target
+    d["health"] = health
+    return d
+
+
+def get_error_budget(agent_id):
+    """Get current error budget status for an agent (with current_rate + health)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM agent_error_budgets WHERE agent_id = {ph}", (agent_id,))
+        row = cur.fetchone()
+        return _budget_with_health(row) if row else None
+
+
+def get_all_error_budgets():
+    """Get error budget status for all agents (with current_rate + health)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM agent_error_budgets ORDER BY agent_id")
+        return [_budget_with_health(r) for r in cur.fetchall()]
+
+
+def get_budget_health(agent_id):
+    """Returns 'healthy', 'warning', or 'critical' for an agent's error budget.
+
+    healthy  = current_rate >= target
+    warning  = current_rate >= target - 0.10
+    critical = current_rate <  target - 0.10
+    An agent with no recorded runs is treated as healthy.
+    """
+    budget = get_error_budget(agent_id)
+    return budget["health"] if budget else "healthy"
+
+
+def init_agent_data():
+    """Create the agent data-layer tables, seed relationships, and initialise an
+    error budget for every known agent. Safe to call on every boot."""
+    _ensure_agent_data_tables()
+    seed_relationships()
+    for aid in AGENT_IDS:
+        init_error_budget(aid)

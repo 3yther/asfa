@@ -3,6 +3,7 @@
 All jobs degrade gracefully: Telegram skipped if not configured, in-app
 notifications always stored so the dashboard bell still works.
 """
+import functools
 import json
 import logging
 from datetime import datetime, timedelta
@@ -26,8 +27,34 @@ def _notify(message: str, kind: str = "info", telegram: bool = True):
         telegram_bot.send_message(message)
 
 
+def audited(agent_id: str, action: str):
+    """Phase 3: wrap a scheduler job so each run is timed and recorded in the
+    agent audit trail + error budget. Never lets audit failures break the job."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            started = datetime.now()
+            outcome = "success"
+            try:
+                return fn(*args, **kwargs)
+            except Exception:
+                outcome = "failure"
+                raise
+            finally:
+                try:
+                    dur_ms = int((datetime.now() - started).total_seconds() * 1000)
+                    db.log_audit(agent_id, action, outcome,
+                                 reason="scheduled job", duration_ms=dur_ms)
+                    db.update_error_budget(agent_id, outcome == "success")
+                except Exception as e:
+                    logger.error(f"audit log failed for {agent_id}.{action}: {e}")
+        return wrapper
+    return deco
+
+
 # ── Jobs ───────────────────────────────────────────────────────────────────────
 
+@audited("briefing", "morning_briefing")
 def morning_briefing():
     from services.briefing import build_briefing
     try:
@@ -39,6 +66,7 @@ def morning_briefing():
     proactive_check()
 
 
+@audited("sentinel", "proactive_check")
 def proactive_check():
     """Run predictive-alert rules and push anything concerning. Deduped so the
     same alert isn't re-sent multiple times in one day."""
@@ -68,10 +96,12 @@ def market_open_reminder():
     _notify("📈 US market opens in 30 minutes. Check your bots.", "market")
 
 
+@audited("reflection", "reflection_prompt")
 def reflection_prompt():
     _notify("📝 End-of-day reflection: how was today, 1-10, and why? Log it in ASFA.", "reflection")
 
 
+@audited("hydration", "water_check")
 def water_check():
     """Daytime nudge if no water logged for 3+ hours."""
     now = datetime.now()
@@ -91,6 +121,7 @@ def water_check():
         _notify("💧 No water logged in 3+ hours. Hydrate!", "water")
 
 
+@audited("quant_bot", "poll_bot_trades")
 def poll_bot_trades():
     """Every 5 min: diff bot positions vs last snapshot → trade alerts."""
     try:
@@ -201,6 +232,7 @@ def _build_daily_summary() -> str:
     return "\n".join(lines)
 
 
+@audited("summary", "daily_summary")
 def daily_summary():
     """21:00 UTC — auto-send the end-of-day summary across all channels.
     The user never has to ask for this."""
@@ -213,6 +245,7 @@ def daily_summary():
         logger.error(f"daily summary failed: {e}")
 
 
+@audited("supplement", "supplement_reminder")
 def supplement_reminder():
     """Nudge if any daily supplement is still unchecked (09:00 + 20:00 local)."""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -231,6 +264,7 @@ def supplement_reminder():
     )
 
 
+@audited("obsidian", "obsidian_sync")
 def obsidian_sync_job():
     """Midnight Obsidian sync: agent profiles, summary, and the daily log for the
     day that just ended (no-op on cloud filesystems)."""
@@ -248,6 +282,7 @@ def obsidian_sync_job():
         logger.error("obsidian sync job failed: %s", e)
 
 
+@audited("backup", "db_backup")
 def db_backup():
     """03:00 Europe/London — dump the prod Postgres DB and push it to the private
     backups repo. No-op on local SQLite. run_backup() never raises."""
@@ -262,6 +297,7 @@ def db_backup():
                     res.get("file"), res.get("bytes"), res.get("tables"), res.get("rows"))
 
 
+@audited("weekly_review", "weekly_review")
 def weekly_review():
     from services.ai import generate_weekly_review
     try:
