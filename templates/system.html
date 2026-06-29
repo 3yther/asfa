@@ -19,10 +19,36 @@
 
 {% include "nav.html" with context %}
 
-<main class="screen-placeholder">
+<main class="agents-screen">
   <h1 class="screen-title" data-decode>System Status</h1>
   <p class="screen-sub">Infrastructure &amp; service health</p>
-  <div class="screen-empty sci-fi-panel">System monitoring (coming soon)</div>
+
+  <div class="agents-grid">
+    <div class="card sci-fi-panel" data-card="system-health">
+      <h3>System Health</h3>
+      <div id="system-health-container">Loading…</div>
+    </div>
+
+    <div class="card sci-fi-panel" data-card="agents-critical">
+      <h3>Critical Alerts</h3>
+      <div id="critical-alerts">Loading…</div>
+    </div>
+
+    <div class="card sci-fi-panel" data-card="backup-status">
+      <h3>Backup Status</h3>
+      <div id="backup-status">Loading…</div>
+    </div>
+
+    <div class="card sci-fi-panel" data-card="scheduled-jobs">
+      <h3>Scheduled Jobs</h3>
+      <div id="scheduled-jobs">Loading…</div>
+    </div>
+
+    <div class="card sci-fi-panel" data-card="external-apis">
+      <h3>External Integrations</h3>
+      <div id="external-apis">Loading…</div>
+    </div>
+  </div>
 </main>
 
 <script>
@@ -36,6 +62,7 @@
   });
 </script>
 
+<script src="{{ url_for('static', filename='js/system-dashboard.js') }}" defer></script>
 <script src="/static/js/starfield.js" defer></script>
 </body>
 </html>

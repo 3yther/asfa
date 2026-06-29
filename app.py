@@ -111,7 +111,7 @@ limiter = init_rate_limiter(app)
 # only authorises the *server* to reach those accounts — it does not gate users.
 APP_PASSWORD = os.environ.get("APP_PASSWORD")
 # Endpoints reachable without a session. Everything else requires login.
-_PUBLIC_ENDPOINTS = {"login", "static", "mission_control_health"}
+_PUBLIC_ENDPOINTS = {"login", "static", "mission_control_health", "api_system_health"}
 
 
 @app.before_request
@@ -668,6 +668,18 @@ def api_focus_line():
 def api_bots_health():
     """Per-bot alive/status/last-signal (cached ~60s server-side)."""
     return jsonify(get_bots_health())
+
+
+# ── System monitoring (public health probe) ────────────────────────────────────
+
+@app.route("/api/system/health", methods=["GET"])
+def api_system_health():
+    """Full system health report. Public (in _PUBLIC_ENDPOINTS) so Railway can
+    probe it without a session. Pushes a Telegram alert if state is critical."""
+    from services import monitor
+    health = monitor.get_system_health()
+    monitor.alert_if_critical(health)
+    return jsonify(health)
 
 
 # ── Database backup (manual trigger) ───────────────────────────────────────────
