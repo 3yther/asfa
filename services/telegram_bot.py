@@ -39,6 +39,18 @@ def send_message(text: str):
         logger.error(f"Telegram send_message error: {e}")
 
 
+def send_alert(message: str):
+    """Send a critical alert via Telegram, falling back to the log if the bot
+    isn't configured. Never raises."""
+    try:
+        if not is_configured():
+            logger.critical("ALERT (Telegram not configured): %s", message)
+            return
+        send_message(message)
+    except Exception as e:
+        logger.error(f"Failed to send Telegram alert: {e}")
+
+
 def start_bot():
     if not is_configured():
         logger.info("Telegram not configured — skipping bot")
