@@ -431,8 +431,8 @@ def api_gym_session_end(session_id):
     # Completion bonus XP + streak update on finishing a workout.
     bonus = db.add_xp(100, "workout completed")
     streak = db.update_streak(session.get("date"))
-    session_xp = int(session.get("xp_earned") or 0) + 100
-
+    sets_xp = sum(db._xp_for_set(s.get("weight_kg"), s.get("reps"), bool(s.get("is_pr"))) for s in sets)
+    session_xp = int(sets_xp) + 100
     db.end_session(session_id, end_time, duration, total_volume, total_sets, session_xp)
     return jsonify({"ok": True, "session": db.get_session(session_id),
                     "total_volume_kg": total_volume, "total_sets": total_sets,

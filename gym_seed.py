@@ -410,7 +410,7 @@ ROUTINE_EXERCISES = {
         ("Chest Press Machine", 3, 10, 12, 75),
         ("Cable Chest Fly", 3, 12, 15, 60),
         ("Seated Dumbbell Shoulder Press", 3, 10, 12, 75),
-        ("Cable Lateral Raises", 3, 15, 20, 45),
+        ("Lateral Raises", 3, 15, 20, 45),
         ("Face Pulls", 3, 15, 20, 45),
         ("Dumbbell Row", 3, 10, 12, 75),
         ("Lat Pulldown Close Grip", 3, 10, 12, 75),
