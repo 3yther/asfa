@@ -63,6 +63,17 @@ EXERCISES = [
         "rank_bronze": 5, "rank_silver": 8, "rank_gold": 12, "rank_platinum": 16, "rank_diamond": 20
     },
     {
+        "name": "Cable Lateral Raises",
+        "muscle_group": "shoulders",
+        "secondary_muscles": [],
+        "equipment": "cable",
+        "exercise_type": "isolation",
+        "youtube_url": "https://www.youtube.com/watch?v=0KnFCTSOx8k",
+        "instructions": "1. Set cable to lowest position\n2. Stand side-on, grip handle with far hand\n3. Raise arm out to the side to shoulder height\n4. Slight bend in elbow\n5. Lower slowly — cable keeps constant tension",
+        "tips": "Cable keeps tension at the bottom where dumbbells lose it. Lighter is better — control every rep.",
+        "rank_bronze": 5, "rank_silver": 8, "rank_gold": 12, "rank_platinum": 16, "rank_diamond": 20
+    },
+    {
         "name": "Face Pulls",
         "muscle_group": "shoulders",
         "secondary_muscles": ["back"],

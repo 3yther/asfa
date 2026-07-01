@@ -2720,3 +2720,179 @@ def update_streak(workout_date: str) -> int:
             f"UPDATE gym_xp SET streak_days = {ph}, last_workout_date = {ph} WHERE id = {ph}",
             (new_streak, cur_str, row["id"]))
     return new_streak
+
+
+# ── Frontend helpers (last-session, recovery, weekly volume, notes, active) ────
+
+def get_last_session_for_exercise(exercise_id: int) -> dict:
+    """Return the most recent *previous* session that contains this exercise,
+    with every set logged for it plus the best set (by est. 1RM). Used to show
+    the "LAST TIME" row and ghost placeholders in the workout screen.
+    Shape: {session_id, date, sets: [...], best: {...}} or None."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        # newest session id that has a set for this exercise
+        cur.execute(
+            f"""SELECT st.session_id, s.date
+                FROM gym_sets st JOIN gym_sessions s ON s.id = st.session_id
+                WHERE st.exercise_id = {ph}
+                ORDER BY s.date DESC, st.session_id DESC LIMIT 1""",
+            (exercise_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        session_id = row["session_id"]
+        session_date = str(row["date"])[:10]
+        cur.execute(
+            f"""SELECT id, set_number, set_type, weight_kg, reps, is_pr
+                FROM gym_sets
+                WHERE session_id = {ph} AND exercise_id = {ph}
+                ORDER BY set_number, id""",
+            (session_id, exercise_id))
+        sets = [dict(r) for r in cur.fetchall()]
+    best = None
+    for s in sets:
+        s["one_rep_max"] = calculate_one_rep_max(s.get("weight_kg"), s.get("reps"))
+        if best is None or s["one_rep_max"] > best["one_rep_max"]:
+            best = s
+    return {"session_id": session_id, "date": session_date,
+            "sets": sets, "best": best}
+
+
+def delete_set(set_id: int) -> bool:
+    """Delete a single logged set. Returns True if a row was removed. Note: XP,
+    PRs and ranks are not rolled back (they never downgrade by design)."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"DELETE FROM gym_sets WHERE id = {ph}", (set_id,))
+        return (cur.rowcount or 0) > 0
+
+
+def get_weekly_volume() -> list:
+    """Total lifted volume (kg = Σ weight×reps) per muscle group for the last 7
+    days vs the previous 7, with % change. Sorted by current volume desc."""
+    _ensure_gym_tables()
+    today = date.today()
+    cur_start = (today - timedelta(days=6)).isoformat()          # last 7 days incl today
+    prev_start = (today - timedelta(days=13)).isoformat()
+    prev_end = (today - timedelta(days=7)).isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT e.muscle_group AS mg, s.date AS d,
+                       st.weight_kg AS w, st.reps AS r
+                FROM gym_sets st
+                JOIN gym_sessions s ON s.id = st.session_id
+                JOIN gym_exercises e ON e.id = st.exercise_id
+                WHERE s.date >= {ph}""",
+            (prev_start,))
+        rows = [dict(r) for r in cur.fetchall()]
+    agg = {}
+    for r in rows:
+        d = str(r["d"])[:10]
+        vol = float(r["w"] or 0) * int(r["r"] or 0)
+        mg = r["mg"]
+        bucket = agg.setdefault(mg, {"current": 0.0, "previous": 0.0})
+        if d >= cur_start:
+            bucket["current"] += vol
+        elif prev_start <= d <= prev_end:
+            bucket["previous"] += vol
+    out = []
+    for mg, b in agg.items():
+        cur_v = round(b["current"], 1)
+        prev_v = round(b["previous"], 1)
+        if prev_v > 0:
+            change = round((cur_v - prev_v) / prev_v * 100)
+        else:
+            change = None  # no prior baseline
+        out.append({"muscle_group": mg, "current": cur_v,
+                    "previous": prev_v, "change_pct": change})
+    out.sort(key=lambda x: x["current"], reverse=True)
+    return out
+
+
+def get_muscle_recovery() -> list:
+    """Days since each muscle group was last trained. Covers every muscle group
+    present in the exercise library (excluding cardio). last_date/days_since are
+    None if never trained. Sorted by most-recently trained first."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        # all known muscle groups
+        cur.execute(
+            "SELECT DISTINCT muscle_group FROM gym_exercises "
+            "WHERE muscle_group <> 'cardio' ORDER BY muscle_group")
+        groups = [r["muscle_group"] for r in cur.fetchall()]
+        # last trained date per muscle group
+        cur.execute(
+            """SELECT e.muscle_group AS mg, MAX(s.date) AS last_date
+               FROM gym_sets st
+               JOIN gym_sessions s ON s.id = st.session_id
+               JOIN gym_exercises e ON e.id = st.exercise_id
+               GROUP BY e.muscle_group""")
+        last = {r["mg"]: str(r["last_date"])[:10] for r in cur.fetchall() if r["last_date"]}
+    today = date.today()
+    out = []
+    for mg in groups:
+        ld = last.get(mg)
+        days = None
+        if ld:
+            try:
+                days = (today - datetime.strptime(ld, "%Y-%m-%d").date()).days
+            except ValueError:
+                days = None
+        out.append({"muscle_group": mg, "last_date": ld, "days_since": days})
+    # trained ones first (fewest days), never-trained at the end
+    out.sort(key=lambda x: (x["days_since"] is None, x["days_since"] if x["days_since"] is not None else 1e9))
+    return out
+
+
+def save_session_notes(session_id: int, notes: str) -> bool:
+    """Persist free-text notes on a session. Returns True if the session exists."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"UPDATE gym_sessions SET notes = {ph} WHERE id = {ph}",
+                    (notes or "", session_id))
+        return (cur.rowcount or 0) > 0
+
+
+def delete_session(session_id: int) -> bool:
+    """Abandon/delete a session and all its sets. Used by "Discard" on an
+    in-progress workout. Returns True if the session existed."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"DELETE FROM gym_sets WHERE session_id = {ph}", (session_id,))
+        cur.execute(f"DELETE FROM gym_sessions WHERE id = {ph}", (session_id,))
+        return (cur.rowcount or 0) > 0
+
+
+def get_active_session() -> dict:
+    """Return today's in-progress session (started, no end_time), with its sets
+    and routine name, so a mid-workout refresh can resume. None if none open."""
+    _ensure_gym_tables()
+    today = date.today().isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT s.*, r.name AS routine_name, r.day_type
+                FROM gym_sessions s
+                LEFT JOIN gym_routines r ON r.id = s.routine_id
+                WHERE s.date = {ph} AND (s.end_time IS NULL OR s.end_time = '')
+                ORDER BY s.id DESC LIMIT 1""",
+            (today,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        session = dict(row)
+    session["sets"] = get_session_sets(session["id"])
+    return session
