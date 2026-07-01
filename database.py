@@ -309,6 +309,21 @@ def get_spending(days: int = 7):
         return [dict(r) for r in cur.fetchall()]
 
 
+def get_workouts(days: int = 7) -> list:
+    """Get workout log entries for the last N days (most recent first)."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "SELECT * FROM workouts WHERE CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '%s days' ORDER BY date DESC",
+                (days,))
+        else:
+            cur.execute(
+                "SELECT * FROM workouts WHERE date >= date('now', ?) ORDER BY date DESC",
+                (f"-{days} days",))
+        return [dict(r) for r in cur.fetchall()]
+
+
 # ── Memory helpers ─────────────────────────────────────────────────────────────
 
 def save_memory(content, tags=""):
@@ -1959,3 +1974,925 @@ def init_agent_data():
     for aid in AGENT_IDS:
         init_error_budget(aid)
         init_energy(aid)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GYM TRACKER
+# ══════════════════════════════════════════════════════════════════════════════
+# Standalone gym-tracking module: exercise library, routine templates, logged
+# sessions/sets, personal records, body stats, and XP/rank gamification. All
+# tables are namespaced ``gym_*`` and never touch the existing schema. Tables are
+# created + seeded lazily (idempotent) and also on boot via ``init_gym_data``.
+
+import gym_seed
+
+GYM_RANKS = ["Bronze", "Silver", "Gold", "Platinum", "Diamond"]
+_RANK_SCORE = {name: i + 1 for i, name in enumerate(GYM_RANKS)}
+# Overall (account-wide) rank tiers keyed off total XP, highest first.
+_OVERALL_XP_TIERS = [
+    (40000, "Diamond"),
+    (15000, "Platinum"),
+    (5000, "Gold"),
+    (1000, "Silver"),
+    (0, "Bronze"),
+]
+
+_GYM_READY = False
+
+
+def _ensure_gym_tables():
+    """Create every gym_* table if missing. Idempotent; handles SQLite/Postgres."""
+    global _GYM_READY
+    if _GYM_READY:
+        return
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS gym_exercises (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            muscle_group TEXT NOT NULL,
+            secondary_muscles TEXT,
+            equipment TEXT,
+            exercise_type TEXT,
+            youtube_url TEXT,
+            instructions TEXT,
+            tips TEXT,
+            rank_bronze REAL,
+            rank_silver REAL,
+            rank_gold REAL,
+            rank_platinum REAL,
+            rank_diamond REAL
+        )""",
+        """CREATE TABLE IF NOT EXISTS gym_routines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            day_type TEXT NOT NULL,
+            description TEXT,
+            order_index INTEGER DEFAULT 0
+        )""",
+        """CREATE TABLE IF NOT EXISTS gym_routine_exercises (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            routine_id INTEGER NOT NULL,
+            exercise_id INTEGER NOT NULL,
+            sets INTEGER DEFAULT 3,
+            rep_min INTEGER DEFAULT 8,
+            rep_max INTEGER DEFAULT 12,
+            rest_seconds INTEGER DEFAULT 90,
+            order_index INTEGER DEFAULT 0,
+            notes TEXT,
+            is_cardio BOOLEAN DEFAULT FALSE
+        )""",
+        """CREATE TABLE IF NOT EXISTS gym_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            routine_id INTEGER,
+            date TEXT NOT NULL,
+            start_time TEXT,
+            end_time TEXT,
+            duration_minutes INTEGER,
+            notes TEXT,
+            total_volume_kg REAL DEFAULT 0,
+            total_sets INTEGER DEFAULT 0,
+            xp_earned INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS gym_sets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            exercise_id INTEGER NOT NULL,
+            set_number INTEGER NOT NULL,
+            set_type TEXT DEFAULT 'working',
+            weight_kg REAL,
+            reps INTEGER,
+            is_pr BOOLEAN DEFAULT FALSE,
+            notes TEXT,
+            completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS gym_prs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            exercise_id INTEGER NOT NULL UNIQUE,
+            weight_kg REAL NOT NULL,
+            reps INTEGER NOT NULL,
+            one_rep_max REAL,
+            achieved_at TEXT NOT NULL,
+            session_id INTEGER
+        )""",
+        """CREATE TABLE IF NOT EXISTS gym_body_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            weight_kg REAL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS gym_xp (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            total_xp INTEGER DEFAULT 0,
+            overall_rank TEXT DEFAULT 'Bronze',
+            streak_days INTEGER DEFAULT 0,
+            last_workout_date TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS gym_muscle_ranks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            muscle_group TEXT NOT NULL UNIQUE,
+            current_rank TEXT DEFAULT 'Bronze',
+            best_weight_kg REAL DEFAULT 0,
+            rank_score REAL DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+    ]
+    with get_db() as conn:
+        cur = conn.cursor()
+        for stmt in stmts:
+            if USE_POSTGRES:
+                stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+            cur.execute(stmt)
+    _GYM_READY = True
+
+
+def _gym_insert(cur, table: str, cols: str, values: tuple):
+    """INSERT a row and return its new id (Postgres RETURNING / SQLite lastrowid)."""
+    ph = "%s" if USE_POSTGRES else "?"
+    placeholders = ",".join([ph] * len(values))
+    if USE_POSTGRES:
+        cur.execute(
+            f"INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING id", values)
+        return cur.fetchone()["id"]
+    cur.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders})", values)
+    return cur.lastrowid
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def calculate_one_rep_max(weight_kg: float, reps: int) -> float:
+    """Estimated 1RM via the Epley formula: weight × (1 + reps/30)."""
+    weight_kg = float(weight_kg or 0)
+    reps = int(reps or 0)
+    return round(weight_kg * (1 + reps / 30), 2)
+
+
+def _rank_for_weight(ex: dict, weight_kg: float) -> str:
+    """Highest rank whose threshold ``weight_kg`` meets, floored at Bronze."""
+    weight_kg = float(weight_kg or 0)
+    rank = "Bronze"
+    for name in GYM_RANKS:
+        threshold = ex.get(f"rank_{name.lower()}")
+        if threshold is not None and weight_kg >= threshold:
+            rank = name
+    return rank
+
+
+def get_exercise_rank(exercise_name: str, weight_kg: float) -> str:
+    """Bronze/Silver/Gold/Platinum/Diamond for a weight on a named exercise."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM gym_exercises WHERE name = {ph}", (exercise_name,))
+        row = cur.fetchone()
+    if not row:
+        return "Bronze"
+    return _rank_for_weight(dict(row), weight_kg)
+
+
+def _exercise_row_to_dict(row) -> dict:
+    d = dict(row)
+    sec = d.get("secondary_muscles")
+    try:
+        d["secondary_muscles"] = json.loads(sec) if sec else []
+    except (TypeError, ValueError):
+        d["secondary_muscles"] = []
+    return d
+
+
+# ── Seeding ──────────────────────────────────────────────────────────────────
+
+def seed_gym_exercises():
+    """Insert the exercise library once. Idempotent (upsert on unique name)."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cols = ("name, muscle_group, secondary_muscles, equipment, exercise_type, "
+                "youtube_url, instructions, tips, rank_bronze, rank_silver, "
+                "rank_gold, rank_platinum, rank_diamond")
+        placeholders = ",".join([ph] * 13)
+        for ex in gym_seed.EXERCISES:
+            vals = (
+                ex["name"], ex["muscle_group"],
+                json.dumps(ex.get("secondary_muscles", [])),
+                ex.get("equipment"), ex.get("exercise_type"), ex.get("youtube_url"),
+                ex.get("instructions"), ex.get("tips"),
+                ex.get("rank_bronze"), ex.get("rank_silver"), ex.get("rank_gold"),
+                ex.get("rank_platinum"), ex.get("rank_diamond"),
+            )
+            if USE_POSTGRES:
+                cur.execute(
+                    f"INSERT INTO gym_exercises ({cols}) VALUES ({placeholders}) "
+                    f"ON CONFLICT (name) DO NOTHING", vals)
+            else:
+                cur.execute(
+                    f"INSERT OR IGNORE INTO gym_exercises ({cols}) VALUES ({placeholders})",
+                    vals)
+
+
+def _exercise_id_by_name(cur, name: str):
+    ph = "%s" if USE_POSTGRES else "?"
+    cur.execute(f"SELECT id FROM gym_exercises WHERE name = {ph}", (name,))
+    row = cur.fetchone()
+    return row["id"] if row else None
+
+
+def seed_gym_routines():
+    """Insert routine templates + their exercise lists once. Idempotent — a
+    routine is only populated if it doesn't already exist by name. Routine
+    exercises referencing an unknown exercise name are skipped."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        for r in gym_seed.ROUTINES:
+            cur.execute(f"SELECT id FROM gym_routines WHERE name = {ph}", (r["name"],))
+            if cur.fetchone():
+                continue  # already seeded
+            routine_id = _gym_insert(
+                cur, "gym_routines", "name, day_type, description, order_index",
+                (r["name"], r["day_type"], r.get("description"), r.get("order_index", 0)))
+            for idx, (ex_name, sets, rep_min, rep_max, rest) in enumerate(
+                    gym_seed.ROUTINE_EXERCISES.get(r["name"], [])):
+                ex_id = _exercise_id_by_name(cur, ex_name)
+                if ex_id is None:
+                    continue  # exercise not in library — skip gracefully
+                is_cardio = ex_name == "Incline Walk"
+                _gym_insert(
+                    cur, "gym_routine_exercises",
+                    "routine_id, exercise_id, sets, rep_min, rep_max, rest_seconds, "
+                    "order_index, is_cardio",
+                    (routine_id, ex_id, sets, rep_min, rep_max, rest, idx, is_cardio))
+
+
+def init_gym_data():
+    """Create the gym tables and seed the exercise library + routines. Also
+    ensures the singleton XP row exists. Safe to call on every boot."""
+    _ensure_gym_tables()
+    seed_gym_exercises()
+    seed_gym_routines()
+    _ensure_gym_xp_row()
+
+
+# ── Exercises ────────────────────────────────────────────────────────────────
+
+def get_all_exercises() -> list:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM gym_exercises ORDER BY muscle_group, name")
+        return [_exercise_row_to_dict(r) for r in cur.fetchall()]
+
+
+def get_exercise(exercise_id: int) -> dict:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM gym_exercises WHERE id = {ph}", (exercise_id,))
+        row = cur.fetchone()
+        return _exercise_row_to_dict(row) if row else None
+
+
+def get_exercises_by_muscle(muscle_group: str) -> list:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM gym_exercises WHERE muscle_group = {ph} ORDER BY name",
+            (muscle_group,))
+        return [_exercise_row_to_dict(r) for r in cur.fetchall()]
+
+
+# ── Routines ─────────────────────────────────────────────────────────────────
+
+def get_all_routines() -> list:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM gym_routines ORDER BY order_index, id")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_routine(routine_id: int) -> dict:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM gym_routines WHERE id = {ph}", (routine_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        routine = dict(row)
+    routine["exercises"] = get_routine_exercises(routine_id)
+    return routine
+
+
+def get_routine_exercises(routine_id: int) -> list:
+    """Exercises in a routine, joined with the exercise library details."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT re.id AS routine_exercise_id, re.routine_id, re.exercise_id,
+                       re.sets, re.rep_min, re.rep_max, re.rest_seconds,
+                       re.order_index, re.notes, re.is_cardio,
+                       e.name, e.muscle_group, e.secondary_muscles, e.equipment,
+                       e.exercise_type, e.youtube_url, e.instructions, e.tips,
+                       e.rank_bronze, e.rank_silver, e.rank_gold,
+                       e.rank_platinum, e.rank_diamond
+                FROM gym_routine_exercises re
+                JOIN gym_exercises e ON e.id = re.exercise_id
+                WHERE re.routine_id = {ph}
+                ORDER BY re.order_index, re.id""",
+            (routine_id,))
+        out = []
+        for r in cur.fetchall():
+            d = dict(r)
+            sec = d.get("secondary_muscles")
+            try:
+                d["secondary_muscles"] = json.loads(sec) if sec else []
+            except (TypeError, ValueError):
+                d["secondary_muscles"] = []
+            out.append(d)
+        return out
+
+
+# ── Sessions ─────────────────────────────────────────────────────────────────
+
+def create_session(routine_id, date, start_time, notes="") -> int:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        return _gym_insert(
+            cur, "gym_sessions", "routine_id, date, start_time, notes",
+            (routine_id, date, start_time, notes))
+
+
+def end_session(session_id, end_time, duration_minutes, total_volume,
+                total_sets, xp_earned) -> None:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""UPDATE gym_sessions SET end_time = {ph}, duration_minutes = {ph},
+                total_volume_kg = {ph}, total_sets = {ph}, xp_earned = {ph}
+                WHERE id = {ph}""",
+            (end_time, duration_minutes, total_volume, total_sets, xp_earned, session_id))
+
+
+def get_session(session_id: int) -> dict:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM gym_sessions WHERE id = {ph}", (session_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def get_recent_sessions(limit=10) -> list:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT s.*, r.name AS routine_name, r.day_type
+                FROM gym_sessions s
+                LEFT JOIN gym_routines r ON r.id = s.routine_id
+                ORDER BY s.date DESC, s.id DESC LIMIT {ph}""",
+            (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_sessions_by_date_range(start_date, end_date) -> list:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT s.*, r.name AS routine_name, r.day_type
+                FROM gym_sessions s
+                LEFT JOIN gym_routines r ON r.id = s.routine_id
+                WHERE s.date >= {ph} AND s.date <= {ph}
+                ORDER BY s.date DESC, s.id DESC""",
+            (start_date, end_date))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_streak_calendar(months=3) -> dict:
+    """Return {date_str: bool} for every day in the last ``months``, where the
+    value is True if at least one session was logged that day."""
+    _ensure_gym_tables()
+    end = date.today()
+    start = end - timedelta(days=months * 31)
+    worked = set()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT DISTINCT date FROM gym_sessions WHERE date >= {ph} AND date <= {ph}",
+            (start.isoformat(), end.isoformat()))
+        for r in cur.fetchall():
+            # normalise to YYYY-MM-DD in case of stored timestamps
+            worked.add(str(r["date"])[:10])
+    calendar = {}
+    d = start
+    while d <= end:
+        key = d.isoformat()
+        calendar[key] = key in worked
+        d += timedelta(days=1)
+    return calendar
+
+
+# ── Sets ─────────────────────────────────────────────────────────────────────
+
+def _xp_for_set(weight_kg: float, reps: int, is_pr: bool) -> int:
+    """XP for a single logged set: volume-based, with a bonus for a new PR.
+    Bodyweight/cardio sets (weight 0) still earn XP off reps/minutes."""
+    weight_kg = float(weight_kg or 0)
+    reps = int(reps or 0)
+    xp = round(weight_kg * reps * 0.1)
+    if xp < 1:
+        xp = max(reps, 1)
+    if is_pr:
+        xp += 50
+    return int(xp)
+
+
+def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps) -> dict:
+    """Log a single set. Detects a personal record (by estimated 1RM), updates
+    the PR table, awards XP, and bumps the exercise's muscle-group rank.
+    Returns {id, is_pr, one_rep_max, xp_earned, rank}."""
+    _ensure_gym_tables()
+    weight_kg = float(weight_kg or 0)
+    reps = int(reps or 0)
+    one_rm = calculate_one_rep_max(weight_kg, reps)
+
+    existing = get_pr(exercise_id)
+    is_pr = existing is None or one_rm > (existing.get("one_rep_max") or 0)
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        set_id = _gym_insert(
+            cur, "gym_sets",
+            "session_id, exercise_id, set_number, set_type, weight_kg, reps, is_pr",
+            (session_id, exercise_id, set_number, set_type, weight_kg, reps, bool(is_pr)))
+
+    ex = get_exercise(exercise_id)
+    today = date.today().isoformat()
+    if is_pr:
+        update_pr(exercise_id, weight_kg, reps, one_rm, today, session_id)
+
+    xp = _xp_for_set(weight_kg, reps, is_pr)
+    add_xp(xp, f"set logged (exercise {exercise_id})")
+
+    rank = None
+    if ex:
+        rank = _rank_for_weight(ex, weight_kg)
+        update_muscle_rank(ex["muscle_group"], weight_kg, rank)
+
+    return {"id": set_id, "is_pr": bool(is_pr), "one_rep_max": one_rm,
+            "xp_earned": xp, "rank": rank}
+
+
+def get_session_sets(session_id: int) -> list:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT st.*, e.name AS exercise_name, e.muscle_group
+                FROM gym_sets st
+                JOIN gym_exercises e ON e.id = st.exercise_id
+                WHERE st.session_id = {ph}
+                ORDER BY st.id""",
+            (session_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_exercise_history(exercise_id: int, limit=20) -> list:
+    """Best set (by estimated 1RM) per session for one exercise, newest first."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT st.session_id, st.weight_kg, st.reps, st.set_number,
+                       s.date
+                FROM gym_sets st
+                JOIN gym_sessions s ON s.id = st.session_id
+                WHERE st.exercise_id = {ph}
+                ORDER BY s.date DESC, st.id DESC""",
+            (exercise_id,))
+        rows = [dict(r) for r in cur.fetchall()]
+    best = {}
+    for r in rows:
+        one_rm = calculate_one_rep_max(r["weight_kg"], r["reps"])
+        r["one_rep_max"] = one_rm
+        cur_best = best.get(r["session_id"])
+        if cur_best is None or one_rm > cur_best["one_rep_max"]:
+            best[r["session_id"]] = r
+    history = sorted(best.values(), key=lambda x: str(x["date"]), reverse=True)
+    return history[:limit]
+
+
+# ── Personal records ─────────────────────────────────────────────────────────
+
+def get_pr(exercise_id: int) -> dict:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM gym_prs WHERE exercise_id = {ph}", (exercise_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def get_all_prs() -> list:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT p.*, e.name AS exercise_name, e.muscle_group
+               FROM gym_prs p
+               JOIN gym_exercises e ON e.id = p.exercise_id
+               ORDER BY e.muscle_group, e.name""")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def update_pr(exercise_id, weight_kg, reps, one_rep_max, date, session_id) -> None:
+    """Upsert the personal record for an exercise (one row per exercise)."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if USE_POSTGRES:
+            cur.execute(
+                f"""INSERT INTO gym_prs
+                    (exercise_id, weight_kg, reps, one_rep_max, achieved_at, session_id)
+                    VALUES ({ph},{ph},{ph},{ph},{ph},{ph})
+                    ON CONFLICT (exercise_id) DO UPDATE SET
+                        weight_kg = EXCLUDED.weight_kg, reps = EXCLUDED.reps,
+                        one_rep_max = EXCLUDED.one_rep_max,
+                        achieved_at = EXCLUDED.achieved_at,
+                        session_id = EXCLUDED.session_id""",
+                (exercise_id, weight_kg, reps, one_rep_max, date, session_id))
+        else:
+            cur.execute(
+                f"""INSERT INTO gym_prs
+                    (exercise_id, weight_kg, reps, one_rep_max, achieved_at, session_id)
+                    VALUES ({ph},{ph},{ph},{ph},{ph},{ph})
+                    ON CONFLICT (exercise_id) DO UPDATE SET
+                        weight_kg = excluded.weight_kg, reps = excluded.reps,
+                        one_rep_max = excluded.one_rep_max,
+                        achieved_at = excluded.achieved_at,
+                        session_id = excluded.session_id""",
+                (exercise_id, weight_kg, reps, one_rep_max, date, session_id))
+
+
+# ── Body stats ───────────────────────────────────────────────────────────────
+
+def log_body_stat(date, weight_kg, notes="") -> None:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"INSERT INTO gym_body_stats (date, weight_kg, notes) VALUES ({ph},{ph},{ph})",
+            (date, weight_kg, notes))
+
+
+def get_body_stats(limit=30) -> list:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM gym_body_stats ORDER BY date DESC, id DESC LIMIT {ph}",
+            (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+# ── XP and rankings ──────────────────────────────────────────────────────────
+
+def _overall_rank_for_xp(total_xp: int) -> str:
+    for threshold, name in _OVERALL_XP_TIERS:
+        if total_xp >= threshold:
+            return name
+    return "Bronze"
+
+
+def _ensure_gym_xp_row():
+    """Guarantee the singleton XP row (id=1) exists."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM gym_xp ORDER BY id LIMIT 1")
+        if cur.fetchone():
+            return
+        cur.execute(
+            "INSERT INTO gym_xp (total_xp, overall_rank, streak_days) "
+            "VALUES (0, 'Bronze', 0)")
+
+
+def get_xp() -> dict:
+    _ensure_gym_xp_row()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM gym_xp ORDER BY id LIMIT 1")
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def add_xp(amount: int, reason: str = "") -> dict:
+    """Add XP to the account total, recompute overall rank, and return the new
+    {total_xp, overall_rank, added, reason}."""
+    _ensure_gym_xp_row()
+    amount = int(amount or 0)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, total_xp FROM gym_xp ORDER BY id LIMIT 1")
+        row = cur.fetchone()
+        new_total = int(row["total_xp"] or 0) + amount
+        new_rank = _overall_rank_for_xp(new_total)
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"UPDATE gym_xp SET total_xp = {ph}, overall_rank = {ph} WHERE id = {ph}",
+            (new_total, new_rank, row["id"]))
+    return {"total_xp": new_total, "overall_rank": new_rank,
+            "added": amount, "reason": reason}
+
+
+def get_overall_rank() -> str:
+    return get_xp().get("overall_rank", "Bronze")
+
+
+def get_muscle_ranks() -> list:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM gym_muscle_ranks ORDER BY muscle_group")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def update_muscle_rank(muscle_group, weight_kg, rank_name=None) -> dict:
+    """Recalculate a muscle group's rank. Tracks the best weight seen and the
+    highest exercise rank achieved (never downgrades). ``rank_name`` is the
+    exercise-derived rank for this lift; when omitted the current rank stands."""
+    _ensure_gym_tables()
+    weight_kg = float(weight_kg or 0)
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM gym_muscle_ranks WHERE muscle_group = {ph}", (muscle_group,))
+        existing = cur.fetchone()
+
+        if existing:
+            best_weight = max(float(existing["best_weight_kg"] or 0), weight_kg)
+            cur_score = float(existing["rank_score"] or 0)
+        else:
+            best_weight = weight_kg
+            cur_score = 0
+
+        new_score = cur_score
+        if rank_name:
+            new_score = max(cur_score, _RANK_SCORE.get(rank_name, 1))
+        current_rank = GYM_RANKS[int(new_score) - 1] if new_score >= 1 else "Bronze"
+
+        if existing:
+            cur.execute(
+                f"""UPDATE gym_muscle_ranks SET current_rank = {ph},
+                    best_weight_kg = {ph}, rank_score = {ph} WHERE muscle_group = {ph}""",
+                (current_rank, best_weight, new_score, muscle_group))
+        else:
+            cur.execute(
+                f"""INSERT INTO gym_muscle_ranks
+                    (muscle_group, current_rank, best_weight_kg, rank_score)
+                    VALUES ({ph},{ph},{ph},{ph})""",
+                (muscle_group, current_rank, best_weight, new_score))
+    return {"muscle_group": muscle_group, "current_rank": current_rank,
+            "best_weight_kg": best_weight, "rank_score": new_score}
+
+
+def get_streak() -> int:
+    return int(get_xp().get("streak_days", 0) or 0)
+
+
+def update_streak(workout_date: str) -> int:
+    """Update the workout streak given a completed workout date. Consecutive-day
+    workouts extend the streak; a gap resets it to 1. Returns the new streak."""
+    _ensure_gym_xp_row()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, streak_days, last_workout_date FROM gym_xp ORDER BY id LIMIT 1")
+        row = cur.fetchone()
+        last = row["last_workout_date"]
+        streak = int(row["streak_days"] or 0)
+
+        last_str = str(last)[:10] if last else None
+        cur_str = str(workout_date)[:10]
+
+        if last_str == cur_str:
+            new_streak = streak if streak > 0 else 1
+        else:
+            new_streak = 1
+            if last_str:
+                try:
+                    d_last = datetime.strptime(last_str, "%Y-%m-%d").date()
+                    d_cur = datetime.strptime(cur_str, "%Y-%m-%d").date()
+                    if (d_cur - d_last).days == 1:
+                        new_streak = streak + 1
+                except ValueError:
+                    new_streak = 1
+
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"UPDATE gym_xp SET streak_days = {ph}, last_workout_date = {ph} WHERE id = {ph}",
+            (new_streak, cur_str, row["id"]))
+    return new_streak
+
+
+# ── Frontend helpers (last-session, recovery, weekly volume, notes, active) ────
+
+def get_last_session_for_exercise(exercise_id: int) -> dict:
+    """Return the most recent *previous* session that contains this exercise,
+    with every set logged for it plus the best set (by est. 1RM). Used to show
+    the "LAST TIME" row and ghost placeholders in the workout screen.
+    Shape: {session_id, date, sets: [...], best: {...}} or None."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        # newest session id that has a set for this exercise
+        cur.execute(
+            f"""SELECT st.session_id, s.date
+                FROM gym_sets st JOIN gym_sessions s ON s.id = st.session_id
+                WHERE st.exercise_id = {ph}
+                ORDER BY s.date DESC, st.session_id DESC LIMIT 1""",
+            (exercise_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        session_id = row["session_id"]
+        session_date = str(row["date"])[:10]
+        cur.execute(
+            f"""SELECT id, set_number, set_type, weight_kg, reps, is_pr
+                FROM gym_sets
+                WHERE session_id = {ph} AND exercise_id = {ph}
+                ORDER BY set_number, id""",
+            (session_id, exercise_id))
+        sets = [dict(r) for r in cur.fetchall()]
+    best = None
+    for s in sets:
+        s["one_rep_max"] = calculate_one_rep_max(s.get("weight_kg"), s.get("reps"))
+        if best is None or s["one_rep_max"] > best["one_rep_max"]:
+            best = s
+    return {"session_id": session_id, "date": session_date,
+            "sets": sets, "best": best}
+
+
+def delete_set(set_id: int) -> bool:
+    """Delete a single logged set. Returns True if a row was removed. Note: XP,
+    PRs and ranks are not rolled back (they never downgrade by design)."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"DELETE FROM gym_sets WHERE id = {ph}", (set_id,))
+        return (cur.rowcount or 0) > 0
+
+
+def get_weekly_volume() -> list:
+    """Total lifted volume (kg = Σ weight×reps) per muscle group for the last 7
+    days vs the previous 7, with % change. Sorted by current volume desc."""
+    _ensure_gym_tables()
+    today = date.today()
+    cur_start = (today - timedelta(days=6)).isoformat()          # last 7 days incl today
+    prev_start = (today - timedelta(days=13)).isoformat()
+    prev_end = (today - timedelta(days=7)).isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT e.muscle_group AS mg, s.date AS d,
+                       st.weight_kg AS w, st.reps AS r
+                FROM gym_sets st
+                JOIN gym_sessions s ON s.id = st.session_id
+                JOIN gym_exercises e ON e.id = st.exercise_id
+                WHERE s.date >= {ph}""",
+            (prev_start,))
+        rows = [dict(r) for r in cur.fetchall()]
+    agg = {}
+    for r in rows:
+        d = str(r["d"])[:10]
+        vol = float(r["w"] or 0) * int(r["r"] or 0)
+        mg = r["mg"]
+        bucket = agg.setdefault(mg, {"current": 0.0, "previous": 0.0})
+        if d >= cur_start:
+            bucket["current"] += vol
+        elif prev_start <= d <= prev_end:
+            bucket["previous"] += vol
+    out = []
+    for mg, b in agg.items():
+        cur_v = round(b["current"], 1)
+        prev_v = round(b["previous"], 1)
+        if prev_v > 0:
+            change = round((cur_v - prev_v) / prev_v * 100)
+        else:
+            change = None  # no prior baseline
+        out.append({"muscle_group": mg, "current": cur_v,
+                    "previous": prev_v, "change_pct": change})
+    out.sort(key=lambda x: x["current"], reverse=True)
+    return out
+
+
+def get_muscle_recovery() -> list:
+    """Days since each muscle group was last trained. Covers every muscle group
+    present in the exercise library (excluding cardio). last_date/days_since are
+    None if never trained. Sorted by most-recently trained first."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        # all known muscle groups
+        cur.execute(
+            "SELECT DISTINCT muscle_group FROM gym_exercises "
+            "WHERE muscle_group <> 'cardio' ORDER BY muscle_group")
+        groups = [r["muscle_group"] for r in cur.fetchall()]
+        # last trained date per muscle group
+        cur.execute(
+            """SELECT e.muscle_group AS mg, MAX(s.date) AS last_date
+               FROM gym_sets st
+               JOIN gym_sessions s ON s.id = st.session_id
+               JOIN gym_exercises e ON e.id = st.exercise_id
+               GROUP BY e.muscle_group""")
+        last = {r["mg"]: str(r["last_date"])[:10] for r in cur.fetchall() if r["last_date"]}
+    today = date.today()
+    out = []
+    for mg in groups:
+        ld = last.get(mg)
+        days = None
+        if ld:
+            try:
+                days = (today - datetime.strptime(ld, "%Y-%m-%d").date()).days
+            except ValueError:
+                days = None
+        out.append({"muscle_group": mg, "last_date": ld, "days_since": days})
+    # trained ones first (fewest days), never-trained at the end
+    out.sort(key=lambda x: (x["days_since"] is None, x["days_since"] if x["days_since"] is not None else 1e9))
+    return out
+
+
+def save_session_notes(session_id: int, notes: str) -> bool:
+    """Persist free-text notes on a session. Returns True if the session exists."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"UPDATE gym_sessions SET notes = {ph} WHERE id = {ph}",
+                    (notes or "", session_id))
+        return (cur.rowcount or 0) > 0
+
+
+def delete_session(session_id: int) -> bool:
+    """Abandon/delete a session and all its sets. Used by "Discard" on an
+    in-progress workout. Returns True if the session existed."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"DELETE FROM gym_sets WHERE session_id = {ph}", (session_id,))
+        cur.execute(f"DELETE FROM gym_sessions WHERE id = {ph}", (session_id,))
+        return (cur.rowcount or 0) > 0
+
+
+def get_active_session() -> dict:
+    """Return today's in-progress session (started, no end_time), with its sets
+    and routine name, so a mid-workout refresh can resume. None if none open."""
+    _ensure_gym_tables()
+    today = date.today().isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT s.*, r.name AS routine_name, r.day_type
+                FROM gym_sessions s
+                LEFT JOIN gym_routines r ON r.id = s.routine_id
+                WHERE s.date = {ph} AND (s.end_time IS NULL OR s.end_time = '')
+                ORDER BY s.id DESC LIMIT 1""",
+            (today,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        session = dict(row)
+    session["sets"] = get_session_sets(session["id"])
+    return session

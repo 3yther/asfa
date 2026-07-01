@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>ASFA // GYM</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="mask-icon" href="{{ url_for('static', filename='favicon.svg') }}" color="#00d9ff">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/gym.css') }}">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/sounds.js') }}" defer></script>
+</head>
+<body class="gym-body">
+<canvas id="starfield-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;"></canvas>
+
+{% include "nav.html" with context %}
+
+<main class="gym-screen">
+  <header class="gym-head">
+    <h1 class="screen-title" data-decode>Iron Log</h1>
+    <p class="screen-sub">Train • Rank up • Overload</p>
+  </header>
+
+  <!-- ── Sub-tab bar ─────────────────────────────────────────────────── -->
+  <nav class="gym-subtabs" role="tablist" aria-label="Gym sections">
+    <button class="gym-subtab active" data-subtab="dashboard" role="tab">📊 Dashboard</button>
+    <button class="gym-subtab" data-subtab="workout" role="tab">🏋️ Workout</button>
+    <button class="gym-subtab" data-subtab="history" role="tab">📅 History</button>
+    <button class="gym-subtab" data-subtab="exercises" role="tab">📖 Exercises</button>
+    <button class="gym-subtab" data-subtab="progress" role="tab">📈 Progress</button>
+  </nav>
+
+  <!-- ══ TAB 1 — DASHBOARD ═════════════════════════════════════════════ -->
+  <section class="gym-panel active" data-panel="dashboard">
+
+    <!-- Stats row -->
+    <div class="stats-grid" id="gym-stats">
+      <div class="stat-card sci-fi-panel skeleton-card"></div>
+      <div class="stat-card sci-fi-panel skeleton-card"></div>
+      <div class="stat-card sci-fi-panel skeleton-card"></div>
+      <div class="stat-card sci-fi-panel skeleton-card"></div>
+    </div>
+
+    <!-- Bodygraph + rank list -->
+    <div class="card sci-fi-panel bodygraph-card">
+      <h3>Muscle Rankings</h3>
+      <div class="bodygraph-wrap">
+        <div class="bodygraph-left" id="bodygraph-svg"><!-- SVG injected by JS --></div>
+        <div class="bodygraph-right" id="rank-list">
+          <div class="skeleton skeleton-row"></div>
+          <div class="skeleton skeleton-row"></div>
+          <div class="skeleton skeleton-row"></div>
+        </div>
+      </div>
+      <div class="bodygraph-tooltip" id="bodygraph-tooltip" hidden></div>
+    </div>
+
+    <div class="dash-two-col">
+      <!-- Muscle recovery -->
+      <div class="card sci-fi-panel">
+        <h3>Muscle Recovery</h3>
+        <div id="muscle-recovery" class="recovery-grid">
+          <div class="skeleton skeleton-row"></div>
+          <div class="skeleton skeleton-row"></div>
+        </div>
+      </div>
+
+      <!-- Quick start -->
+      <div class="card sci-fi-panel">
+        <h3>Quick Start</h3>
+        <div id="quick-start" class="quick-start-grid">
+          <div class="skeleton skeleton-row"></div>
+          <div class="skeleton skeleton-row"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Consistency calendar -->
+    <div class="card sci-fi-panel">
+      <h3>Consistency <span class="muted-sub">last 12 weeks</span></h3>
+      <div id="consistency-calendar" class="consistency-cal">
+        <div class="skeleton skeleton-block"></div>
+      </div>
+    </div>
+
+    <!-- Weekly volume -->
+    <div class="card sci-fi-panel">
+      <h3>Weekly Volume <span class="muted-sub">by muscle group · vs last week</span></h3>
+      <div class="chart-wrap"><canvas id="weekly-volume-chart"></canvas></div>
+      <div id="weekly-volume-empty" class="empty-note" hidden>No volume logged in the last 7 days.</div>
+    </div>
+  </section>
+
+  <!-- ══ TAB 2 — WORKOUT ═══════════════════════════════════════════════ -->
+  <section class="gym-panel" data-panel="workout">
+
+    <!-- Resume banner -->
+    <div id="resume-banner" class="resume-banner sci-fi-panel" hidden>
+      <div class="resume-text">Resume your <b id="resume-name">session</b>? <span id="resume-started" class="muted-sub"></span></div>
+      <div class="resume-actions">
+        <button class="btn btn-primary" id="resume-yes">Resume</button>
+        <button class="btn btn-ghost" id="resume-discard">Discard</button>
+      </div>
+    </div>
+
+    <!-- Routine picker (shown when no active session) -->
+    <div id="workout-routines" class="routine-grid">
+      <div class="skeleton-card sci-fi-panel"></div>
+      <div class="skeleton-card sci-fi-panel"></div>
+      <div class="skeleton-card sci-fi-panel"></div>
+    </div>
+
+    <!-- Active session -->
+    <div id="active-session" hidden>
+      <div class="session-header sci-fi-panel" id="session-header">
+        <div class="sh-left">
+          <div class="sh-routine" id="sh-routine">—</div>
+          <div class="sh-timer" id="sh-timer">00:00</div>
+        </div>
+        <div class="sh-stats">
+          <div class="sh-stat"><span id="sh-volume">0</span><small>kg vol</small></div>
+          <div class="sh-stat"><span id="sh-sets">0</span><small>sets</small></div>
+        </div>
+        <button class="btn btn-finish" id="finish-workout">Finish</button>
+      </div>
+      <div id="exercise-list" class="exercise-list"></div>
+    </div>
+  </section>
+
+  <!-- ══ TAB 3 — HISTORY ═══════════════════════════════════════════════ -->
+  <section class="gym-panel" data-panel="history">
+    <div class="card sci-fi-panel">
+      <div class="cal-head">
+        <button class="btn btn-ghost cal-nav" id="hist-prev">‹</button>
+        <h3 id="hist-month-label">—</h3>
+        <button class="btn btn-ghost cal-nav" id="hist-next">›</button>
+      </div>
+      <div id="history-calendar" class="month-cal"></div>
+    </div>
+    <div class="card sci-fi-panel">
+      <h3>Recent Sessions</h3>
+      <div id="history-list" class="history-list">
+        <div class="skeleton skeleton-row"></div>
+        <div class="skeleton skeleton-row"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ TAB 4 — EXERCISES ═════════════════════════════════════════════ -->
+  <section class="gym-panel" data-panel="exercises">
+    <div class="ex-controls">
+      <input type="search" id="ex-search" class="ex-search" placeholder="🔎 Search exercises…" autocomplete="off">
+      <div class="ex-filters" id="ex-filters"></div>
+    </div>
+    <div id="ex-grid" class="ex-grid">
+      <div class="skeleton-card sci-fi-panel"></div>
+      <div class="skeleton-card sci-fi-panel"></div>
+      <div class="skeleton-card sci-fi-panel"></div>
+    </div>
+  </section>
+
+  <!-- ══ TAB 5 — PROGRESS ══════════════════════════════════════════════ -->
+  <section class="gym-panel" data-panel="progress">
+    <div class="card sci-fi-panel">
+      <h3>Overall Rank</h3>
+      <div id="xp-progress" class="xp-progress">
+        <div class="skeleton skeleton-row"></div>
+      </div>
+    </div>
+
+    <div class="card sci-fi-panel">
+      <h3>Bodyweight <span class="muted-sub" id="bw-change"></span></h3>
+      <div class="chart-wrap" id="bw-wrap"><canvas id="bw-chart"></canvas></div>
+      <form id="bw-form" class="bw-form">
+        <input type="number" id="bw-input" inputmode="decimal" step="0.1" min="20" max="300" placeholder="kg" class="num-input">
+        <button type="submit" class="btn btn-primary">Log</button>
+      </form>
+    </div>
+
+    <div class="card sci-fi-panel">
+      <h3>Exercise Progress</h3>
+      <select id="prog-ex-select" class="prog-select"></select>
+      <div id="prog-ex-stats" class="prog-stats"></div>
+      <div class="chart-wrap" id="prog-wrap"><canvas id="prog-ex-chart"></canvas></div>
+    </div>
+
+    <div class="card sci-fi-panel">
+      <h3>Strength Rankings</h3>
+      <div id="rankings-overview" class="rankings-overview">
+        <div class="skeleton skeleton-row"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ── Floating rest timer ─────────────────────────────────────────────── -->
+<div id="rest-timer" class="rest-timer" hidden>
+  <div class="rt-ring">
+    <svg viewBox="0 0 120 120" class="rt-svg">
+      <circle class="rt-track" cx="60" cy="60" r="52"></circle>
+      <circle class="rt-progress" id="rt-progress" cx="60" cy="60" r="52"></circle>
+    </svg>
+    <div class="rt-count" id="rt-count">1:30</div>
+  </div>
+  <div class="rt-label" id="rt-label">Rest</div>
+  <div class="rt-actions">
+    <button class="btn btn-ghost" id="rt-add">+30s</button>
+    <button class="btn btn-primary" id="rt-skip">Skip</button>
+  </div>
+</div>
+
+<!-- ── Confetti canvas ─────────────────────────────────────────────────── -->
+<canvas id="confetti-canvas" class="confetti-canvas"></canvas>
+
+<!-- ── Video / how-to modal ────────────────────────────────────────────── -->
+<div id="video-modal" class="modal-overlay" hidden>
+  <div class="modal sci-fi-panel" id="video-modal-inner">
+    <button class="modal-close" data-close-modal="video-modal">✕</button>
+    <div id="video-modal-body"><!-- filled by JS --></div>
+  </div>
+</div>
+
+<!-- ── Session summary modal ───────────────────────────────────────────── -->
+<div id="summary-modal" class="modal-overlay" hidden>
+  <div class="modal sci-fi-panel" id="summary-modal-inner">
+    <div id="summary-modal-body"><!-- filled by JS --></div>
+  </div>
+</div>
+
+<!-- ── Exercise swap picker ────────────────────────────────────────────── -->
+<div id="swap-modal" class="modal-overlay" hidden>
+  <div class="modal sci-fi-panel">
+    <button class="modal-close" data-close-modal="swap-modal">✕</button>
+    <h3>Swap exercise</h3>
+    <div id="swap-modal-body"></div>
+  </div>
+</div>
+
+<script>
+  // Add bracket corners to all sci-fi panels (matches other ASFA screens).
+  document.querySelectorAll('.sci-fi-panel').forEach(el => {
+    ['corner-bl', 'corner-br'].forEach(cls => {
+      const div = document.createElement('div');
+      div.className = cls;
+      el.appendChild(div);
+    });
+  });
+</script>
+<script src="{{ url_for('static', filename='js/gym.js') }}" defer></script>
+<script src="/static/js/starfield.js" defer></script>
+</body>
+</html>

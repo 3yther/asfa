@@ -172,6 +172,9 @@ db.init_agent_data()
 # plans invoke actual agent code instead of simulating.
 from services.skill_executor import init_all_skills
 init_all_skills()
+# Gym tracker — create the gym_* tables and seed the exercise library + routines.
+# Standalone; touches no existing tables.
+db.init_gym_data()
 
 
 def _today():
@@ -203,6 +206,11 @@ def approvals():
 @app.route("/system")
 def system():
     return render_template("system.html", active="system")
+
+
+@app.route("/gym")
+def gym():
+    return render_template("gym.html", active="gym", active_tab="gym")
 
 
 @app.route("/plans/<plan_id>")
@@ -348,6 +356,234 @@ def api_log_weight():
     if not 20 < kg < 300:
         return jsonify({"error": "invalid weight"}), 400
     return jsonify({"ok": True, "message": _do_body_weight(kg)})
+
+
+# ── Gym tracker ─────────────────────────────────────────────────────────────────
+# Standalone gym-tracking API (exercise library, routines, logged sessions/sets,
+# PRs, body stats, XP/ranks). Backed by the gym_* tables in database.py. All
+# routes are auth-gated by the global before_request gate.
+
+@app.route("/api/gym/exercises")
+def api_gym_exercises():
+    return jsonify(db.get_all_exercises())
+
+
+@app.route("/api/gym/exercises/<int:exercise_id>")
+def api_gym_exercise(exercise_id):
+    ex = db.get_exercise(exercise_id)
+    if not ex:
+        return jsonify({"error": "exercise not found"}), 404
+    return jsonify(ex)
+
+
+@app.route("/api/gym/exercises/muscle/<group>")
+def api_gym_exercises_by_muscle(group):
+    return jsonify(db.get_exercises_by_muscle(group))
+
+
+@app.route("/api/gym/routines")
+def api_gym_routines():
+    return jsonify(db.get_all_routines())
+
+
+@app.route("/api/gym/routines/<int:routine_id>")
+def api_gym_routine(routine_id):
+    routine = db.get_routine(routine_id)
+    if not routine:
+        return jsonify({"error": "routine not found"}), 404
+    return jsonify(routine)
+
+
+@app.route("/api/gym/sessions/start", methods=["POST"])
+def api_gym_session_start():
+    d = request.get_json(force=True) or {}
+    routine_id = d.get("routine_id")
+    date = d.get("date") or _today()
+    start_time = d.get("start_time") or datetime.now().isoformat()
+    notes = d.get("notes", "")
+    session_id = db.create_session(routine_id, date, start_time, notes)
+    return jsonify({"ok": True, "session_id": session_id,
+                    "session": db.get_session(session_id)})
+
+
+@app.route("/api/gym/sessions/<int:session_id>/end", methods=["POST"])
+def api_gym_session_end(session_id):
+    session = db.get_session(session_id)
+    if not session:
+        return jsonify({"error": "session not found"}), 404
+    d = request.get_json(force=True) or {}
+    end_time = d.get("end_time") or datetime.now().isoformat()
+
+    # Derive totals from the sets actually logged this session.
+    sets = db.get_session_sets(session_id)
+    total_volume = round(sum((s.get("weight_kg") or 0) * (s.get("reps") or 0)
+                             for s in sets), 2)
+    total_sets = len(sets)
+
+    duration = d.get("duration") or d.get("duration_minutes")
+    if duration is None:
+        try:
+            start = datetime.fromisoformat(session.get("start_time"))
+            duration = int((datetime.fromisoformat(end_time) - start).total_seconds() // 60)
+        except (TypeError, ValueError):
+            duration = 0
+
+    # Completion bonus XP + streak update on finishing a workout.
+    bonus = db.add_xp(100, "workout completed")
+    streak = db.update_streak(session.get("date"))
+    session_xp = int(session.get("xp_earned") or 0) + 100
+
+    db.end_session(session_id, end_time, duration, total_volume, total_sets, session_xp)
+    return jsonify({"ok": True, "session": db.get_session(session_id),
+                    "total_volume_kg": total_volume, "total_sets": total_sets,
+                    "duration_minutes": duration, "streak": streak,
+                    "xp": bonus})
+
+
+@app.route("/api/gym/sessions")
+def api_gym_sessions():
+    limit = int(request.args.get("limit", 10))
+    return jsonify(db.get_recent_sessions(limit))
+
+
+@app.route("/api/gym/sessions/calendar")
+def api_gym_sessions_calendar():
+    months = int(request.args.get("months", 3))
+    return jsonify(db.get_streak_calendar(months))
+
+
+@app.route("/api/gym/sessions/<int:session_id>")
+def api_gym_session(session_id):
+    session = db.get_session(session_id)
+    if not session:
+        return jsonify({"error": "session not found"}), 404
+    session["sets"] = db.get_session_sets(session_id)
+    return jsonify(session)
+
+
+@app.route("/api/gym/sets", methods=["POST"])
+def api_gym_log_set():
+    d = request.get_json(force=True) or {}
+    required = ("session_id", "exercise_id", "set_number")
+    if any(d.get(k) is None for k in required):
+        return jsonify({"error": "session_id, exercise_id and set_number are required"}), 400
+    result = db.log_set(
+        d["session_id"], d["exercise_id"], d["set_number"],
+        d.get("set_type", "working"), d.get("weight_kg", 0), d.get("reps", 0))
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/gym/sets/session/<int:session_id>")
+def api_gym_session_sets(session_id):
+    return jsonify(db.get_session_sets(session_id))
+
+
+@app.route("/api/gym/sets/<int:set_id>", methods=["DELETE"])
+def api_gym_delete_set(set_id):
+    ok = db.delete_set(set_id)
+    if not ok:
+        return jsonify({"error": "set not found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/gym/exercises/<int:exercise_id>/last-session")
+def api_gym_last_session(exercise_id):
+    return jsonify(db.get_last_session_for_exercise(exercise_id) or {})
+
+
+@app.route("/api/gym/volume/weekly")
+def api_gym_weekly_volume():
+    return jsonify(db.get_weekly_volume())
+
+
+@app.route("/api/gym/muscle-recovery")
+def api_gym_muscle_recovery():
+    return jsonify(db.get_muscle_recovery())
+
+
+@app.route("/api/gym/sessions/active")
+def api_gym_active_session():
+    return jsonify(db.get_active_session() or {})
+
+
+@app.route("/api/gym/sessions/<int:session_id>", methods=["DELETE"])
+def api_gym_delete_session(session_id):
+    ok = db.delete_session(session_id)
+    if not ok:
+        return jsonify({"error": "session not found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/gym/sessions/<int:session_id>/notes", methods=["POST"])
+def api_gym_session_notes(session_id):
+    d = request.get_json(force=True) or {}
+    ok = db.save_session_notes(session_id, d.get("notes", ""))
+    if not ok:
+        return jsonify({"error": "session not found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/gym/prs")
+def api_gym_prs():
+    return jsonify(db.get_all_prs())
+
+
+@app.route("/api/gym/prs/<int:exercise_id>")
+def api_gym_pr(exercise_id):
+    pr = db.get_pr(exercise_id)
+    if not pr:
+        return jsonify({"error": "no PR for this exercise"}), 404
+    return jsonify(pr)
+
+
+@app.route("/api/gym/history/<int:exercise_id>")
+def api_gym_history(exercise_id):
+    limit = int(request.args.get("limit", 20))
+    return jsonify(db.get_exercise_history(exercise_id, limit))
+
+
+@app.route("/api/gym/body-stats", methods=["POST"])
+def api_gym_log_body_stat():
+    d = request.get_json(force=True) or {}
+    kg = float(d.get("weight_kg", 0) or 0)
+    if not 20 < kg < 300:
+        return jsonify({"error": "invalid weight"}), 400
+    date = d.get("date") or _today()
+    db.log_body_stat(date, kg, d.get("notes", ""))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/gym/body-stats")
+def api_gym_body_stats():
+    limit = int(request.args.get("limit", 30))
+    return jsonify(db.get_body_stats(limit))
+
+
+@app.route("/api/gym/ranks")
+def api_gym_ranks():
+    return jsonify(db.get_muscle_ranks())
+
+
+@app.route("/api/gym/xp")
+def api_gym_xp():
+    xp = db.get_xp()
+    xp["streak_days"] = db.get_streak()
+    return jsonify(xp)
+
+
+@app.route("/api/gym/streak")
+def api_gym_streak():
+    return jsonify({"streak": db.get_streak()})
+
+
+# The gym tracker is chatty by nature — a single logged workout fires one request
+# per set (often 30+), plus dashboard/history reads. That easily exceeds the coarse
+# app-wide "50/hour" abuse guard and would 429 the user mid-workout. These routes
+# are all behind the session auth gate, so skip rate limiting for them (auth already
+# gates them; the tighter login limit and other routes are unaffected).
+@limiter.request_filter
+def _exempt_gym_api():
+    return request.path.startswith("/api/gym")
 
 
 # ── Money ──────────────────────────────────────────────────────────────────────
