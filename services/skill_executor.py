@@ -142,6 +142,88 @@ def init_scout_skills():
 
 
 # ============================================================================
+# IMPLEMENTED SKILLS FOR OTHER AGENTS (Phase 6+)
+# ============================================================================
+
+def summary_summarize_day(params: dict) -> dict:
+    from services.scheduler import _build_daily_summary
+    try:
+        summary = _build_daily_summary()
+        return {
+            "summary": summary,
+            "chars": len(summary),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        return {"summary": "", "error": str(e)}
+
+
+def supplement_log_supplement(params: dict) -> dict:
+    import database as db
+    try:
+        name = params.get("name", "unknown")
+        dose = params.get("dose", "")
+        # log_supplement stores (supplement_name, taken_at); there is no dose
+        # column, so persist only the name and echo dose back informationally.
+        db.log_supplement(name)
+        return {
+            "logged": True,
+            "name": name,
+            "dose": dose,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        return {"logged": False, "error": str(e)}
+
+
+def weekly_review_generate_review(params: dict) -> dict:
+    from services.ai import generate_weekly_review
+    try:
+        review = generate_weekly_review()
+        return {
+            "review": review,
+            "chars": len(review) if review else 0,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        return {"review": "", "error": str(e)}
+
+
+def reflection_prompt_reflection(params: dict) -> dict:
+    from services.scheduler import reflection_prompt
+    try:
+        reflection_prompt()
+        return {
+            "prompted": True,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        return {"prompted": False, "error": str(e)}
+
+
+def insights_generate_insights(params: dict) -> dict:
+    from services.insights import generate_insights, gather_metrics
+    try:
+        metrics = gather_metrics()
+        insights = generate_insights(metrics)
+        return {
+            "insights": insights,
+            "count": len(insights) if insights else 0,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        return {"insights": [], "error": str(e)}
+
+
+def init_implemented_skills():
+    register_skill_impl("summary", "summarize_day", summary_summarize_day)
+    register_skill_impl("supplement", "log_supplement", supplement_log_supplement)
+    register_skill_impl("weekly_review", "generate_review", weekly_review_generate_review)
+    register_skill_impl("reflection", "prompt_reflection", reflection_prompt_reflection)
+    register_skill_impl("insights", "generate_insights", insights_generate_insights)
+
+
+# ============================================================================
 # STUB SKILLS FOR OTHER AGENTS (Phase 6+)
 # ============================================================================
 
@@ -163,11 +245,6 @@ def init_stub_skills():
         ("health", "check_endpoint"),
         ("obsidian", "sync_vault"),
         ("backup", "backup_db"),
-        ("summary", "summarize_day"),
-        ("supplement", "log_supplement"),
-        ("weekly_review", "generate_review"),
-        ("reflection", "prompt_reflection"),
-        ("insights", "generate_insights"),
     ]
     for agent_id, skill_name in stubs:
         register_skill_impl(agent_id, skill_name, stub_skill)
@@ -176,5 +253,6 @@ def init_stub_skills():
 def init_all_skills():
     """Initialize all skill implementations at startup."""
     init_scout_skills()
+    init_implemented_skills()
     init_stub_skills()
     logger.info("Skill executor ready with %d skills", len(SKILL_IMPLEMENTATIONS))

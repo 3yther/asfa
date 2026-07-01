@@ -309,6 +309,21 @@ def get_spending(days: int = 7):
         return [dict(r) for r in cur.fetchall()]
 
 
+def get_workouts(days: int = 7) -> list:
+    """Get workout log entries for the last N days (most recent first)."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "SELECT * FROM workouts WHERE CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '%s days' ORDER BY date DESC",
+                (days,))
+        else:
+            cur.execute(
+                "SELECT * FROM workouts WHERE date >= date('now', ?) ORDER BY date DESC",
+                (f"-{days} days",))
+        return [dict(r) for r in cur.fetchall()]
+
+
 # ── Memory helpers ─────────────────────────────────────────────────────────────
 
 def save_memory(content, tags=""):
