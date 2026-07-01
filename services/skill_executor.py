@@ -154,8 +154,8 @@ def summary_summarize_day(params: dict) -> dict:
             "chars": len(summary),
             "timestamp": datetime.utcnow().isoformat(),
         }
-    except Exception as e:
-        return {"summary": "", "error": str(e)}
+    except Exception:
+        raise
 
 
 def supplement_log_supplement(params: dict) -> dict:
