@@ -421,3 +421,52 @@ def analyse_photo(image_base64: str, mime_type: str = "image/jpeg") -> str:
         return resp.content[0].text.strip()
     except Exception as e:
         return f"Vision error: {e}"
+
+
+GYM_COACH_SYSTEM = (
+    "You are a knowledgeable, concise gym coach. Give practical, safe advice in "
+    "1-3 sentences. The user is 17, ~6 months training, 79kg, aiming for body "
+    "recomposition. Never recommend anything unsafe for a novice lifter. If asked "
+    "for form help and a how-to video exists for the exercise, mention they can "
+    "watch it in their exercise library."
+)
+
+
+def gym_coach_reply(message: str, context: dict = None) -> str:
+    """Answer a gym-trainer question with the Iron Log coaching persona. Fails
+    gracefully (friendly message) if no API key is configured. ``context`` is a
+    dict describing the current routine, exercise, PR, profile and readiness so
+    the model can give grounded advice; its youtube_url (if present) lets the
+    coach point the user at the in-app how-to video."""
+    c = _get_client()
+    if not c:
+        return "AI Trainer unavailable — no API key configured."
+
+    context = context or {}
+    lines = []
+    for label, key in (
+        ("Current routine", "routine"),
+        ("Current/last exercise", "exercise"),
+        ("That exercise's PR", "pr"),
+        ("How-to video available", "youtube_url"),
+        ("User profile", "profile"),
+        ("Today's readiness check", "readiness"),
+    ):
+        val = context.get(key)
+        if val:
+            lines.append(f"{label}: {val}")
+    context_block = "\n".join(lines) if lines else "No extra context provided."
+
+    try:
+        resp = c.messages.create(
+            model=MODEL,
+            max_tokens=300,
+            system=GYM_COACH_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": f"Context:\n{context_block}\n\nQuestion: {message}",
+            }],
+        )
+        return resp.content[0].text.strip()
+    except Exception as e:
+        return f"AI Trainer error: {e}"

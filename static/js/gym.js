@@ -41,6 +41,38 @@ const RANK_ORDER  = ["Bronze", "Silver", "Gold", "Platinum", "Diamond"];
 const RANK_COLORS = { Bronze:"#cd7f32", Silver:"#c0c0c0", Gold:"#ffd700", Platinum:"#e5e4e2", Diamond:"#00d9ff" };
 const RANK_ICON   = { Bronze:"🥉", Silver:"🥈", Gold:"🥇", Platinum:"💎", Diamond:"💠" };
 const UNRANKED    = "#1a1a2e";
+
+// Our muscle groups → body-highlighter MuscleType slugs (a group may map to
+// several library regions). Reverse map turns a tapped slug back into a group.
+const MUSCLE_TO_SLUGS = {
+  chest: ["chest"], back: ["upper-back", "lower-back"],
+  shoulders: ["front-deltoids", "back-deltoids"], biceps: ["biceps"],
+  triceps: ["triceps"], quads: ["quadriceps"], hamstrings: ["hamstring"],
+  calves: ["calves"], core: ["abs"],
+};
+const SLUG_TO_MUSCLE = {};
+Object.entries(MUSCLE_TO_SLUGS).forEach(([g, slugs]) => slugs.forEach(s => SLUG_TO_MUSCLE[s] = g));
+
+const LS_TARGETS  = "gym_routine_targets";      // { routineId: minutes }
+const LS_AI       = "gym_ai_trainer_enabled";   // "1" | "0" (default off)
+const LS_DELOAD   = "gym_deload_dismissed";     // ISO-week key of last dismissal
+const CARDIO_DEFAULT_MIN = 30;
+
+function isCardioEx(ex) {
+  if (!ex) return false;
+  return ex.is_cardio === true || ex.exercise_type === "cardio" || ex.muscle_group === "cardio";
+}
+function isoWeekKey(d) {
+  d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const wk = Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+  return d.getUTCFullYear() + "-W" + wk;
+}
+function loadTargets() { try { return JSON.parse(localStorage.getItem(LS_TARGETS) || "{}"); } catch (e) { return {}; } }
+function saveTarget(rid, mins) { const t = loadTargets(); t[rid] = mins; localStorage.setItem(LS_TARGETS, JSON.stringify(t)); }
+function aiEnabled() { return localStorage.getItem(LS_AI) === "1"; }
 const CYAN = "#00d9ff", GOLD = "#ffd700", VIOLET = "#7f77dd";
 const ROTATION = ["push", "pull", "legs", "upper", "lower"];
 const PLATES = [25, 20, 15, 10, 5, 2.5, 1.25];
@@ -113,11 +145,13 @@ $$(".gym-subtab").forEach(b => b.addEventListener("click", () => switchTab(b.dat
 /* ══ 2. DASHBOARD ═════════════════════════════════════════════════════════ */
 async function loadDashboard() {
   try {
-    const [xp, ranks, prs, sessions, recovery, weekly, cal, body] = await Promise.all([
+    const [xp, ranks, prs, sessions, recovery, weekly, cal, body, deload, restDays] = await Promise.all([
       apiGet(`${API}/xp`), apiGet(`${API}/ranks`), apiGet(`${API}/prs`),
       apiGet(`${API}/sessions?limit=60`), apiGet(`${API}/muscle-recovery`),
       apiGet(`${API}/volume/weekly`), apiGet(`${API}/sessions/calendar?months=3`),
       apiGet(`${API}/body-stats?limit=1`),
+      apiGet(`${API}/deload-check`).catch(() => ({})),
+      apiGet(`${API}/rest-days`).catch(() => []),
     ]);
     PR_BY_EX = {}; prs.forEach(p => PR_BY_EX[p.exercise_id] = p);
     renderStats(xp, sessions, body);
@@ -127,7 +161,42 @@ async function loadDashboard() {
     renderQuickStart(sessions);
     renderCalendar(cal, sessions);
     renderWeeklyVolume(weekly);
+    renderDeloadBanner(deload);
+    renderRestDayPrompt(sessions, restDays);
   } catch (e) { console.error("dashboard load failed", e); toast("Could not load dashboard"); }
+}
+
+/* ── Deload banner (dismissible, per ISO week) ── */
+function renderDeloadBanner(deload) {
+  const banner = $("#deload-banner");
+  if (!banner) return;
+  const dismissedWeek = localStorage.getItem(LS_DELOAD);
+  const thisWeek = isoWeekKey(new Date());
+  if (deload && deload.deload_recommended && dismissedWeek !== thisWeek) {
+    banner.hidden = false;
+    $("#deload-dismiss").onclick = () => { localStorage.setItem(LS_DELOAD, thisWeek); banner.hidden = true; };
+  } else {
+    banner.hidden = true;
+  }
+}
+
+/* ── Rest-day prompt (only when nothing logged today) ── */
+function renderRestDayPrompt(sessions, restDays) {
+  const prompt = $("#rest-day-prompt");
+  if (!prompt) return;
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const workedToday = (sessions || []).some(s => String(s.date).slice(0, 10) === todayStr);
+  const restedToday = (restDays || []).some(d => String(d).slice(0, 10) === todayStr);
+  if (workedToday || restedToday) { prompt.hidden = true; return; }
+  prompt.hidden = false;
+  $("#mark-rest-day").onclick = async () => {
+    try {
+      await apiPost(`${API}/rest-day`, {});
+      prompt.hidden = true;
+      toast("🌙 Rest day logged — streak kept alive");
+      loadDashboard();
+    } catch (e) { toast("Could not mark rest day"); }
+  };
 }
 
 function startOfWeekCount(sessions) {
@@ -242,10 +311,12 @@ function renderCalendar(cal, sessions) {
       const dt = new Date(start); dt.setDate(start.getDate() + w * 7 + d);
       const key = dt.toISOString().slice(0, 10);
       const dot = el("div", "cc-dot");
+      const status = cal[key];
       if (key > todayStr) dot.classList.add("future");
-      if (cal[key] || byDate[key]) dot.classList.add("worked");
+      if (status === "workout" || byDate[key]) dot.classList.add("worked");
+      else if (status === "rest") { dot.classList.add("rest"); dot.textContent = "🌙"; }
       if (key === todayStr) dot.classList.add("today");
-      dot.title = `${key}${byDate[key] ? " · " + byDate[key] : (cal[key] ? " · Workout" : "")}`;
+      dot.title = `${key}${byDate[key] ? " · " + byDate[key] : (status === "workout" ? " · Workout" : (status === "rest" ? " · Rest day" : ""))}`;
       col.appendChild(dot);
     }
     wrap.appendChild(col);
@@ -278,80 +349,61 @@ function renderWeeklyVolume(weekly) {
   });
 }
 
-/* ══ 3. BODYGRAPH SVG ═════════════════════════════════════════════════════ */
-function bodySVG() {
-  // Front figure (left) + small rear inset (right). Muscle regions carry
-  // id="muscle-<group>" and data-group so JS can colour + tooltip them.
-  return `
-<svg viewBox="0 0 300 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Muscle rankings body map">
-  <!-- FRONT -->
-  <g>
-    <text x="95" y="14" class="body-label" text-anchor="middle">FRONT</text>
-    <circle cx="95" cy="34" r="15" class="body-outline"/>
-    <path class="body-outline" d="M78 52 h34 l6 10 v0 h10 l6 40 -8 4 -8 -34 v40 l6 60 -4 60 h-10 l-4 -58 -6 0 -4 58 h-10 l-4 -60 6 -60 v-40 l-8 34 -8 -4 6 -40 h10 z"/>
-    <!-- shoulders -->
-    <ellipse id="muscle-shoulders" class="muscle-region" data-group="shoulders" cx="72" cy="60" rx="11" ry="9"/>
-    <ellipse class="muscle-region" data-group="shoulders" cx="118" cy="60" rx="11" ry="9" data-mirror="1"/>
-    <!-- chest -->
-    <path id="muscle-chest" class="muscle-region" data-group="chest" d="M79 58 q16 -4 16 8 v14 q-10 5 -18 0 z"/>
-    <path class="muscle-region" data-group="chest" d="M111 58 q-16 -4 -16 8 v14 q10 5 18 0 z" data-mirror="1"/>
-    <!-- biceps -->
-    <ellipse id="muscle-biceps" class="muscle-region" data-group="biceps" cx="64" cy="84" rx="7" ry="14"/>
-    <ellipse class="muscle-region" data-group="biceps" cx="126" cy="84" rx="7" ry="14" data-mirror="1"/>
-    <!-- abs / core -->
-    <rect id="muscle-core" class="muscle-region" data-group="core" x="83" y="82" width="24" height="34" rx="6"/>
-    <!-- quads -->
-    <path id="muscle-quads" class="muscle-region" data-group="quads" d="M80 124 q7 -4 13 0 l-2 46 q-6 3 -10 0 z"/>
-    <path class="muscle-region" data-group="quads" d="M110 124 q-7 -4 -13 0 l2 46 q6 3 10 0 z" data-mirror="1"/>
-    <!-- calves -->
-    <ellipse id="muscle-calves" class="muscle-region" data-group="calves" cx="86" cy="196" rx="7" ry="18"/>
-    <ellipse class="muscle-region" data-group="calves" cx="104" cy="196" rx="7" ry="18" data-mirror="1"/>
-  </g>
-  <!-- REAR inset -->
-  <g transform="translate(196,60) scale(0.62)">
-    <text x="60" y="-70" class="body-label" text-anchor="middle">BACK</text>
-    <circle cx="60" cy="-40" r="15" class="body-outline"/>
-    <path class="body-outline" d="M43 -22 h34 l6 10 h10 l6 40 -8 4 -8 -34 v40 l6 60 -4 60 h-10 l-4 -58 -6 0 -4 58 h-10 l-4 -60 6 -60 v-40 l-8 34 -8 -4 6 -40 h10 z"/>
-    <!-- back (lats/upper) -->
-    <path id="muscle-back" class="muscle-region" data-group="back" d="M45 -14 h30 l6 44 q-21 8 -42 0 z"/>
-    <!-- triceps -->
-    <ellipse id="muscle-triceps" class="muscle-region" data-group="triceps" cx="30" cy="12" rx="7" ry="15"/>
-    <ellipse class="muscle-region" data-group="triceps" cx="90" cy="12" rx="7" ry="15" data-mirror="1"/>
-    <!-- hamstrings -->
-    <path id="muscle-hamstrings" class="muscle-region" data-group="hamstrings" d="M45 54 q7 -4 13 0 l-2 46 q-6 3 -10 0 z"/>
-    <path class="muscle-region" data-group="hamstrings" d="M75 54 q-7 -4 -13 0 l2 46 q6 3 10 0 z" data-mirror="1"/>
-  </g>
-</svg>`;
+/* ══ 3. BODYGRAPH (body-highlighter, front + back) ═════════════════════════ */
+function jumpToExercises(group) {
+  exFilter = group.charAt(0).toUpperCase() + group.slice(1);
+  switchTab("exercises");
+  $$(".filter-pill").forEach(x => x.classList.toggle("active", x.dataset.f === exFilter));
+  renderExGrid();
 }
+
 function renderBodygraph(ranks, prs) {
-  const wrap = $("#bodygraph-svg");
-  wrap.innerHTML = bodySVG();
+  const front = $("#bodygraph-front"), back = $("#bodygraph-back");
+  if (!window.BodyHighlighter || !front || !back) return;
   const rankMap = {}; ranks.forEach(r => rankMap[r.muscle_group] = r);
   const best = bestLiftByMuscle(prs);
+  // colour each library slug by the rank of the group it belongs to
+  const colors = {};
+  Object.entries(MUSCLE_TO_SLUGS).forEach(([group, slugs]) => {
+    const rk = rankMap[group];
+    const color = rk ? (RANK_COLORS[rk.current_rank] || UNRANKED) : UNRANKED;
+    slugs.forEach(s => colors[s] = color);
+  });
+  const onClick = (slug) => { const g = SLUG_TO_MUSCLE[slug]; if (g) jumpToExercises(g); };
+  BodyHighlighter.render(front, { view: "anterior",  colors, defaultColor: UNRANKED, onClick });
+  BodyHighlighter.render(back,  { view: "posterior", colors, defaultColor: UNRANKED, onClick });
+  attachBodygraphTooltips([front, back], rankMap, best);
+}
+
+function attachBodygraphTooltips(holders, rankMap, best) {
   const tooltip = $("#bodygraph-tooltip");
-  $$(".muscle-region", wrap).forEach(region => {
-    const g = region.dataset.group;
-    const rk = rankMap[g];
-    const rank = rk ? rk.current_rank : null;
-    region.setAttribute("fill", rank ? RANK_COLORS[rank] : UNRANKED);
-    region.addEventListener("mousemove", (e) => {
-      const liftTxt = best[g] ? `${best[g].exercise_name} — ${fmtKg(best[g].weight_kg)}kg × ${best[g].reps}` : "no lift yet";
-      const color = rank ? RANK_COLORS[rank] : "#8aa";
-      tooltip.innerHTML = `<div class="tt-rank" style="color:${color}">${esc(g)} · ${rank ? (RANK_ICON[rank]+" "+rank) : "Unranked"}</div>
-        <div class="tt-lift">${esc(liftTxt)}</div>`;
-      tooltip.hidden = false;
-      const pad = 14;
-      let x = e.clientX + pad, y = e.clientY + pad;
-      if (x + 200 > window.innerWidth) x = e.clientX - 200 - pad;
-      tooltip.style.left = x + "px"; tooltip.style.top = y + "px";
+  holders.forEach(holder => {
+    $$(".bh-muscle", holder).forEach(poly => {
+      const slug = poly.getAttribute("data-muscle");
+      const group = SLUG_TO_MUSCLE[slug];
+      poly.addEventListener("mousemove", (e) => {
+        if (!group) { tooltip.hidden = true; return; }
+        const rk = rankMap[group]; const rank = rk ? rk.current_rank : null;
+        const b = best[group];
+        const liftTxt = b ? `${b.exercise_name} — ${fmtKg(b.weight_kg)}kg × ${b.reps}` : "no lift yet";
+        const color = rank ? RANK_COLORS[rank] : "#8aa";
+        tooltip.innerHTML = `<div class="tt-rank" style="color:${color}">${esc(group)} · ${rank ? (RANK_ICON[rank]+" "+rank) : "Unranked"}</div>
+          <div class="tt-lift">${esc(liftTxt)} · tap to see exercises</div>`;
+        tooltip.hidden = false;
+        const pad = 14; let x = e.clientX + pad, y = e.clientY + pad;
+        if (x + 200 > window.innerWidth) x = e.clientX - 200 - pad;
+        tooltip.style.left = x + "px"; tooltip.style.top = y + "px";
+      });
+      poly.addEventListener("mouseleave", () => { tooltip.hidden = true; });
     });
-    region.addEventListener("mouseleave", () => { tooltip.hidden = true; });
   });
 }
+
 
 /* ══ 4. WORKOUT ENGINE ════════════════════════════════════════════════════ */
 const LS_KEY = "gym_active_session";
 let S = null;          // active session state object
+let CURRENT_EX_ID = null;   // last exercise interacted with (AI-trainer context)
 
 function saveLS() { if (S) localStorage.setItem(LS_KEY, JSON.stringify(S)); else localStorage.removeItem(LS_KEY); }
 function clearSession() { S = null; localStorage.removeItem(LS_KEY); stopRestTimer(); stopSessionTimer(); }
@@ -392,19 +444,39 @@ function renderRoutinePicker() {
     ROUTINES.forEach(r => {
       getRoutineFull(r.id).then(full => {
         const exCount = (full.exercises || []).length;
-        const totalSets = (full.exercises || []).reduce((a, e) => a + (e.sets || 0), 0);
-        const mins = Math.round(totalSets * 2.5);
+        const targets = loadTargets();
+        const target = targets[r.id] || estimateRoutineMinutes(full);
         const up = r.day_type === nextType;
         const card = el("div", "routine-card sci-fi-panel" + (up ? " up-next" : ""));
         card.innerHTML = `${up ? '<span class="rc-badge">⭐ UP NEXT</span>' : ""}
           <div class="rc-name">${esc(r.name)}</div>
           <div class="rc-desc">${esc(r.description || "")}</div>
-          <div class="rc-meta"><span><b>${exCount}</b> exercises</span><span>~<b>${mins}</b> min</span></div>`;
+          <div class="rc-meta"><span><b>${exCount}</b> exercises</span>
+            <span class="rc-duration" data-rid="${r.id}">target
+              <button class="dur-step rc-dur-minus" aria-label="Decrease">−</button>
+              <b class="rc-dur-val">${target}</b><span class="dur-unit">min</span>
+              <button class="dur-step rc-dur-plus" aria-label="Increase">+</button>
+            </span></div>`;
         card.addEventListener("click", () => startRoutine(r.id));
+        // duration steppers must not start the workout
+        const dwrap = card.querySelector(".rc-duration");
+        const valEl = dwrap.querySelector(".rc-dur-val");
+        const bump = (delta, e) => {
+          e.stopPropagation();
+          let v = Math.max(5, Math.min(240, (parseInt(valEl.textContent, 10) || target) + delta));
+          valEl.textContent = v; saveTarget(r.id, v);
+        };
+        dwrap.querySelector(".rc-dur-minus").addEventListener("click", (e) => bump(-5, e));
+        dwrap.querySelector(".rc-dur-plus").addEventListener("click", (e) => bump(5, e));
         corners(card); wrap.appendChild(card);
       });
     });
   });
+}
+
+function estimateRoutineMinutes(full) {
+  const totalSets = (full.exercises || []).reduce((a, e) => a + (e.sets || 0), 0);
+  return Math.max(5, Math.round(totalSets * 2.5));
 }
 
 async function startRoutine(routineId) {
@@ -414,9 +486,11 @@ async function startRoutine(routineId) {
   const routine = await getRoutineFull(routineId);
   const startTime = new Date().toISOString();
   const res = await apiPost(`${API}/sessions/start`, { routine_id: routineId, start_time: startTime });
+  const targets = loadTargets();
+  const target = targets[routineId] || estimateRoutineMinutes(routine);
   S = {
     id: res.session_id, routineId, routineName: routine.name, dayType: routine.day_type,
-    startTime, exercises: routine.exercises.map(rex => buildExState(rex)),
+    startTime, targetDuration: target, exercises: routine.exercises.map(rex => buildExState(rex)),
   };
   saveLS();
   switchTab("workout");
@@ -450,9 +524,11 @@ async function hydrateLastSession(ex) {
 async function resumeSession(active) {
   $("#resume-banner").hidden = true;
   const routine = await getRoutineFull(active.routine_id);
+  const targets = loadTargets();
   S = {
     id: active.id, routineId: active.routine_id, routineName: active.routine_name || routine.name,
     dayType: active.day_type || routine.day_type, startTime: active.start_time,
+    targetDuration: targets[active.routine_id] || estimateRoutineMinutes(routine),
     exercises: routine.exercises.map(rex => buildExState(rex)),
   };
   // merge already-logged sets from server
@@ -491,11 +567,34 @@ function renderActiveSession() {
   $("#resume-banner").hidden = true;
   const wrap = $("#active-session"); wrap.hidden = false;
   $("#sh-routine").textContent = S.routineName;
+  const durInput = $("#sh-dur-input");
+  if (durInput) durInput.value = S.targetDuration || estimateRoutineMinutes({ exercises: S.exercises.map(e => ({ sets: e.plannedSets })) });
   const list = $("#exercise-list"); list.innerHTML = "";
   S.exercises.forEach(ex => list.appendChild(buildExerciseCard(ex)));
   updateSessionTotals();
   startSessionTimer();
 }
+
+/* ── Session target-duration stepper (header) ── */
+function adjustSessionTarget(delta) {
+  const input = $("#sh-dur-input"); if (!input) return;
+  let v = parseInt(input.value, 10); if (isNaN(v)) v = 60;
+  v = Math.max(5, Math.min(240, v + delta));
+  input.value = v; commitSessionTarget();
+}
+function commitSessionTarget() {
+  const input = $("#sh-dur-input"); if (!input || !S) return;
+  let v = parseInt(input.value, 10); if (isNaN(v) || v < 5) v = 5; if (v > 240) v = 240;
+  input.value = v; S.targetDuration = v;
+  if (S.routineId != null) saveTarget(S.routineId, v);
+  saveLS();
+}
+(function wireSessionTarget() {
+  const minus = $("#sh-dur-minus"), plus = $("#sh-dur-plus"), input = $("#sh-dur-input");
+  if (minus) minus.addEventListener("click", () => adjustSessionTarget(-5));
+  if (plus)  plus.addEventListener("click", () => adjustSessionTarget(5));
+  if (input) input.addEventListener("change", commitSessionTarget);
+})();
 
 /* ── Exercise card ── */
 function overloadHint(ex) {
@@ -506,44 +605,92 @@ function overloadHint(ex) {
 }
 function buildExerciseCard(ex) {
   const card = el("div", "exercise-card sci-fi-panel"); card.dataset.ex = ex.exerciseId;
-  const barbell = (ex.equipment === "barbell");
-  const pr = ex._pr;   // set later async
+  const cardio = isCardioEx(ex);
+  const addLabel = cardio ? "+ Add Bout" : "+ Add Set";
   card.innerHTML = `
     <div class="ec-head">
       <div class="ec-title">
         <div class="ec-name">${esc(ex.name)}
-          <button class="ec-icon-btn warmup-btn" title="Warmup calculator">🔥</button>
+          ${cardio ? "" : '<button class="ec-icon-btn warmup-btn" title="Warmup calculator">🔥</button>'}
         </div>
-        <div class="ec-muscle">${esc(ex.muscle_group)} · ${esc(ex.equipment||"")}</div>
+        <div class="ec-muscle">${esc(ex.muscle_group)} · ${esc(ex.equipment||(cardio?"cardio":""))}</div>
       </div>
       <div class="ec-actions">
-        <button class="ec-icon-btn swap-btn" title="Swap exercise">⇄</button>
+        ${cardio ? "" : '<button class="ec-icon-btn swap-btn" title="Swap exercise">⇄</button>'}
         <button class="ec-icon-btn watch-btn" title="Watch">▶</button>
+        <button class="ec-icon-btn remove-ex-btn" title="Remove from session">✕</button>
       </div>
     </div>
     <div class="ec-rankline"></div>
     <div class="ec-lasttime-slot"></div>
     <div class="ec-overload-slot"></div>
     <div class="set-rows"></div>
-    <button class="btn add-set-btn">+ Add Set</button>`;
+    <button class="btn add-set-btn">${addLabel}</button>`;
   corners(card);
   // wire header buttons
-  card.querySelector(".warmup-btn").addEventListener("click", (e) => openWarmup(e.currentTarget, ex));
-  card.querySelector(".swap-btn").addEventListener("click", () => openSwap(ex));
+  const warmupBtn = card.querySelector(".warmup-btn");
+  if (warmupBtn) warmupBtn.addEventListener("click", (e) => openWarmup(e.currentTarget, ex));
+  const swapBtn = card.querySelector(".swap-btn");
+  if (swapBtn) swapBtn.addEventListener("click", () => openSwap(ex));
   card.querySelector(".watch-btn").addEventListener("click", () => openVideo(EX_BY_ID[ex.exerciseId] || ex));
+  card.querySelector(".remove-ex-btn").addEventListener("click", () => removeExercise(ex));
   card.querySelector(".add-set-btn").addEventListener("click", () => { ex.rowCount++; renderSetRows(ex, card); });
   renderSetRows(ex, card);
   if (ex._pr === undefined) ex._pr = PR_BY_EX[ex.exerciseId] || null;
   refreshExtras(ex, card);
   return card;
 }
+
+/* ── Remove exercise from the current session (session-only) ── */
+async function removeExercise(ex) {
+  if (!S) return;
+  const n = ex.loggedSets.length;
+  const msg = n
+    ? `Remove ${ex.name} from this session? Its ${n} logged set${n > 1 ? "s" : ""} will be deleted. Sets for other exercises are kept.`
+    : `Remove ${ex.name} from this session?`;
+  if (!confirm(msg)) return;
+  // delete this exercise's logged sets from the server (others untouched)
+  for (const s of ex.loggedSets) {
+    if (s.setId) { try { await apiDel(`${API}/sets/${s.setId}`); } catch (e) {} }
+  }
+  const idx = S.exercises.indexOf(ex);
+  if (idx >= 0) S.exercises.splice(idx, 1);
+  saveLS();
+  renderActiveSession();
+  updateSessionTotals();
+  toast(`Removed ${ex.name}`);
+}
+
+/* ── Add an exercise to the current session (session-only, not the template) ── */
+function addExerciseToSession(lib) {
+  if (!S) return;
+  if (S.exercises.some(e => e.exerciseId === lib.id)) { toast("Already in this session"); return; }
+  const st = buildExState({
+    routine_exercise_id: null, exercise_id: lib.id, name: lib.name,
+    muscle_group: lib.muscle_group, equipment: lib.equipment,
+    exercise_type: lib.exercise_type, is_cardio: lib.exercise_type === "cardio",
+    rep_min: 8, rep_max: 12, rest_seconds: 90, sets: isCardioEx(lib) ? 1 : 3,
+    rank_bronze: lib.rank_bronze, rank_silver: lib.rank_silver, rank_gold: lib.rank_gold,
+    rank_platinum: lib.rank_platinum, rank_diamond: lib.rank_diamond,
+  });
+  S.exercises.push(st);
+  saveLS();
+  renderActiveSession();
+  hydrateLastSession(st);
+  const card = $(`.exercise-card[data-ex="${lib.id}"]`);
+  if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+  toast(`Added ${lib.name}`);
+}
 function refreshExerciseCard(ex) {
   const card = $(`.exercise-card[data-ex="${ex.exerciseId}"]`); if (card) refreshExtras(ex, card);
 }
 function refreshExtras(ex, card) {
-  // rank + PR line
+  const cardio = isCardioEx(ex);
+  // rank + PR line (cardio has no rank/PR — show a cardio tag instead)
   const rl = card.querySelector(".ec-rankline");
-  if (ex._pr && ex._pr.weight_kg != null) {
+  if (cardio) {
+    rl.innerHTML = `<span class="rank-badge rank-cardio">🏃 Cardio · +50 XP</span>`;
+  } else if (ex._pr && ex._pr.weight_kg != null) {
     const lib = EX_BY_ID[ex.exerciseId] || {};
     const rank = computeRank(lib, ex._pr.weight_kg);
     rl.innerHTML = `<span class="rank-badge rank-${rank.toLowerCase()}">${RANK_ICON[rank]} ${rank}</span>
@@ -552,17 +699,20 @@ function refreshExtras(ex, card) {
   // last time
   const slot = card.querySelector(".ec-lasttime-slot");
   if (ex.lastSession && ex.lastSession.sets && ex.lastSession.sets.length) {
-    const sets = ex.lastSession.sets.map(s => `${fmtKg(s.weight_kg)}kg×${s.reps}`).join(", ");
+    const sets = cardio
+      ? ex.lastSession.sets.map(s => `${s.reps} min${s.notes ? " (" + esc(s.notes) + ")" : ""}`).join(", ")
+      : ex.lastSession.sets.map(s => `${fmtKg(s.weight_kg)}kg×${s.reps}`).join(", ");
     const d = ex.lastSession.date ? new Date(ex.lastSession.date + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
-    slot.innerHTML = `<div class="ec-lasttime"><span class="lt-label">LAST</span>${esc(sets)} <span class="muted-sub">(${esc(d)})</span></div>`;
+    slot.innerHTML = `<div class="ec-lasttime"><span class="lt-label">LAST</span>${sets} <span class="muted-sub">(${esc(d)})</span></div>`;
   } else if (ex.lastSession === null) { slot.innerHTML = ""; }
-  // overload
+  // overload (not for cardio)
   const os = card.querySelector(".ec-overload-slot");
-  os.innerHTML = overloadHint(ex) ? `<div class="ec-overload">📈 Add 2.5kg today — you maxed the rep range last time</div>` : "";
+  os.innerHTML = (!cardio && overloadHint(ex)) ? `<div class="ec-overload">📈 Add 2.5kg today — you maxed the rep range last time</div>` : "";
   renderSetRows(ex, card);
 }
 
 function renderSetRows(ex, card) {
+  if (isCardioEx(ex)) { renderCardioRows(ex, card); return; }
   const wrap = card.querySelector(".set-rows"); wrap.innerHTML = "";
   const barbell = (ex.equipment === "barbell");
   const lastSets = (ex.lastSession && ex.lastSession.sets) ? ex.lastSession.sets : [];
@@ -571,7 +721,7 @@ function renderSetRows(ex, card) {
     const logged = ex.loggedSets[i];
     const ghost = lastSets[i];
     const row = el("div", "set-row" + (logged ? " done" : "")); row.dataset.idx = i;
-    const defType = ex.is_cardio ? "working" : "working";
+    const defType = "working";
     const typeOpts = ["warmup", "working", "dropset", "failure"].map(t =>
       `<option value="${t}" ${((logged?logged.setType:defType) === t) ? "selected" : ""}>${t[0].toUpperCase()+t.slice(1)}</option>`).join("");
     const wGhost = ghost ? `placeholder="${fmtKg(ghost.weight_kg)}"` : `placeholder="kg"`;
@@ -587,17 +737,12 @@ function renderSetRows(ex, card) {
       <button class="set-check" title="${logged ? "Delete set" : "Complete set"}">${logged ? "🗑" : "✓"}</button>`;
     const check = row.querySelector(".set-check");
     if (logged) {
-      check.classList.remove("set-check"); check.classList.add("set-check");
       check.addEventListener("click", () => deleteLoggedSet(ex, i, card));
     } else {
       check.addEventListener("click", () => completeSet(ex, i, row, card));
-      // autofill button
       if (ghost) {
-        const rf = row.querySelector(".r-in");
         const fill = el("button", "ec-icon-btn", "↻"); fill.title = "Fill last time";
         fill.style.cssText = "width:26px;height:26px;min-height:26px;position:absolute;right:2px;top:50%;transform:translateY(-50%);";
-        // place inside reps num-wrap: wrap the reps input
-        // simpler: clicking sets values
         check.insertAdjacentElement("beforebegin", fill);
         fill.addEventListener("click", () => {
           row.querySelector(".w-in").value = fmtKg(ghost.weight_kg);
@@ -611,34 +756,77 @@ function renderSetRows(ex, card) {
   }
 }
 
+/* Cardio rows: duration (min) + intensity/notes only — no weight/reps/type. */
+function renderCardioRows(ex, card) {
+  const wrap = card.querySelector(".set-rows"); wrap.innerHTML = "";
+  const lastSets = (ex.lastSession && ex.lastSession.sets) ? ex.lastSession.sets : [];
+  const rows = Math.max(ex.rowCount, ex.loggedSets.length, 1);
+  for (let i = 0; i < rows; i++) {
+    const logged = ex.loggedSets[i];
+    const ghost = lastSets[i];
+    const row = el("div", "set-row cardio-row" + (logged ? " done" : "")); row.dataset.idx = i;
+    const durVal = logged ? logged.reps : "";
+    const durGhost = ghost ? `placeholder="${ghost.reps}"` : `placeholder="${CARDIO_DEFAULT_MIN}"`;
+    const intVal = logged ? (logged.notes || "") : "";
+    const intGhost = (ghost && ghost.notes) ? `placeholder="${esc(ghost.notes)}"` : `placeholder="speed / incline e.g. 3.5 / 13"`;
+    row.innerHTML = `
+      <div class="set-num">${i + 1}</div>
+      <div class="cardio-dur"><input class="num-input dur-min" inputmode="numeric" ${durGhost} value="${durVal}" ${logged ? "disabled" : ""}><span class="dur-unit">min</span></div>
+      <input class="num-input int-in" type="text" ${intGhost} value="${esc(intVal)}" ${logged ? "disabled" : ""}>
+      <button class="set-check" title="${logged ? "Delete" : "Log cardio"}">${logged ? "🗑" : "✓"}</button>`;
+    const check = row.querySelector(".set-check");
+    if (logged) {
+      check.addEventListener("click", () => deleteLoggedSet(ex, i, card));
+    } else {
+      // default the duration to 30 min if left blank on focus-out convenience
+      const durEl = row.querySelector(".dur-min");
+      if (!durEl.value && !ghost) durEl.value = CARDIO_DEFAULT_MIN;
+      check.addEventListener("click", () => completeSet(ex, i, row, card));
+    }
+    wrap.appendChild(row);
+  }
+}
+
 async function completeSet(ex, idx, row, card) {
-  const w = parseFloat(row.querySelector(".w-in").value);
-  const reps = parseInt(row.querySelector(".r-in").value, 10);
-  const type = row.querySelector(".set-type-sel").value;
-  if (isNaN(reps) || reps <= 0) { toast("Enter reps"); return; }
-  const weight = isNaN(w) ? 0 : w;
+  const cardio = isCardioEx(ex);
   const setNumber = idx + 1;
+  let weight, reps, type, notes = "";
+  if (cardio) {
+    reps = parseInt(row.querySelector(".dur-min").value, 10);
+    if (isNaN(reps) || reps <= 0) reps = CARDIO_DEFAULT_MIN;
+    weight = 0; type = "working";
+    notes = (row.querySelector(".int-in").value || "").trim();
+  } else {
+    const w = parseFloat(row.querySelector(".w-in").value);
+    reps = parseInt(row.querySelector(".r-in").value, 10);
+    type = row.querySelector(".set-type-sel").value;
+    if (isNaN(reps) || reps <= 0) { toast("Enter reps"); return; }
+    weight = isNaN(w) ? 0 : w;
+  }
+  CURRENT_EX_ID = ex.exerciseId;
   try {
     const res = await apiPost(`${API}/sets`, { session_id: S.id, exercise_id: ex.exerciseId,
-      set_number: setNumber, set_type: type, weight_kg: weight, reps });
-    ex.loggedSets[idx] = { setId: res.id, setNumber, setType: type, weight, reps, isPr: res.is_pr, oneRm: res.one_rep_max };
+      set_number: setNumber, set_type: type, weight_kg: weight, reps, notes });
+    ex.loggedSets[idx] = { setId: res.id, setNumber, setType: type, weight, reps, notes,
+      isPr: res.is_pr, oneRm: res.one_rep_max };
     saveLS();
     row.classList.add("done");
     if (window.SoundFX) try { SoundFX.play && SoundFX.play("confirm"); } catch(e) {}
-    if (res.is_pr) {
+    if (res.is_pr && !cardio) {
       ex._pr = { weight_kg: weight, reps, one_rep_max: res.one_rep_max };
       firePR(ex, weight, reps, res.one_rep_max);
     }
     refreshExtras(ex, card);
     updateSessionTotals();
-    // rest timer for non-cardio working-ish sets
-    if (!ex.is_cardio && type !== "warmup") startRestTimer(ex, setNumber + 1);
+    // rest timer for non-cardio working-ish sets only
+    if (!cardio && type !== "warmup") startRestTimer(ex, setNumber + 1);
   } catch (e) { console.error(e); toast("Could not log set"); }
 }
 
 async function deleteLoggedSet(ex, idx, card) {
   const logged = ex.loggedSets[idx]; if (!logged) return;
-  if (!confirm(`Delete set ${idx + 1}? (${fmtKg(logged.weight)}kg × ${logged.reps})`)) return;
+  const desc = isCardioEx(ex) ? `${logged.reps} min` : `${fmtKg(logged.weight)}kg × ${logged.reps}`;
+  if (!confirm(`Delete set ${idx + 1}? (${desc})`)) return;
   try {
     if (logged.setId) await apiDel(`${API}/sets/${logged.setId}`);
     ex.loggedSets.splice(idx, 1);
@@ -884,32 +1072,44 @@ async function finishWorkout() {
 }
 
 function showSummary(res) {
-  const sess = res.session || {};
+  const sid = S.id;
   const dur = res.duration_minutes || 0;
   const vol = res.total_volume_kg || 0;
   const sets = res.total_sets || 0;
+  let avgEff = res.avg_efficiency;   // rolling routine average (may be null)
   // gather PRs + per-muscle volume from state
   const prs = []; const muscleVol = {}; let cardioSets = 0;
   S.exercises.forEach(ex => {
+    const cardio = isCardioEx(ex);
     ex.loggedSets.forEach(s => {
+      if (cardio) { cardioSets++; return; }
       muscleVol[ex.muscle_group] = (muscleVol[ex.muscle_group] || 0) + (s.weight || 0) * (s.reps || 0);
-      if (ex.is_cardio) cardioSets++;
       if (s.isPr) prs.push({ name: ex.name, weight: s.weight, reps: s.reps, orm: s.oneRm });
     });
   });
-  const exCount = S.exercises.filter(ex => ex.loggedSets.length).length;
   const xpSets = sets * 10, xpPr = prs.length * 50, xpCardio = cardioSets * 50, xpSession = 100, xpStreak = 25;
   const xpTotal = xpSets + xpPr + xpCardio + xpSession + xpStreak;
-  const modal = $("#summary-modal"); const body = $("#summary-modal-body");
+  const body = $("#summary-modal-body");
   const muscleRows = Object.keys(muscleVol).sort((a, b) => muscleVol[b] - muscleVol[a])
     .map(m => `<div class="xp-line"><span style="text-transform:capitalize">${esc(m)}</span><b>${Math.round(muscleVol[m]).toLocaleString()} kg</b></div>`).join("");
   body.innerHTML = `
     <div class="summary-hero"><div class="sh-big">💪 Workout Complete</div>
       <div class="muted-sub">${esc(S.routineName)} · streak ${res.streak || 0} 🔥</div></div>
     <div class="summary-stats">
-      <div class="ss"><b>${dur}</b><small>min</small></div>
       <div class="ss"><b>${Math.round(vol).toLocaleString()}</b><small>kg vol</small></div>
       <div class="ss"><b>${sets}</b><small>sets</small></div>
+    </div>
+    <div class="modal-section"><h4>Logged duration</h4>
+      <div class="dur-override">
+        <button class="dur-step" id="sum-dur-minus" aria-label="Decrease">−</button>
+        <input type="number" id="sum-dur-input" class="dur-input" inputmode="numeric" min="1" max="480" step="1" value="${dur}">
+        <span class="dur-unit">min</span>
+        <button class="dur-step" id="sum-dur-plus" aria-label="Increase">+</button>
+        <span class="muted-sub" style="margin-left:8px">actual elapsed — adjust before saving</span>
+      </div>
+    </div>
+    <div class="modal-section" id="eff-section"><h4>Session efficiency</h4>
+      <div id="eff-line" class="eff-line"></div>
     </div>
     ${prs.length ? `<div class="modal-section"><h4>Personal Records</h4>${prs.map(p => `<div class="pr-hit-row">🏆 ${esc(p.name)} — ${fmtKg(p.weight)}kg × ${p.reps} <span class="muted-sub">(1RM ${fmtKg(p.orm)}kg)</span></div>`).join("")}</div>` : ""}
     <div class="modal-section"><h4>XP Earned</h4>
@@ -927,9 +1127,36 @@ function showSummary(res) {
       <textarea class="summary-notes" id="summary-notes" placeholder="How did it feel? Any tweaks for next time…"></textarea></div>
     <button class="btn btn-finish" style="width:100%" id="summary-done">Done</button>`;
   openModal("summary-modal");
+
+  const durInput = $("#sum-dur-input");
+  const effSection = $("#eff-section");
+  function renderEff() {
+    const d = Math.max(1, parseInt(durInput.value, 10) || dur);
+    if (!vol) { effSection.hidden = true; return; }   // cardio-only → no volume
+    effSection.hidden = false;
+    const eff = round1(vol / d);
+    let cmp = "";
+    if (avgEff != null && avgEff > 0) {
+      const pct = Math.round((eff - avgEff) / avgEff * 100);
+      const up = eff >= avgEff;
+      cmp = `<span class="eff-cmp ${up ? "up" : "down"}">vs ${avgEff} kg/min avg — ${up ? "▲" : "▼"} ${Math.abs(pct)}%</span>`;
+    } else {
+      cmp = `<span class="muted-sub">no prior average for this routine</span>`;
+    }
+    $("#eff-line").innerHTML = `<span class="eff-val">📊 ${eff} kg/min</span> ${cmp}`;
+  }
+  renderEff();
+  let effTimer = null;
+  const bumpDur = (delta) => { durInput.value = Math.max(1, Math.min(480, (parseInt(durInput.value, 10) || dur) + delta)); renderEff(); };
+  $("#sum-dur-minus").addEventListener("click", () => bumpDur(-1));
+  $("#sum-dur-plus").addEventListener("click", () => bumpDur(1));
+  durInput.addEventListener("input", () => { clearTimeout(effTimer); effTimer = setTimeout(renderEff, 150); });
+
   $("#summary-done").addEventListener("click", async () => {
     const notes = $("#summary-notes").value.trim();
-    if (notes) { try { await apiPost(`${API}/sessions/${S.id}/notes`, { notes }); } catch (e) {} }
+    const newDur = Math.max(1, parseInt(durInput.value, 10) || dur);
+    if (newDur !== dur) { try { await apiPost(`${API}/sessions/${sid}/duration`, { minutes: newDur }); } catch (e) {} }
+    if (notes) { try { await apiPost(`${API}/sessions/${sid}/notes`, { notes }); } catch (e) {} }
     clearSession();
     closeModal("summary-modal");
     switchTab("dashboard");
@@ -971,8 +1198,12 @@ function renderSessionDetail(full) {
   const byEx = {};
   (full.sets || []).forEach(st => { (byEx[st.exercise_name] = byEx[st.exercise_name] || []).push(st); });
   let html = Object.keys(byEx).map(name => {
-    const sets = byEx[name].map(s => `${fmtKg(s.weight_kg)}kg×${s.reps}${s.is_pr ? " 🏆" : ""}`).join(", ");
-    return `<div class="hist-ex-block"><div class="heb-name">${esc(name)}</div><div class="heb-set">${esc(sets)}</div></div>`;
+    const rows = byEx[name];
+    const cardio = rows.some(s => s.exercise_type === "cardio" || s.muscle_group === "cardio");
+    const sets = cardio
+      ? rows.map(s => `${s.reps} min${s.notes ? " (" + esc(s.notes) + ")" : ""}`).join(", ")
+      : rows.map(s => `${fmtKg(s.weight_kg)}kg×${s.reps}${s.is_pr ? " 🏆" : ""}`).join(", ");
+    return `<div class="hist-ex-block"><div class="heb-name">${esc(name)}</div><div class="heb-set">${cardio ? sets : esc(sets)}</div></div>`;
   }).join("");
   if (!html) html = `<div class="muted-sub">No sets recorded.</div>`;
   if (full.notes) html += `<div class="hist-notes">📝 ${esc(full.notes)}</div>`;
@@ -995,8 +1226,14 @@ async function renderHistoryCalendar() {
   for (let d = 1; d <= daysInMonth; d++) {
     const key = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
     const cell = el("div", "mc-day", String(d));
-    if (byDate[key] || cal[key]) { cell.classList.add("worked"); cell.title = byDate[key] ? (byDate[key].routine_name||"Workout") : "Workout";
-      if (byDate[key]) cell.addEventListener("click", () => openSessionModal(byDate[key].id)); }
+    const status = cal[key];
+    if (byDate[key] || status === "workout") {
+      cell.classList.add("worked");
+      cell.title = byDate[key] ? (byDate[key].routine_name||"Workout") : "Workout";
+      if (byDate[key]) cell.addEventListener("click", () => openSessionModal(byDate[key].id));
+    } else if (status === "rest") {
+      cell.classList.add("rest"); cell.title = "Rest day";
+    }
     if (key === todayStr) cell.classList.add("today");
     wrap.appendChild(cell);
   }
@@ -1233,6 +1470,118 @@ function closeModal(id) { const m = $("#" + id); m.hidden = true; if (id === "vi
 $$("[data-close-modal]").forEach(b => b.addEventListener("click", () => closeModal(b.dataset.closeModal)));
 $$(".modal-overlay").forEach(ov => ov.addEventListener("click", (e) => { if (e.target === ov) closeModal(ov.id); }));
 
+/* ══ 8. ADD-EXERCISE PICKER (session-only) ═════════════════════════════════ */
+let addexFilter = "All", addexQuery = "";
+function openAddExercise() {
+  if (!S) { toast("Start a session first"); return; }
+  const fwrap = $("#addex-filters");
+  if (!fwrap.children.length) {
+    FILTERS.forEach(f => {
+      const p = el("button", "filter-pill" + (f === addexFilter ? " active" : ""), f); p.dataset.f = f;
+      p.addEventListener("click", () => { addexFilter = f; $$("#addex-filters .filter-pill").forEach(x => x.classList.toggle("active", x.dataset.f === f)); renderAddexList(); });
+      fwrap.appendChild(p);
+    });
+    $("#addex-search").addEventListener("input", (e) => { addexQuery = e.target.value.toLowerCase(); renderAddexList(); });
+  }
+  renderAddexList();
+  openModal("addex-modal");
+}
+function renderAddexList() {
+  const wrap = $("#addex-list"); wrap.innerHTML = "";
+  const inSession = new Set((S ? S.exercises : []).map(e => e.exerciseId));
+  const list = EXERCISES.filter(ex => {
+    const okF = addexFilter === "All" || ex.muscle_group.toLowerCase() === addexFilter.toLowerCase();
+    const okQ = !addexQuery || ex.name.toLowerCase().includes(addexQuery) || ex.muscle_group.toLowerCase().includes(addexQuery);
+    return okF && okQ;
+  });
+  if (!list.length) { wrap.innerHTML = `<div class="empty-note">No exercises match.</div>`; return; }
+  list.forEach(ex => {
+    const already = inSession.has(ex.id);
+    const b = el("button", "qs-btn" + (already ? " disabled" : ""));
+    b.innerHTML = `<span>${esc(ex.name)}<br><span class="qs-meta">${esc(ex.muscle_group)} · ${esc(ex.equipment||ex.exercise_type||"")}</span></span>
+      <span class="qs-meta">${already ? "✓ added" : "Add +"}</span>`;
+    if (!already) b.addEventListener("click", () => { addExerciseToSession(ex); closeModal("addex-modal"); });
+    wrap.appendChild(b);
+  });
+}
+(function wireAddExercise() {
+  const btn = $("#add-exercise-btn");
+  if (btn) btn.addEventListener("click", openAddExercise);
+})();
+
+/* ══ 9. AI TRAINER + SETTINGS ══════════════════════════════════════════════ */
+function applyAiVisibility() {
+  const panel = $("#trainer-panel");
+  if (!panel) return;
+  panel.hidden = !aiEnabled();
+}
+function buildTrainerContext(message) {
+  const ctx = { profile: "17yo, ~6 months training, 79kg, goal = body recomposition" };
+  if (S) ctx.routine = S.routineName;
+  const ml = (message || "").toLowerCase();
+  // Prefer an exercise explicitly named in the question, else the current one.
+  let ex = EXERCISES.find(e => ml.includes(e.name.toLowerCase()));
+  if (!ex && CURRENT_EX_ID) ex = EX_BY_ID[CURRENT_EX_ID];
+  if (!ex && S && S.exercises.length) ex = EX_BY_ID[S.exercises[0].exerciseId];
+  if (ex) {
+    ctx.exercise = ex.name + (ex.muscle_group ? ` (${ex.muscle_group})` : "");
+    const pr = PR_BY_EX[ex.id];
+    if (pr) ctx.pr = `${fmtKg(pr.weight_kg)}kg × ${pr.reps} (est 1RM ${fmtKg(pr.one_rep_max)}kg)`;
+    if (ex.youtube_url) ctx.youtube_url = ex.youtube_url;
+  }
+  return ctx;
+}
+function trainerAppend(role, text) {
+  const log = $("#trainer-log");
+  const msg = el("div", "trainer-msg " + role, role === "you" ? esc(text) : esc(text));
+  log.appendChild(msg);
+  log.scrollTop = log.scrollHeight;
+  return msg;
+}
+async function submitTrainer(e) {
+  e.preventDefault();
+  if (!aiEnabled()) return;   // never call the API when disabled
+  const input = $("#trainer-input");
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = "";
+  trainerAppend("you", message);
+  const thinking = trainerAppend("coach", "…");
+  try {
+    const res = await apiPost(`${API}/trainer`, { message, context: buildTrainerContext(message) });
+    thinking.textContent = res.reply || "No reply.";
+  } catch (err) {
+    thinking.textContent = "Trainer unavailable right now.";
+  }
+  $("#trainer-log").scrollTop = $("#trainer-log").scrollHeight;
+}
+function initSettings() {
+  const chk = $("#setting-ai-trainer");
+  if (chk) {
+    chk.checked = aiEnabled();
+    chk.addEventListener("change", () => {
+      localStorage.setItem(LS_AI, chk.checked ? "1" : "0");
+      applyAiVisibility();
+      toast(chk.checked ? "AI Trainer on" : "AI Trainer off");
+    });
+  }
+  const openBtn = $("#gym-settings-btn");
+  if (openBtn) openBtn.addEventListener("click", () => { if (chk) chk.checked = aiEnabled(); openModal("settings-modal"); });
+}
+function initTrainer() {
+  applyAiVisibility();
+  const form = $("#trainer-form");
+  if (form) form.addEventListener("submit", submitTrainer);
+  const collapse = $("#trainer-collapse"), head = $("#trainer-head");
+  const toggleCollapse = () => {
+    const panel = $("#trainer-panel");
+    panel.classList.toggle("collapsed");
+    if (collapse) collapse.textContent = panel.classList.contains("collapsed") ? "▴" : "▾";
+  };
+  if (collapse) collapse.addEventListener("click", (e) => { e.stopPropagation(); toggleCollapse(); });
+  if (head) head.addEventListener("click", toggleCollapse);
+}
+
 /* ── Loaders registry ── */
 const LOADERS = {
   dashboard: loadDashboard, workout: loadWorkout, history: loadHistory,
@@ -1246,6 +1595,8 @@ async function boot() {
     EX_BY_ID = {}; EXERCISES.forEach(ex => EX_BY_ID[ex.id] = ex);
     await loadPRs();
   } catch (e) { console.error("boot failed", e); toast("Could not load gym data — are you logged in?"); }
+  initSettings();
+  initTrainer();
   // restore in-memory session from localStorage if present
   const saved = localStorage.getItem(LS_KEY);
   if (saved) { try { S = JSON.parse(saved); } catch (e) { S = null; } }

@@ -2098,6 +2098,11 @@ def _ensure_gym_tables():
             rank_score REAL DEFAULT 0,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+        """CREATE TABLE IF NOT EXISTS gym_rest_days (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
     ]
     with get_db() as conn:
         cur = conn.cursor()
@@ -2388,12 +2393,14 @@ def get_sessions_by_date_range(start_date, end_date) -> list:
 
 
 def get_streak_calendar(months=3) -> dict:
-    """Return {date_str: bool} for every day in the last ``months``, where the
-    value is True if at least one session was logged that day."""
+    """Return {date_str: status} for every day in the last ``months``. Status is
+    "workout" if a session was logged that day, "rest" if a rest day was marked
+    (and no session), or False otherwise. A logged workout takes precedence over
+    a rest day on the same date."""
     _ensure_gym_tables()
     end = date.today()
     start = end - timedelta(days=months * 31)
-    worked = set()
+    worked, rested = set(), set()
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
@@ -2403,13 +2410,69 @@ def get_streak_calendar(months=3) -> dict:
         for r in cur.fetchall():
             # normalise to YYYY-MM-DD in case of stored timestamps
             worked.add(str(r["date"])[:10])
+        cur.execute(
+            f"SELECT date FROM gym_rest_days WHERE date >= {ph} AND date <= {ph}",
+            (start.isoformat(), end.isoformat()))
+        for r in cur.fetchall():
+            rested.add(str(r["date"])[:10])
     calendar = {}
     d = start
     while d <= end:
         key = d.isoformat()
-        calendar[key] = key in worked
+        if key in worked:
+            calendar[key] = "workout"
+        elif key in rested:
+            calendar[key] = "rest"
+        else:
+            calendar[key] = False
         d += timedelta(days=1)
     return calendar
+
+
+# ── Rest days ────────────────────────────────────────────────────────────────
+
+def add_rest_day(rest_date: str) -> bool:
+    """Mark a date as an intentional rest day. Idempotent (unique on date).
+    Recomputes the streak so recovery days keep the streak alive."""
+    _ensure_gym_tables()
+    rest_date = str(rest_date)[:10]
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if USE_POSTGRES:
+            cur.execute(
+                f"INSERT INTO gym_rest_days (date) VALUES ({ph}) "
+                f"ON CONFLICT (date) DO NOTHING", (rest_date,))
+        else:
+            cur.execute(
+                f"INSERT OR IGNORE INTO gym_rest_days (date) VALUES ({ph})", (rest_date,))
+    recompute_streak()
+    return True
+
+
+def get_rest_days(start_date=None, end_date=None) -> list:
+    """Rest-day dates (YYYY-MM-DD), newest first, optionally within a range."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if start_date and end_date:
+            cur.execute(
+                f"SELECT date FROM gym_rest_days WHERE date >= {ph} AND date <= {ph} "
+                f"ORDER BY date DESC", (str(start_date)[:10], str(end_date)[:10]))
+        else:
+            cur.execute("SELECT date FROM gym_rest_days ORDER BY date DESC")
+        return [str(r["date"])[:10] for r in cur.fetchall()]
+
+
+def is_rest_day(day: str) -> bool:
+    _ensure_gym_tables()
+    day = str(day)[:10]
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT 1 FROM gym_rest_days WHERE date = {ph}", (day,))
+        return cur.fetchone() is not None
 
 
 # ── Sets ─────────────────────────────────────────────────────────────────────
@@ -2427,40 +2490,62 @@ def _xp_for_set(weight_kg: float, reps: int, is_pr: bool) -> int:
     return int(xp)
 
 
-def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps) -> dict:
+def _is_cardio_exercise(ex: dict) -> bool:
+    """True if the exercise is cardio (excluded from PR/1RM/rank logic). For
+    cardio the ``reps`` field carries duration in minutes and weight is 0."""
+    if not ex:
+        return False
+    return (ex.get("exercise_type") == "cardio") or (ex.get("muscle_group") == "cardio")
+
+
+def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps,
+            notes="") -> dict:
     """Log a single set. Detects a personal record (by estimated 1RM), updates
     the PR table, awards XP, and bumps the exercise's muscle-group rank.
+    Cardio sets (Incline Walk etc.) store duration-in-minutes in ``reps`` with
+    weight 0; they earn flat XP but are excluded from PR/1RM/rank logic — a 0kg
+    cardio set must never register as a personal record.
     Returns {id, is_pr, one_rep_max, xp_earned, rank}."""
     _ensure_gym_tables()
     weight_kg = float(weight_kg or 0)
     reps = int(reps or 0)
-    one_rm = calculate_one_rep_max(weight_kg, reps)
+    ex = get_exercise(exercise_id)
+    cardio = _is_cardio_exercise(ex)
 
-    existing = get_pr(exercise_id)
-    is_pr = existing is None or one_rm > (existing.get("one_rep_max") or 0)
+    if cardio:
+        # Cardio never counts as a PR (guards the 0kg-cardio-PR bug) and has no 1RM.
+        one_rm = 0.0
+        is_pr = False
+    else:
+        one_rm = calculate_one_rep_max(weight_kg, reps)
+        existing = get_pr(exercise_id)
+        is_pr = existing is None or one_rm > (existing.get("one_rep_max") or 0)
 
     with get_db() as conn:
         cur = conn.cursor()
         set_id = _gym_insert(
             cur, "gym_sets",
-            "session_id, exercise_id, set_number, set_type, weight_kg, reps, is_pr",
-            (session_id, exercise_id, set_number, set_type, weight_kg, reps, bool(is_pr)))
+            "session_id, exercise_id, set_number, set_type, weight_kg, reps, is_pr, notes",
+            (session_id, exercise_id, set_number, set_type, weight_kg, reps,
+             bool(is_pr), notes or ""))
 
-    ex = get_exercise(exercise_id)
     today = date.today().isoformat()
     if is_pr:
         update_pr(exercise_id, weight_kg, reps, one_rm, today, session_id)
 
-    xp = _xp_for_set(weight_kg, reps, is_pr)
+    if cardio:
+        xp = 50  # flat cardio XP — never a rep/volume/PR bonus
+    else:
+        xp = _xp_for_set(weight_kg, reps, is_pr)
     add_xp(xp, f"set logged (exercise {exercise_id})")
 
     rank = None
-    if ex:
+    if ex and not cardio:
         rank = _rank_for_weight(ex, weight_kg)
         update_muscle_rank(ex["muscle_group"], weight_kg, rank)
 
     return {"id": set_id, "is_pr": bool(is_pr), "one_rep_max": one_rm,
-            "xp_earned": xp, "rank": rank}
+            "xp_earned": xp, "rank": rank, "is_cardio": cardio}
 
 
 def get_session_sets(session_id: int) -> list:
@@ -2469,7 +2554,8 @@ def get_session_sets(session_id: int) -> list:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
         cur.execute(
-            f"""SELECT st.*, e.name AS exercise_name, e.muscle_group
+            f"""SELECT st.*, e.name AS exercise_name, e.muscle_group,
+                       e.exercise_type
                 FROM gym_sets st
                 JOIN gym_exercises e ON e.id = st.exercise_id
                 WHERE st.session_id = {ph}
@@ -2486,9 +2572,10 @@ def get_exercise_history(exercise_id: int, limit=20) -> list:
         ph = "%s" if USE_POSTGRES else "?"
         cur.execute(
             f"""SELECT st.session_id, st.weight_kg, st.reps, st.set_number,
-                       s.date
+                       s.date, e.exercise_type, e.muscle_group
                 FROM gym_sets st
                 JOIN gym_sessions s ON s.id = st.session_id
+                JOIN gym_exercises e ON e.id = st.exercise_id
                 WHERE st.exercise_id = {ph}
                 ORDER BY s.date DESC, st.id DESC""",
             (exercise_id,))
@@ -2683,43 +2770,136 @@ def update_muscle_rank(muscle_group, weight_kg, rank_name=None) -> dict:
             "best_weight_kg": best_weight, "rank_score": new_score}
 
 
+def _active_days() -> set:
+    """Set of YYYY-MM-DD dates that count toward the streak: any day with a
+    logged workout OR a marked rest day (intentional recovery)."""
+    _ensure_gym_tables()
+    days = set()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT date FROM gym_sessions")
+        for r in cur.fetchall():
+            days.add(str(r["date"])[:10])
+        cur.execute("SELECT date FROM gym_rest_days")
+        for r in cur.fetchall():
+            days.add(str(r["date"])[:10])
+    return days
+
+
+def recompute_streak() -> int:
+    """Recompute the streak as the run of consecutive active days ending today
+    (or yesterday, so a still-open today doesn't drop the streak). Rest days
+    count as active, so a logged rest day keeps the streak alive. Persists the
+    result to gym_xp and returns it."""
+    _ensure_gym_xp_row()
+    active = _active_days()
+    today = date.today()
+    if today.isoformat() in active:
+        anchor = today
+    elif (today - timedelta(days=1)).isoformat() in active:
+        anchor = today - timedelta(days=1)
+    else:
+        anchor = None
+    streak = 0
+    if anchor is not None:
+        d = anchor
+        while d.isoformat() in active:
+            streak += 1
+            d -= timedelta(days=1)
+    last_workout = None
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT MAX(date) AS m FROM gym_sessions")
+        row = cur.fetchone()
+        if row and row["m"]:
+            last_workout = str(row["m"])[:10]
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            "SELECT id FROM gym_xp ORDER BY id LIMIT 1")
+        xp_row = cur.fetchone()
+        if xp_row:
+            cur.execute(
+                f"UPDATE gym_xp SET streak_days = {ph}, last_workout_date = {ph} WHERE id = {ph}",
+                (streak, last_workout, xp_row["id"]))
+    return streak
+
+
 def get_streak() -> int:
-    return int(get_xp().get("streak_days", 0) or 0)
+    # Recompute live so rest days / date rollovers are always reflected.
+    return recompute_streak()
 
 
 def update_streak(workout_date: str) -> int:
-    """Update the workout streak given a completed workout date. Consecutive-day
-    workouts extend the streak; a gap resets it to 1. Returns the new streak."""
-    _ensure_gym_xp_row()
+    """Recompute the streak after a completed workout. Rest days keep the streak
+    alive; a gap with neither workout nor rest day resets it. Returns the streak."""
+    return recompute_streak()
+
+
+def get_deload_check() -> dict:
+    """Detect deload need: count consecutive calendar weeks (ISO week) with at
+    least one logged workout, ending at the most recent trained week. Recommend a
+    deload if the user has trained 4+ consecutive weeks with no week fully off.
+    Returns {weeks_trained_consecutively, deload_recommended}."""
+    _ensure_gym_tables()
+    weeks = set()
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT id, streak_days, last_workout_date FROM gym_xp ORDER BY id LIMIT 1")
-        row = cur.fetchone()
-        last = row["last_workout_date"]
-        streak = int(row["streak_days"] or 0)
+        cur.execute("SELECT DISTINCT date FROM gym_sessions")
+        for r in cur.fetchall():
+            try:
+                d = datetime.strptime(str(r["date"])[:10], "%Y-%m-%d").date()
+                iso = d.isocalendar()
+                weeks.add((iso[0], iso[1]))
+            except ValueError:
+                continue
 
-        last_str = str(last)[:10] if last else None
-        cur_str = str(workout_date)[:10]
+    def week_key(d):
+        iso = d.isocalendar()
+        return (iso[0], iso[1])
 
-        if last_str == cur_str:
-            new_streak = streak if streak > 0 else 1
-        else:
-            new_streak = 1
-            if last_str:
-                try:
-                    d_last = datetime.strptime(last_str, "%Y-%m-%d").date()
-                    d_cur = datetime.strptime(cur_str, "%Y-%m-%d").date()
-                    if (d_cur - d_last).days == 1:
-                        new_streak = streak + 1
-                except ValueError:
-                    new_streak = 1
+    today = date.today()
+    # Anchor at this week if trained, else last week (grace for a fresh week).
+    if week_key(today) in weeks:
+        anchor = today
+    elif week_key(today - timedelta(days=7)) in weeks:
+        anchor = today - timedelta(days=7)
+    else:
+        return {"weeks_trained_consecutively": 0, "deload_recommended": False}
 
+    count = 0
+    cursor_week = anchor
+    while week_key(cursor_week) in weeks:
+        count += 1
+        cursor_week -= timedelta(days=7)
+    return {"weeks_trained_consecutively": count,
+            "deload_recommended": count >= 4}
+
+
+def get_routine_efficiency_avg(routine_id, exclude_session_id=None) -> float:
+    """Rolling average efficiency (kg volume per minute) across past *completed*
+    sessions of the same routine, excluding one session id. Sessions with no
+    volume or no duration (e.g. cardio-only) are skipped. Returns None if there
+    is no prior baseline."""
+    _ensure_gym_tables()
+    if routine_id is None:
+        return None
+    with get_db() as conn:
+        cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
-        cur.execute(
-            f"UPDATE gym_xp SET streak_days = {ph}, last_workout_date = {ph} WHERE id = {ph}",
-            (new_streak, cur_str, row["id"]))
-    return new_streak
+        sql = (f"""SELECT total_volume_kg, duration_minutes FROM gym_sessions
+                   WHERE routine_id = {ph} AND end_time IS NOT NULL
+                   AND COALESCE(total_volume_kg,0) > 0
+                   AND COALESCE(duration_minutes,0) > 0""")
+        params = [routine_id]
+        if exclude_session_id is not None:
+            sql += f" AND id <> {ph}"
+            params.append(exclude_session_id)
+        cur.execute(sql, tuple(params))
+        effs = [float(r["total_volume_kg"]) / float(r["duration_minutes"])
+                for r in cur.fetchall()]
+    if not effs:
+        return None
+    return round(sum(effs) / len(effs), 1)
 
 
 # ── Frontend helpers (last-session, recovery, weekly volume, notes, active) ────
@@ -2746,7 +2926,7 @@ def get_last_session_for_exercise(exercise_id: int) -> dict:
         session_id = row["session_id"]
         session_date = str(row["date"])[:10]
         cur.execute(
-            f"""SELECT id, set_number, set_type, weight_kg, reps, is_pr
+            f"""SELECT id, set_number, set_type, weight_kg, reps, is_pr, notes
                 FROM gym_sets
                 WHERE session_id = {ph} AND exercise_id = {ph}
                 ORDER BY set_number, id""",
@@ -2850,6 +3030,19 @@ def get_muscle_recovery() -> list:
     # trained ones first (fewest days), never-trained at the end
     out.sort(key=lambda x: (x["days_since"] is None, x["days_since"] if x["days_since"] is not None else 1e9))
     return out
+
+
+def update_session_duration(session_id: int, minutes: int) -> bool:
+    """Override a finished session's logged duration (user correction from the
+    finish summary). Volume/XP/streak are unchanged. Returns True if it existed."""
+    _ensure_gym_tables()
+    minutes = max(0, int(minutes or 0))
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"UPDATE gym_sessions SET duration_minutes = {ph} WHERE id = {ph}",
+                    (minutes, session_id))
+        return (cur.rowcount or 0) > 0
 
 
 def save_session_notes(session_id: int, notes: str) -> bool:

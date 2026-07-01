@@ -434,9 +434,17 @@ def api_gym_session_end(session_id):
     sets_xp = sum(db._xp_for_set(s.get("weight_kg"), s.get("reps"), bool(s.get("is_pr"))) for s in sets)
     session_xp = int(sets_xp) + 100
     db.end_session(session_id, end_time, duration, total_volume, total_sets, session_xp)
+
+    # Session efficiency (kg volume per minute) + rolling average for this
+    # routine. Cardio-only sessions have zero volume and skip efficiency.
+    efficiency = round(total_volume / duration, 1) if (duration and total_volume) else None
+    avg_efficiency = db.get_routine_efficiency_avg(
+        session.get("routine_id"), exclude_session_id=session_id)
+
     return jsonify({"ok": True, "session": db.get_session(session_id),
                     "total_volume_kg": total_volume, "total_sets": total_sets,
                     "duration_minutes": duration, "streak": streak,
+                    "efficiency": efficiency, "avg_efficiency": avg_efficiency,
                     "xp": bonus})
 
 
@@ -469,7 +477,8 @@ def api_gym_log_set():
         return jsonify({"error": "session_id, exercise_id and set_number are required"}), 400
     result = db.log_set(
         d["session_id"], d["exercise_id"], d["set_number"],
-        d.get("set_type", "working"), d.get("weight_kg", 0), d.get("reps", 0))
+        d.get("set_type", "working"), d.get("weight_kg", 0), d.get("reps", 0),
+        d.get("notes", ""))
     return jsonify({"ok": True, **result})
 
 
@@ -512,6 +521,23 @@ def api_gym_delete_session(session_id):
     if not ok:
         return jsonify({"error": "session not found"}), 404
     return jsonify({"ok": True})
+
+
+@app.route("/api/gym/sessions/<int:session_id>/duration", methods=["POST"])
+def api_gym_session_duration(session_id):
+    d = request.get_json(force=True) or {}
+    minutes = int(d.get("minutes") or d.get("duration") or 0)
+    if minutes <= 0:
+        return jsonify({"error": "minutes must be > 0"}), 400
+    if not db.update_session_duration(session_id, minutes):
+        return jsonify({"error": "session not found"}), 404
+    sess = db.get_session(session_id)
+    vol = float(sess.get("total_volume_kg") or 0)
+    efficiency = round(vol / minutes, 1) if (minutes and vol) else None
+    avg_efficiency = db.get_routine_efficiency_avg(
+        sess.get("routine_id"), exclude_session_id=session_id)
+    return jsonify({"ok": True, "duration_minutes": minutes,
+                    "efficiency": efficiency, "avg_efficiency": avg_efficiency})
 
 
 @app.route("/api/gym/sessions/<int:session_id>/notes", methods=["POST"])
@@ -574,6 +600,40 @@ def api_gym_xp():
 @app.route("/api/gym/streak")
 def api_gym_streak():
     return jsonify({"streak": db.get_streak()})
+
+
+@app.route("/api/gym/rest-day", methods=["POST"])
+def api_gym_rest_day():
+    d = request.get_json(force=True) or {}
+    rest_date = d.get("date") or _today()
+    db.add_rest_day(rest_date)
+    return jsonify({"ok": True, "date": str(rest_date)[:10],
+                    "streak": db.get_streak()})
+
+
+@app.route("/api/gym/rest-days")
+def api_gym_rest_days():
+    return jsonify(db.get_rest_days())
+
+
+@app.route("/api/gym/deload-check")
+def api_gym_deload_check():
+    return jsonify(db.get_deload_check())
+
+
+@app.route("/api/gym/trainer", methods=["POST"])
+def api_gym_trainer():
+    """AI fitness-trainer chat. Reuses the shared Anthropic client in
+    services/ai.py; fails gracefully (friendly message, HTTP 200) when no API
+    key is configured so the client can render it inline. Gated client-side by
+    the AI-Trainer settings toggle as well."""
+    d = request.get_json(force=True) or {}
+    message = (d.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "message is required"}), 400
+    context = d.get("context") or {}
+    reply = ai.gym_coach_reply(message, context)
+    return jsonify({"reply": reply})
 
 
 # The gym tracker is chatty by nature — a single logged workout fires one request
