@@ -185,8 +185,8 @@ def weekly_review_generate_review(params: dict) -> dict:
             "chars": len(review) if review else 0,
             "timestamp": datetime.utcnow().isoformat(),
         }
-    except Exception as e:
-        return {"review": "", "error": str(e)}
+    except Exception:
+        raise
 
 
 def reflection_prompt_reflection(params: dict) -> dict:
