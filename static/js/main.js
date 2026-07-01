@@ -1058,10 +1058,15 @@ function renderSpotify(s) {
 // ── Market session clock (client-side, live countdown) ──────────────────────────
 let _marketTimer = null;
 function initMarketClock() {
-  if (_marketTimer) return;                 // already ticking
   if (!document.getElementById("market-status")) return;
   renderMarketClock();
-  _marketTimer = setInterval(renderMarketClock, 1000);
+  // Session status changes at most twice a day, so poll once a MINUTE, not
+  // once a second. And clear any existing timer before setting a new one:
+  // loadAll() can run again on refresh/nav, and without this guard each call
+  // stacked another 1s interval, so multiple ticks raced to rewrite the same
+  // element — the flicker.
+  if (_marketTimer) clearInterval(_marketTimer);
+  _marketTimer = setInterval(renderMarketClock, 60000);
 }
 
 // Current wall-clock in US Eastern, DST-safe via Intl (no manual offset math).
@@ -1080,8 +1085,9 @@ function _fmtDur(secs) {
   secs = Math.max(0, Math.round(secs));
   const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
   if (h > 0) return `${h}h ${m}m`;
-  const s = secs % 60;
-  return `${m}m ${String(s).padStart(2, "0")}s`;
+  // Minute granularity: we now render once a minute, so showing live seconds
+  // would just look frozen/jumpy.
+  return m > 0 ? `${m}m` : "under 1m";
 }
 
 function renderMarketClock() {
@@ -1121,11 +1127,17 @@ function renderMarketClock() {
       count = "opens in " + _fmtDur(secsToOpen);
     }
   }
-  statusEl.textContent = status;
-  countEl.textContent = count;
+  // Only write to the DOM when a value actually changes. Rewriting identical
+  // textContent/classes on every tick is what made the indicator flash; this
+  // keeps the element in place and only updates its content when needed.
+  if (statusEl.textContent !== status) statusEl.textContent = status;
+  if (countEl.textContent !== count) countEl.textContent = count;
   if (dot) {
-    dot.classList.toggle("market-open", state === "open");
-    dot.classList.toggle("market-closed", state !== "open");
+    const open = state === "open";
+    if (dot.classList.contains("market-open") !== open) {
+      dot.classList.toggle("market-open", open);
+      dot.classList.toggle("market-closed", !open);
+    }
   }
 }
 
