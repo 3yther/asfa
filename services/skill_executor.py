@@ -211,8 +211,8 @@ def insights_generate_insights(params: dict) -> dict:
             "count": len(insights) if insights else 0,
             "timestamp": datetime.utcnow().isoformat(),
         }
-    except Exception as e:
-        return {"insights": [], "error": str(e)}
+    except Exception:
+        raise
 
 
 def init_implemented_skills():
