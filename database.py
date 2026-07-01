@@ -315,7 +315,7 @@ def get_workouts(days: int = 7) -> list:
         cur = conn.cursor()
         if USE_POSTGRES:
             cur.execute(
-                "SELECT * FROM workouts WHERE CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '%s days' ORDER BY date DESC",
+                "SELECT * FROM workouts WHERE CAST(date AS TIMESTAMP) >= NOW() - (%s * INTERVAL '1 day') ORDER BY date DESC",
                 (days,))
         else:
             cur.execute(
