@@ -208,6 +208,11 @@ def system():
     return render_template("system.html", active="system")
 
 
+@app.route("/gym")
+def gym():
+    return render_template("gym.html", active="gym", active_tab="gym")
+
+
 @app.route("/plans/<plan_id>")
 def plan_view(plan_id):
     """Standalone page that opens the plan-approval modal for one plan."""
@@ -473,6 +478,51 @@ def api_gym_session_sets(session_id):
     return jsonify(db.get_session_sets(session_id))
 
 
+@app.route("/api/gym/sets/<int:set_id>", methods=["DELETE"])
+def api_gym_delete_set(set_id):
+    ok = db.delete_set(set_id)
+    if not ok:
+        return jsonify({"error": "set not found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/gym/exercises/<int:exercise_id>/last-session")
+def api_gym_last_session(exercise_id):
+    return jsonify(db.get_last_session_for_exercise(exercise_id) or {})
+
+
+@app.route("/api/gym/volume/weekly")
+def api_gym_weekly_volume():
+    return jsonify(db.get_weekly_volume())
+
+
+@app.route("/api/gym/muscle-recovery")
+def api_gym_muscle_recovery():
+    return jsonify(db.get_muscle_recovery())
+
+
+@app.route("/api/gym/sessions/active")
+def api_gym_active_session():
+    return jsonify(db.get_active_session() or {})
+
+
+@app.route("/api/gym/sessions/<int:session_id>", methods=["DELETE"])
+def api_gym_delete_session(session_id):
+    ok = db.delete_session(session_id)
+    if not ok:
+        return jsonify({"error": "session not found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/gym/sessions/<int:session_id>/notes", methods=["POST"])
+def api_gym_session_notes(session_id):
+    d = request.get_json(force=True) or {}
+    ok = db.save_session_notes(session_id, d.get("notes", ""))
+    if not ok:
+        return jsonify({"error": "session not found"}), 404
+    return jsonify({"ok": True})
+
+
 @app.route("/api/gym/prs")
 def api_gym_prs():
     return jsonify(db.get_all_prs())
@@ -524,6 +574,16 @@ def api_gym_xp():
 @app.route("/api/gym/streak")
 def api_gym_streak():
     return jsonify({"streak": db.get_streak()})
+
+
+# The gym tracker is chatty by nature — a single logged workout fires one request
+# per set (often 30+), plus dashboard/history reads. That easily exceeds the coarse
+# app-wide "50/hour" abuse guard and would 429 the user mid-workout. These routes
+# are all behind the session auth gate, so skip rate limiting for them (auth already
+# gates them; the tighter login limit and other routes are unaffected).
+@limiter.request_filter
+def _exempt_gym_api():
+    return request.path.startswith("/api/gym")
 
 
 # ── Money ──────────────────────────────────────────────────────────────────────
