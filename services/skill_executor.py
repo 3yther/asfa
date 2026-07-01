@@ -197,8 +197,8 @@ def reflection_prompt_reflection(params: dict) -> dict:
             "prompted": True,
             "timestamp": datetime.utcnow().isoformat(),
         }
-    except Exception as e:
-        return {"prompted": False, "error": str(e)}
+    except Exception:
+        raise
 
 
 def insights_generate_insights(params: dict) -> dict:
