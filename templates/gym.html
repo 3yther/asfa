@@ -25,6 +25,7 @@
   <header class="gym-head">
     <h1 class="screen-title" data-decode>Iron Log</h1>
     <p class="screen-sub">Train • Rank up • Overload</p>
+    <button class="gym-settings-btn" id="gym-settings-btn" title="Settings" aria-label="Gym settings">⚙️</button>
   </header>
 
   <!-- ── Sub-tab bar ─────────────────────────────────────────────────── -->
@@ -39,6 +40,18 @@
   <!-- ══ TAB 1 — DASHBOARD ═════════════════════════════════════════════ -->
   <section class="gym-panel active" data-panel="dashboard">
 
+    <!-- Deload banner -->
+    <div id="deload-banner" class="deload-banner sci-fi-panel" hidden>
+      <div class="deload-text">📉 You've trained hard for 4+ weeks. Consider a deload — cut volume ~40% and intensity to ~60% this week to recover and grow.</div>
+      <button class="deload-dismiss" id="deload-dismiss" aria-label="Dismiss">✕</button>
+    </div>
+
+    <!-- Rest day prompt (shown when nothing logged today) -->
+    <div id="rest-day-prompt" class="rest-day-prompt sci-fi-panel" hidden>
+      <span>No workout logged today.</span>
+      <button class="btn btn-ghost" id="mark-rest-day">🌙 Mark as Rest Day</button>
+    </div>
+
     <!-- Stats row -->
     <div class="stats-grid" id="gym-stats">
       <div class="stat-card sci-fi-panel skeleton-card"></div>
@@ -49,9 +62,20 @@
 
     <!-- Bodygraph + rank list -->
     <div class="card sci-fi-panel bodygraph-card">
-      <h3>Muscle Rankings</h3>
+      <h3>Muscle Rankings <span class="muted-sub">tap a muscle to see exercises</span></h3>
       <div class="bodygraph-wrap">
-        <div class="bodygraph-left" id="bodygraph-svg"><!-- SVG injected by JS --></div>
+        <div class="bodygraph-left">
+          <div class="bodygraph-views">
+            <div class="bodygraph-view">
+              <div class="bg-view-label">FRONT</div>
+              <div class="bg-svg-holder" id="bodygraph-front"><!-- SVG injected by JS --></div>
+            </div>
+            <div class="bodygraph-view">
+              <div class="bg-view-label">BACK</div>
+              <div class="bg-svg-holder" id="bodygraph-back"><!-- SVG injected by JS --></div>
+            </div>
+          </div>
+        </div>
         <div class="bodygraph-right" id="rank-list">
           <div class="skeleton skeleton-row"></div>
           <div class="skeleton skeleton-row"></div>
@@ -122,12 +146,22 @@
         <div class="sh-left">
           <div class="sh-routine" id="sh-routine">—</div>
           <div class="sh-timer" id="sh-timer">00:00</div>
+          <div class="sh-target" id="sh-target">
+            <small>target</small>
+            <button class="dur-step" id="sh-dur-minus" aria-label="Decrease target">−</button>
+            <input type="number" id="sh-dur-input" class="dur-input" inputmode="numeric" min="5" max="240" step="5" value="60">
+            <span class="dur-unit">min</span>
+            <button class="dur-step" id="sh-dur-plus" aria-label="Increase target">+</button>
+          </div>
         </div>
         <div class="sh-stats">
           <div class="sh-stat"><span id="sh-volume">0</span><small>kg vol</small></div>
           <div class="sh-stat"><span id="sh-sets">0</span><small>sets</small></div>
         </div>
         <button class="btn btn-finish" id="finish-workout">Finish</button>
+      </div>
+      <div class="add-exercise-bar">
+        <button class="btn btn-ghost add-exercise-btn" id="add-exercise-btn">+ Add Exercise</button>
       </div>
       <div id="exercise-list" class="exercise-list"></div>
     </div>
@@ -215,6 +249,23 @@
   </div>
 </div>
 
+<!-- ── AI Trainer panel (bottom-LEFT, clears the bottom-right rest timer) ── -->
+<div id="trainer-panel" class="trainer-panel" hidden>
+  <div class="trainer-head" id="trainer-head">
+    <span class="trainer-title">💬 ASK TRAINER</span>
+    <button class="trainer-toggle" id="trainer-collapse" aria-label="Collapse">▾</button>
+  </div>
+  <div class="trainer-body" id="trainer-body">
+    <div class="trainer-log" id="trainer-log">
+      <div class="trainer-msg coach">Ask me about form, swaps, or programming. Keep it short and I'll do the same.</div>
+    </div>
+    <form class="trainer-form" id="trainer-form">
+      <input type="text" id="trainer-input" class="trainer-input" placeholder="e.g. alternative to leg press?" autocomplete="off">
+      <button type="submit" class="trainer-send" aria-label="Send">➤</button>
+    </form>
+  </div>
+</div>
+
 <!-- ── Confetti canvas ─────────────────────────────────────────────────── -->
 <canvas id="confetti-canvas" class="confetti-canvas"></canvas>
 
@@ -242,6 +293,33 @@
   </div>
 </div>
 
+<!-- ── Add-exercise picker (session-only) ──────────────────────────────── -->
+<div id="addex-modal" class="modal-overlay" hidden>
+  <div class="modal sci-fi-panel">
+    <button class="modal-close" data-close-modal="addex-modal">✕</button>
+    <h3>Add exercise to session</h3>
+    <input type="search" id="addex-search" class="ex-search" placeholder="🔎 Search exercises…" autocomplete="off">
+    <div class="ex-filters" id="addex-filters"></div>
+    <div id="addex-list" class="addex-list"></div>
+  </div>
+</div>
+
+<!-- ── Settings modal ──────────────────────────────────────────────────── -->
+<div id="settings-modal" class="modal-overlay" hidden>
+  <div class="modal sci-fi-panel">
+    <button class="modal-close" data-close-modal="settings-modal">✕</button>
+    <h3>⚙️ Settings</h3>
+    <label class="settings-row">
+      <span>
+        <b>AI Trainer enabled</b>
+        <small class="muted-sub">Show the 💬 ASK TRAINER panel and allow coaching replies.</small>
+      </span>
+      <input type="checkbox" id="setting-ai-trainer" class="settings-switch">
+    </label>
+    <div class="settings-note">AI Trainer uses the Claude API. Turn off to disable all AI calls from the gym tracker.</div>
+  </div>
+</div>
+
 <script>
   // Add bracket corners to all sci-fi panels (matches other ASFA screens).
   document.querySelectorAll('.sci-fi-panel').forEach(el => {
@@ -252,6 +330,7 @@
     });
   });
 </script>
+<script src="{{ url_for('static', filename='js/vendor/body-highlighter.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/gym.js') }}" defer></script>
 <script src="/static/js/starfield.js" defer></script>
 </body>
