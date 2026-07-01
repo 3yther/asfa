@@ -172,8 +172,8 @@ def supplement_log_supplement(params: dict) -> dict:
             "dose": dose,
             "timestamp": datetime.utcnow().isoformat(),
         }
-    except Exception as e:
-        return {"logged": False, "error": str(e)}
+    except Exception:
+        raise
 
 
 def weekly_review_generate_review(params: dict) -> dict:
