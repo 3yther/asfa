@@ -1,0 +1,335 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   fragrances.css — Scent Vault. A glowing display shelf: bottles on cyan-lit
+   glass, cosmic dark backdrop, sci-fi-panel framing (base styles come from
+   style.css; this file only adds the fragrance-specific layer).
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.frag-screen {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 18px 16px 80px;
+}
+
+.frag-head { text-align: center; margin: 10px 0 18px; }
+.frag-head .screen-sub { color: var(--muted); font-size: .85rem; margin-top: 2px; }
+
+/* ── Stats strip ─────────────────────────────────────────────────────── */
+.frag-stats-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  margin-bottom: 18px;
+}
+.fs-item { display: flex; flex-direction: column; gap: 2px; min-width: 110px; }
+.fs-num { font-size: 1.5rem; font-weight: 700; color: var(--primary); }
+.fs-val { font-size: .85rem; color: var(--text); }
+.fs-label { font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.fs-warn .fs-val { color: var(--amber); }
+.rotation-bars {
+  display: flex; align-items: flex-end; gap: 3px;
+  height: 26px; padding-top: 2px;
+}
+.rb-bar {
+  width: 9px; min-height: 2px; border-radius: 1px;
+  background: linear-gradient(180deg, var(--primary-hi), rgba(0,217,255,.25));
+  box-shadow: 0 0 5px rgba(0,217,255,.4);
+}
+
+/* ── Hero card ───────────────────────────────────────────────────────── */
+.frag-hero { margin-bottom: 22px; padding: 16px 18px 20px; }
+.frag-hero-context { font-size: .78rem; color: var(--primary); text-shadow: 0 0 8px rgba(0,217,255,.45); }
+
+.frag-occasions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 14px; }
+.occ-pill {
+  min-height: 44px; padding: 8px 16px;
+  background: rgba(0,217,255,.06);
+  border: 1px solid rgba(0,217,255,.25);
+  border-radius: 999px;
+  color: var(--text-sec); font: inherit; font-size: .8rem; letter-spacing: .04em;
+  cursor: pointer; transition: all .15s;
+}
+.occ-pill:hover { border-color: var(--primary); color: var(--primary-hi); }
+.occ-pill.active {
+  background: rgba(0,217,255,.16);
+  border-color: var(--primary);
+  color: var(--primary-hi);
+  box-shadow: 0 0 12px rgba(0,217,255,.35);
+}
+
+.hero-grid { display: grid; grid-template-columns: 190px 1fr; gap: 22px; align-items: start; }
+.hero-bottle { display: flex; justify-content: center; }
+.hero-img {
+  width: 170px; height: 230px; object-fit: contain;
+  filter: drop-shadow(0 12px 18px rgba(0,217,255,.22));
+}
+.hero-name { font-size: 1.45rem; font-weight: 800; color: var(--text); }
+.hero-brand { color: var(--muted); font-size: .8rem; margin-top: 2px; }
+.hero-reason { color: var(--text-sec); font-size: .92rem; line-height: 1.5; margin: 10px 0 14px; }
+.hero-wear { min-height: 46px; padding: 10px 26px; font-size: .95rem; margin-top: 14px; }
+
+.routine-head { font-size: .62rem; letter-spacing: .12em; color: var(--muted); margin-bottom: 8px; }
+.hero-routine, .fd-routine { margin-top: 4px; }
+.routine-step {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; margin-bottom: 4px;
+  background: rgba(9,15,24,.5);
+  border: 1px solid rgba(0,217,255,.1);
+  border-left: 2px solid rgba(0,217,255,.45);
+  border-radius: var(--radius);
+  font-size: .85rem;
+}
+.rs-icon { width: 22px; text-align: center; }
+.rs-text { flex: 1; color: var(--text); }
+.rs-text b { color: var(--primary-hi); font-weight: 600; }
+.rs-label { font-size: .6rem; letter-spacing: .1em; color: var(--muted); text-transform: uppercase; }
+.rs-layer { border-left-color: var(--gold); }
+.rs-final { border-left-color: var(--primary); box-shadow: 0 0 10px rgba(0,217,255,.15) inset; }
+
+/* ── The shelf ───────────────────────────────────────────────────────── */
+.frag-shelf-wrap { padding: 18px; }
+.shelf-title { font-size: 1rem; letter-spacing: .1em; margin-bottom: 16px; color: var(--text); }
+
+.frag-shelf {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 22px 18px;
+}
+
+.bottle-card {
+  position: relative;
+  padding: 12px 12px 14px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: transform .18s, box-shadow .18s;
+}
+.bottle-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 28px rgba(0,217,255,.14);
+}
+
+/* the lit glass shelf each bottle stands on */
+.bottle-stage {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center;
+  padding-bottom: 12px;
+}
+.bottle-stage::after {          /* shelf line */
+  content: "";
+  position: absolute; left: -4px; right: -4px; bottom: 8px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(0,217,255,.85), transparent);
+  box-shadow: 0 0 12px 2px rgba(0,217,255,.45), 0 6px 18px 4px rgba(0,217,255,.15);
+}
+.bottle-img, .bottle-placeholder {
+  width: 110px; height: 150px;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 10px rgba(0,0,0,.6));
+}
+.bottle-reflection {            /* soft reflection under the bottle */
+  width: 90px; height: 22px; margin-top: -6px;
+  background: radial-gradient(ellipse at center, rgba(0,217,255,.28), transparent 70%);
+  filter: blur(3px);
+}
+.bottle-placeholder {
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(160deg, rgba(0,217,255,.08), rgba(9,15,24,.7));
+  border: 1px solid rgba(0,217,255,.22);
+  border-radius: 8px 8px 3px 3px;
+}
+.bp-monogram {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 2.6rem; font-weight: 700;
+  color: rgba(0,217,255,.55);
+  text-shadow: 0 0 18px rgba(0,217,255,.5);
+}
+
+.bottle-meta { text-align: center; margin-top: 6px; }
+.bottle-name { font-size: .86rem; font-weight: 700; color: var(--text); line-height: 1.25; }
+.sig-star { font-size: .75rem; }
+.bottle-brand { font-size: .68rem; color: var(--muted); margin: 2px 0 8px; }
+.bottle-chips { display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; }
+.chip {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: .6rem; letter-spacing: .05em;
+  padding: 2px 7px; border-radius: 999px;
+  border: 1px solid rgba(0,217,255,.25);
+  color: var(--text-sec);
+}
+.chip-conc { color: var(--primary-hi); border-color: rgba(0,217,255,.45); }
+.chip-count { color: var(--gold); border-color: rgba(212,175,55,.4); }
+.chip-neglect { color: var(--amber); border-color: rgba(245,158,11,.5); }
+.chip-worn { color: var(--muted); }
+
+.bottle-cam {
+  position: absolute; top: 8px; right: 8px;
+  width: 34px; height: 34px;
+  background: rgba(9,15,24,.75);
+  border: 1px solid rgba(0,217,255,.2);
+  border-radius: 50%;
+  font-size: .8rem; cursor: pointer;
+  opacity: .45; transition: opacity .15s;
+}
+.bottle-card:hover .bottle-cam, .bottle-cam:focus { opacity: 1; }
+
+.bottle-upload-progress {
+  position: absolute; left: 12px; right: 12px; bottom: 6px;
+  height: 3px; background: rgba(0,217,255,.12); border-radius: 2px; overflow: hidden;
+}
+.bup-bar {
+  width: 0%; height: 100%;
+  background: var(--primary);
+  box-shadow: 0 0 8px rgba(0,217,255,.8);
+  transition: width .2s;
+}
+
+/* ── Detail drawer ───────────────────────────────────────────────────── */
+.frag-detail-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(0,4,8,.72);
+  backdrop-filter: blur(3px);
+  display: flex; justify-content: flex-end;
+}
+.frag-detail {
+  width: min(440px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  padding: 22px 20px 40px;
+  background: rgba(6,11,18,.97);
+  border-left: 1px solid rgba(0,217,255,.25);
+  animation: fd-slide .22s ease-out;
+}
+@keyframes fd-slide { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+.frag-noscroll { overflow: hidden; }
+
+.frag-detail-close {
+  position: absolute; top: 14px; right: 14px;
+  width: 44px; height: 44px;
+  background: none; border: 1px solid rgba(0,217,255,.25); border-radius: 4px;
+  color: var(--text-sec); font-size: 1rem; cursor: pointer;
+}
+
+.fd-top { display: flex; gap: 16px; margin-bottom: 16px; }
+.fd-img-wrap { flex: 0 0 120px; display: flex; align-items: flex-start; justify-content: center; }
+.fd-img { width: 110px; height: 150px; object-fit: contain; filter: drop-shadow(0 10px 14px rgba(0,217,255,.2)); }
+.fd-name { font-size: 1.15rem; font-weight: 800; color: var(--text); padding-right: 40px; }
+.fd-brand { font-size: .75rem; color: var(--muted); margin: 2px 0 8px; }
+.fd-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.tag {
+  font-size: .65rem; padding: 2px 8px; border-radius: 999px;
+  background: rgba(124,58,237,.15); border: 1px solid rgba(124,58,237,.4);
+  color: #c4b5fd;
+}
+.fd-seasons { margin-top: 8px; font-size: .65rem; color: var(--muted); }
+.season { border-bottom: 1px dotted rgba(0,217,255,.4); margin-right: 4px; }
+
+/* note pyramid — three labelled tiers, widening downwards */
+.fd-pyramid { margin: 14px 0 18px; }
+.pyr-tier {
+  display: flex; gap: 10px; align-items: baseline;
+  padding: 8px 12px; margin: 0 auto 4px;
+  border: 1px solid rgba(0,217,255,.14);
+  border-radius: var(--radius);
+  background: rgba(9,15,24,.55);
+  font-size: .8rem; color: var(--text);
+}
+.pyr-top   { width: 78%; border-left: 2px solid var(--primary-hi); }
+.pyr-heart { width: 89%; border-left: 2px solid var(--magenta); }
+.pyr-base  { width: 100%; border-left: 2px solid var(--gold); }
+.pyr-label { flex: 0 0 44px; font-size: .6rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+
+.fd-routine { margin-bottom: 18px; }
+.fd-routine .btn { min-height: 44px; margin-top: 8px; }
+.fd-reason { font-size: .75rem; line-height: 1.45; margin: 8px 0 4px; color: var(--muted); }
+
+/* 90-day wear calendar */
+.fd-cal { margin-bottom: 16px; }
+.wear-cal {
+  display: grid;
+  grid-template-columns: repeat(18, 1fr);
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.wc-dot {
+  width: 100%; aspect-ratio: 1; border-radius: 50%;
+  background: rgba(0,217,255,.09);
+  border: 1px solid rgba(0,217,255,.08);
+}
+.wc-dot.worn {
+  background: var(--primary);
+  box-shadow: 0 0 6px rgba(0,217,255,.7);
+  border-color: var(--primary-hi);
+}
+.fd-undo {
+  background: none; border: none; padding: 8px 0;
+  color: var(--muted); font: inherit; font-size: .72rem;
+  text-decoration: underline dotted; cursor: pointer;
+}
+.fd-undo:hover { color: var(--amber); }
+
+.fd-stats {
+  display: flex; flex-wrap: wrap; gap: 14px;
+  font-size: .68rem; color: var(--muted);
+  border-top: 1px solid rgba(0,217,255,.12); padding-top: 12px;
+}
+
+/* ── Toast + confetti-lite ───────────────────────────────────────────── */
+.frag-toast {
+  position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%);
+  z-index: 90;
+  padding: 10px 18px;
+  background: rgba(6,11,18,.95);
+  border: 1px solid rgba(0,217,255,.45);
+  border-radius: var(--radius);
+  color: var(--text); font-size: .85rem;
+  box-shadow: 0 0 18px rgba(0,217,255,.25);
+  animation: frag-toast-in .18s ease-out;
+}
+@keyframes frag-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+.frag-confetti {
+  position: fixed; bottom: 30%; z-index: 95;
+  width: 7px; height: 7px; border-radius: 1px;
+  pointer-events: none;
+  animation: frag-confetti-fly 1.2s ease-out forwards;
+}
+@keyframes frag-confetti-fly {
+  0%   { opacity: 1; transform: translate(0, 0) rotate(0deg); }
+  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) rotate(540deg); }
+}
+
+/* ── Dashboard "Today's Scent" card (lives on command.html) ──────────── */
+#scent-card .scent-line { display: flex; align-items: center; gap: 12px; }
+#scent-card .scent-name { font-weight: 700; color: var(--text); font-size: .95rem; }
+#scent-card .scent-context { font-size: .68rem; color: var(--primary); }
+#scent-card .scent-steps { font-size: .74rem; color: var(--muted); margin-top: 4px; }
+#scent-card .scent-wear {
+  margin-left: auto; min-height: 44px; padding: 8px 16px;
+  white-space: nowrap;
+}
+
+/* ── Mobile (≤480px): horizontal swipe shelf, stacked hero ───────────── */
+@media (max-width: 640px) {
+  .hero-grid { grid-template-columns: 1fr; }
+  .hero-bottle { order: -1; }
+  .hero-img { width: 130px; height: 170px; }
+  .frag-stats-strip { gap: 12px; }
+}
+@media (max-width: 480px) {
+  .frag-shelf {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    gap: 14px;
+    padding-bottom: 10px;
+  }
+  .bottle-card {
+    flex: 0 0 180px;
+    scroll-snap-align: center;
+  }
+  .bottle-cam { opacity: .8; }   /* no hover on touch — keep it visible */
+  .wear-cal { grid-template-columns: repeat(15, 1fr); }
+}

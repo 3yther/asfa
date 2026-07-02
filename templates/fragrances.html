@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>ASFA // SCENT VAULT</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="mask-icon" href="{{ url_for('static', filename='favicon.svg') }}" color="#00d9ff">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/fragrances.css') }}">
+<script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/sounds.js') }}" defer></script>
+</head>
+<body class="frag-body">
+<canvas id="starfield-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;"></canvas>
+
+{% include "nav.html" with context %}
+
+<main class="frag-screen">
+  <header class="frag-head">
+    <h1 class="screen-title" data-decode>Scent Vault</h1>
+    <p class="screen-sub">Shelf • Rotation • Full-routine layering</p>
+  </header>
+
+  <!-- ── Stats strip ─────────────────────────────────────────────────── -->
+  <div class="frag-stats-strip sci-fi-panel" id="frag-stats-strip">
+    <div class="skeleton skeleton-row"></div>
+  </div>
+
+  <!-- ── Hero: today's / tonight's scent ─────────────────────────────── -->
+  <section class="card sci-fi-panel frag-hero" id="frag-hero">
+    <div class="card-head">
+      <h2 data-decode id="frag-hero-title">Today's Scent</h2>
+      <span class="frag-hero-context mono" id="frag-hero-context">—</span>
+    </div>
+    <div class="frag-occasions" id="frag-occasions" role="group" aria-label="Occasion">
+      <button class="occ-pill" data-occasion="">Any</button>
+      <button class="occ-pill" data-occasion="casual">Casual</button>
+      <button class="occ-pill" data-occasion="office">Office</button>
+      <button class="occ-pill" data-occasion="date">Date</button>
+      <button class="occ-pill" data-occasion="gym">Gym</button>
+      <button class="occ-pill" data-occasion="formal">Formal</button>
+    </div>
+    <div class="frag-hero-body" id="frag-hero-body">
+      <div class="skeleton skeleton-block"></div>
+    </div>
+  </section>
+
+  <!-- ── The shelf ───────────────────────────────────────────────────── -->
+  <section class="frag-shelf-wrap sci-fi-panel">
+    <h2 class="shelf-title" data-decode>The Collection</h2>
+    <div class="frag-shelf" id="frag-shelf">
+      <div class="skeleton-card sci-fi-panel"></div>
+      <div class="skeleton-card sci-fi-panel"></div>
+      <div class="skeleton-card sci-fi-panel"></div>
+    </div>
+  </section>
+</main>
+
+<!-- ── Detail drawer ───────────────────────────────────────────────────── -->
+<div id="frag-detail-overlay" class="frag-detail-overlay" hidden>
+  <aside class="frag-detail sci-fi-panel" id="frag-detail" role="dialog" aria-modal="true">
+    <button class="frag-detail-close" id="frag-detail-close" aria-label="Close">✕</button>
+    <div id="frag-detail-body"><!-- filled by JS --></div>
+  </aside>
+</div>
+
+<!-- hidden file input reused for every 📷 upload -->
+<input type="file" id="frag-upload-input" accept="image/jpeg,image/png,image/webp" hidden>
+
+<script>
+  document.querySelectorAll('.sci-fi-panel').forEach(el => {
+    ['corner-bl', 'corner-br'].forEach(cls => {
+      const div = document.createElement('div');
+      div.className = cls;
+      el.appendChild(div);
+    });
+  });
+</script>
+<script src="{{ url_for('static', filename='js/fragrances.js') }}" defer></script>
+<script src="/static/js/starfield.js" defer></script>
+</body>
+</html>

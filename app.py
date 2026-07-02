@@ -260,6 +260,12 @@ init_all_skills()
 # Gym tracker — create the gym_* tables and seed the exercise library + routines.
 # Standalone; touches no existing tables.
 db.init_gym_data()
+# Scent Vault — fragrance shelf, body products, curated pairings + wear log.
+db.init_fragrance_data()
+# Bottle photos live outside git (see .gitignore); recreate the dir on boot so
+# a fresh clone/deploy can accept uploads immediately.
+FRAGRANCE_UPLOAD_DIR = os.path.join(app.static_folder, "uploads", "fragrances")
+os.makedirs(FRAGRANCE_UPLOAD_DIR, exist_ok=True)
 
 
 def _today():
@@ -296,6 +302,11 @@ def system():
 @app.route("/gym")
 def gym():
     return render_template("gym.html", active="gym", active_tab="gym")
+
+
+@app.route("/fragrances")
+def fragrances():
+    return render_template("fragrances.html", active="fragrances")
 
 
 @app.route("/plans/<plan_id>")
@@ -760,6 +771,229 @@ def api_gym_trainer():
 @limiter.request_filter
 def _exempt_gym_api():
     return request.path.startswith("/api/gym") and bool(session.get("authed"))
+
+
+# ── Scent Vault ────────────────────────────────────────────────────────────────
+# Fragrance shelf + smart daily routine recommendation. Reads are plain JSON;
+# the wear/undo/image writes are covered by the global CSRF gate like every
+# other POST/DELETE. Scoring is a pure function (injectable hour/temp) so the
+# recommendation is testable without mocking the clock or the weather API.
+
+_SCENT_SEASONS = {12: "winter", 1: "winter", 2: "winter",
+                  3: "spring", 4: "spring", 5: "spring",
+                  6: "summer", 7: "summer", 8: "summer",
+                  9: "autumn", 10: "autumn", 11: "autumn"}
+_SCENT_OCCASIONS = {"casual", "office", "date", "gym", "formal"}
+_WARM_WEATHER_VIBES = {"fresh", "citrus", "clean", "aromatic"}
+_COLD_WEATHER_VIBES = {"warm", "sweet", "spicy", "woody", "ambery"}
+
+
+def _scent_time_bucket(hour: int) -> str:
+    if 5 <= hour < 11:
+        return "morning"
+    if 11 <= hour < 17:
+        return "day"
+    if 17 <= hour < 22:
+        return "evening"
+    return "night"
+
+
+def _csv_set(value) -> set:
+    return {v.strip().lower() for v in str(value or "").split(",") if v.strip()}
+
+
+def _score_fragrance(frag: dict, bucket: str, season: str, temp_c, occasion) -> tuple:
+    """Score one bottle against the current context. Returns (score, specificity,
+    factors): factors are the human fragments the reason string is built from;
+    specificity counts EXACT season/time matches (vs catch-all "all") and only
+    breaks ties — a bottle made for this exact season/hour beats an all-rounder."""
+    score, specificity, factors = 0.0, 0, []
+    times = _csv_set(frag.get("time_of_day"))
+    if bucket in times or "all" in times:
+        score += 3
+        specificity += bucket in times
+        factors.append(f"suits the {bucket}")
+    seasons = _csv_set(frag.get("best_seasons"))
+    if season in seasons or "all" in seasons:
+        score += 3
+        specificity += season in seasons
+    vibes = _csv_set(frag.get("vibe"))
+    if temp_c is not None:
+        if temp_c >= 20 and vibes & _WARM_WEATHER_VIBES:
+            score += 3
+            factors.append(f"its {'/'.join(sorted(vibes & _WARM_WEATHER_VIBES))} character fits {round(temp_c)}°C")
+        elif temp_c < 12 and vibes & _COLD_WEATHER_VIBES:
+            score += 3
+            factors.append(f"its {'/'.join(sorted(vibes & _COLD_WEATHER_VIBES))} character suits {round(temp_c)}°C")
+    if occasion and occasion in _csv_set(frag.get("occasions")):
+        score += 4
+        factors.append(f"tagged for {occasion}")
+    days = frag.get("days_since_worn")
+    if days is None:
+        days = 14  # never worn — max rotation nudge
+    rot = min(days, 14) / 14 * 2
+    score += rot
+    if days == 0:
+        score -= 5  # already worn today — rotate
+    elif days >= 7 and rot >= 1:
+        factors.append(f"you haven't worn it in {days} days")
+    return score, specificity, factors
+
+
+def _fragrance_recommendation(occasion=None, hour=None, temp_c=None, condition=None,
+                              month=None, fragrances=None):
+    """Pick tonight's scent. hour/temp_c/condition/month are injectable for
+    tests; in normal use they come from the server clock and weather service."""
+    if hour is None:
+        hour = datetime.now().hour
+    if temp_c is None:
+        w = get_weather()
+        if not w.get("error"):
+            temp_c = w.get("temp")
+            condition = w.get("description")
+    bucket = _scent_time_bucket(hour)
+    season = _SCENT_SEASONS[month or datetime.now().month]
+    frags = fragrances if fragrances is not None else db.get_fragrances()
+    if not frags:
+        return None
+    scored = [(f, *(_score_fragrance(f, bucket, season, temp_c, occasion))) for f in frags]
+    # Best score wins; ties go to the least-worn bottle (fair rotation), then
+    # to the most context-specific match (exact season/time beats "all").
+    scored.sort(key=lambda t: (-t[1], t[0].get("wear_count") or 0, -t[2]))
+    winner, score, _spec, factors = scored[0]
+
+    ctx_bits = [bucket]
+    if temp_c is not None:
+        ctx_bits.append(f"{round(temp_c)}°C")
+    ctx = " + ".join(ctx_bits)
+    reason = f"{ctx[0].upper()}{ctx[1:]} → reach for {winner['name']}."
+    if factors:
+        joined = "; ".join(factors)
+        reason += f" {joined[0].upper()}{joined[1:]}."
+    pairing = db.get_fragrance_pairing(winner["id"]) or {}
+    if pairing.get("layering_fragrance"):
+        reason += f" Layer {pairing['layering_fragrance']['name']} — {pairing.get('layering_notes') or 'see routine'}"
+    return {
+        "fragrance": {k: winner.get(k) for k in
+                      ("id", "name", "brand", "concentration", "vibe", "image_url",
+                       "is_signature", "wear_count", "days_since_worn")},
+        "routine": pairing,
+        "context": {"time_bucket": bucket, "season": season,
+                    "temp_c": temp_c, "condition": condition,
+                    "occasion": occasion},
+        "reason": reason,
+    }
+
+
+@app.route("/api/fragrances")
+def api_fragrances():
+    return jsonify(db.get_fragrances())
+
+
+@app.route("/api/fragrances/stats")
+def api_fragrance_stats():
+    return jsonify(db.get_fragrance_stats())
+
+
+@app.route("/api/fragrances/recommendation")
+def api_fragrance_recommendation():
+    occasion = (request.args.get("occasion") or "").strip().lower() or None
+    if occasion and occasion not in _SCENT_OCCASIONS:
+        return jsonify({"error": "unknown occasion"}), 400
+    rec = _fragrance_recommendation(occasion=occasion)
+    if not rec:
+        return jsonify({"error": "no fragrances in collection"}), 404
+    return jsonify(rec)
+
+
+@app.route("/api/fragrances/<int:fragrance_id>")
+def api_fragrance_detail(fragrance_id):
+    frag = db.get_fragrance(fragrance_id)
+    if not frag:
+        return jsonify({"error": "not found"}), 404
+    frag["pairing"] = db.get_fragrance_pairing(fragrance_id)
+    frag["wears"] = db.get_fragrance_wears(fragrance_id, days=90)
+    stats = db.get_fragrance_stats()
+    ranked = sorted(stats["rotation"], key=lambda r: -r["wear_count"])
+    frag["rotation_rank"] = next(
+        (i + 1 for i, r in enumerate(ranked) if r["id"] == fragrance_id), None)
+    frag["collection_size"] = len(ranked)
+    return jsonify(frag)
+
+
+@app.route("/api/fragrances/<int:fragrance_id>/wear", methods=["POST"])
+def api_fragrance_wear(fragrance_id):
+    d = request.get_json(silent=True) or {}
+    time_of_day = (d.get("time_of_day") or "").strip().lower() or None
+    occasion = (d.get("occasion") or "").strip().lower() or None
+    if time_of_day and time_of_day not in {"morning", "day", "evening", "night"}:
+        return jsonify({"error": "bad time_of_day"}), 400
+    if occasion and occasion not in _SCENT_OCCASIONS:
+        return jsonify({"error": "unknown occasion"}), 400
+    updated = db.log_fragrance_wear(fragrance_id, time_of_day, occasion)
+    if not updated:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(updated)
+
+
+@app.route("/api/fragrances/<int:fragrance_id>/wear/last", methods=["DELETE"])
+def api_fragrance_undo_wear(fragrance_id):
+    updated = db.undo_last_fragrance_wear(fragrance_id)
+    if not updated:
+        return jsonify({"error": "no wear to undo"}), 404
+    return jsonify(updated)
+
+
+# Accepted upload formats, validated by CONTENT not filename: magic-byte sniff
+# first (cheap reject), then a full Pillow decode (catches polyglots/corrupt
+# files) which also re-encodes the image — stripping EXIF/GPS metadata.
+_IMG_MAGIC = {
+    "jpg": lambda b: b[:3] == b"\xff\xd8\xff",
+    "png": lambda b: b[:8] == b"\x89PNG\r\n\x1a\n",
+    "webp": lambda b: b[:4] == b"RIFF" and b[8:12] == b"WEBP",
+}
+_IMG_MAX_BYTES = 5 * 1024 * 1024
+_PIL_FORMATS = {"jpg": "JPEG", "png": "PNG", "webp": "WEBP"}
+
+
+@app.route("/api/fragrances/<int:fragrance_id>/image", methods=["POST"])
+def api_fragrance_image(fragrance_id):
+    if not db.get_fragrance(fragrance_id):
+        return jsonify({"error": "not found"}), 404
+    f = request.files.get("image")
+    if not f:
+        return jsonify({"error": "no image file"}), 400
+    data = f.read(_IMG_MAX_BYTES + 1)
+    if len(data) > _IMG_MAX_BYTES:
+        return jsonify({"error": "image too large (max 5MB)"}), 413
+    ext = next((e for e, sniff in _IMG_MAGIC.items() if sniff(data)), None)
+    if not ext:
+        return jsonify({"error": "unsupported image type (jpg/png/webp only)"}), 415
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    try:
+        img = Image.open(BytesIO(data))
+        img.load()
+        # Bake in the EXIF orientation, then save WITHOUT metadata.
+        img = ImageOps.exif_transpose(img)
+    except Exception:
+        return jsonify({"error": "corrupt or unreadable image"}), 415
+    filename = f"{fragrance_id}.{ext}"
+    path = os.path.join(FRAGRANCE_UPLOAD_DIR, filename)
+    # Replacing a photo may change extension — drop stale siblings first.
+    for old_ext in _IMG_MAGIC:
+        if old_ext != ext:
+            try:
+                os.remove(os.path.join(FRAGRANCE_UPLOAD_DIR, f"{fragrance_id}.{old_ext}"))
+            except FileNotFoundError:
+                pass
+    if img.mode in ("P", "RGBA") and ext == "jpg":
+        img = img.convert("RGB")
+    img.save(path, format=_PIL_FORMATS[ext])
+    # Cache-buster so a replaced photo swaps immediately in the UI.
+    image_url = f"/static/uploads/fragrances/{filename}?v={int(datetime.now().timestamp())}"
+    db.set_fragrance_image(fragrance_id, image_url)
+    return jsonify({"ok": True, "image_url": image_url})
 
 
 # ── Money ──────────────────────────────────────────────────────────────────────

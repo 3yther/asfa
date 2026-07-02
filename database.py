@@ -3387,3 +3387,388 @@ def clear_auth_failures(ip: str):
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
         cur.execute(f"DELETE FROM auth_failures WHERE ip = {ph}", (ip,))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── Scent Vault — fragrance collection, body products, pairings, wear log ─────
+# Standalone module: the 7-bottle fragrance shelf, the body/grooming products
+# layered under them, one curated routine (pairing) per fragrance, and a wear
+# log driving rotation stats + the smart daily recommendation. All tables are
+# namespaced ``fragrance*``/``body_products`` and never touch existing schema.
+# Created + seeded idempotently on boot via ``init_fragrance_data()``.
+
+_FRAGRANCE_READY = False
+
+
+def _ensure_fragrance_tables():
+    """Create the fragrance tables if missing. Idempotent; SQLite/Postgres."""
+    global _FRAGRANCE_READY
+    if _FRAGRANCE_READY:
+        return
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS fragrances (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            brand TEXT NOT NULL,
+            notes TEXT,
+            concentration TEXT,
+            vibe TEXT,
+            best_seasons TEXT,
+            time_of_day TEXT,
+            occasions TEXT,
+            longevity_hrs INTEGER,
+            wear_count INTEGER DEFAULT 0,
+            last_worn_date TEXT,
+            image_url TEXT,
+            is_signature INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS body_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_type TEXT NOT NULL,
+            brand TEXT NOT NULL,
+            name TEXT NOT NULL,
+            scent TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS fragrance_pairings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fragrance_id INTEGER NOT NULL,
+            shower_gel_id INTEGER,
+            body_scrub_id INTEGER,
+            body_lotion_id INTEGER,
+            body_oil_id INTEGER,
+            deodorant_id INTEGER,
+            layering_fragrance_id INTEGER,
+            layering_notes TEXT,
+            recommendation_reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS fragrance_wears (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fragrance_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            time_of_day TEXT,
+            occasion TEXT
+        )""",
+    ]
+    with get_db() as conn:
+        cur = conn.cursor()
+        for stmt in stmts:
+            if USE_POSTGRES:
+                stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+            cur.execute(stmt)
+    _FRAGRANCE_READY = True
+
+
+# The real shelf: 7 bottles (note pyramids from each house's official listing)
+# and the body products they get layered over. Order matters — pairings below
+# reference fragrances and products by (name) lookups, not hardcoded ids.
+_FRAGRANCE_SEED = [
+    ('Boss Bottled', 'Hugo Boss',
+     'Top: Apple, Bergamot, Lemon; Heart: Cinnamon, Geranium, Carnation; Base: Sandalwood, Cedar, Vetiver, Musk',
+     'EDT', 'warm,spicy,woody,versatile', 'autumn,winter', 'day,evening', 'office,casual,date', 6),
+    ('Paradigme', 'Prada',
+     'Top: Bergamot, Bitter Orange; Heart: Orange Blossom, Neroli; Base: Ambrette, Musk, Woods',
+     'EDP', 'fresh,clean,elegant,citrus', 'spring,summer', 'morning,day', 'office,casual,formal', 7),
+    ('Sauvage Eau de Parfum', 'Dior',
+     'Top: Bergamot, Spicy notes; Heart: Sichuan Pepper, Lavender, Star Anise, Nutmeg; Base: Ambroxan, Vanilla, Cedar',
+     'EDP', 'fresh,spicy,ambery,crowd-pleaser', 'all', 'day,evening', 'casual,date,office', 8),
+    ('Bleu de Chanel Eau de Parfum', 'Chanel',
+     'Top: Grapefruit, Lemon, Mint, Pink Pepper; Heart: Ginger, Nutmeg, Jasmine; Base: Incense, Vetiver, Cedar, Sandalwood',
+     'EDP', 'fresh,woody,sophisticated,signature', 'all', 'day,evening', 'office,date,formal', 9),
+    ('Le Beau Le Parfum', 'Jean Paul Gaultier',
+     'Top: Bergamot, Coconut; Heart: Tonka Bean; Base: Woody, Vanilla',
+     'EDP', 'sweet,coconut,tropical,warm', 'summer,autumn', 'evening,night', 'date,casual', 8),
+    ('Le Male Le Parfum', 'Jean Paul Gaultier',
+     'Top: Cardamom, Mint; Heart: Lavender, Cinnamon; Base: Vanilla, Tonka, Amber',
+     'EDP', 'sweet,spicy,warm,seductive', 'autumn,winter', 'evening,night', 'date,formal', 9),
+    ('Y Eau de Parfum', 'Yves Saint Laurent',
+     'Top: Bergamot, Apple, Ginger; Heart: Sage, Juniper, Geranium; Base: Amberwood, Tonka, Cedar, Vetiver',
+     'EDP', 'fresh,aromatic,woody,modern', 'spring,summer,autumn', 'morning,day', 'office,casual,gym', 7),
+]
+
+_BODY_PRODUCT_SEED = [
+    ('shower_gel', 'Method', 'Coconut Body Wash', 'Coconut'),
+    ('shower_gel', 'Bulldog', 'Original Shower Gel', 'Herbal & Refreshing'),
+    ('shower_gel', 'Dove', 'Pampering Body Wash', 'Shea Butter & Vanilla'),
+    ('body_scrub', 'Organic Shop', 'Hydrating Body Scrub', 'Coconut & Sugar'),
+    ('body_lotion', 'Vaseline', 'Cocoa Radiant Lotion', 'Cocoa'),
+    ('body_lotion', 'Dove', 'Body Love Essential Care Lotion', 'Glycerin'),
+    ('body_oil', 'Vaseline', 'Cocoa Radiant Body Oil', 'Cocoa'),
+    ('deodorant', 'Sure', 'Cotton Dry Antiperspirant', 'Cotton'),
+    ('deodorant', 'Native', 'Coconut & Vanilla Deodorant', 'Coconut & Vanilla'),
+    ('powder', "Johnson's", 'Baby Powder', 'Classic'),
+]
+
+# One curated routine per fragrance. Keys are product names (resolved to ids at
+# seed time); ``layer`` is another fragrance's name for combo layering.
+_PAIRING_SEED = [
+    dict(frag='Boss Bottled', gel='Pampering Body Wash', lotion='Cocoa Radiant Lotion',
+         oil='Cocoa Radiant Body Oil', deo='Coconut & Vanilla Deodorant',
+         reason='Warm spicy woods love a creamy vanilla/cocoa base — it boosts warmth and longevity in cold months.'),
+    dict(frag='Paradigme', gel='Original Shower Gel', lotion='Body Love Essential Care Lotion',
+         deo='Cotton Dry Antiperspirant',
+         reason='Keep it clean and fresh; skip heavy cocoa so the elegant citrus-neroli stays crisp.'),
+    dict(frag='Sauvage Eau de Parfum', gel='Coconut Body Wash', lotion='Cocoa Radiant Lotion',
+         oil='Cocoa Radiant Body Oil', deo='Coconut & Vanilla Deodorant',
+         reason='Ambroxan + vanilla in Sauvage pairs beautifully with cocoa/coconut for a warm, projecting trail.'),
+    dict(frag='Bleu de Chanel Eau de Parfum', gel='Coconut Body Wash', lotion='Cocoa Radiant Lotion',
+         deo='Cotton Dry Antiperspirant',
+         reason='Your signature. A light cocoa base adds depth without fighting the fresh-woody structure.'),
+    dict(frag='Le Beau Le Parfum', gel='Coconut Body Wash', oil='Cocoa Radiant Body Oil',
+         deo='Coconut & Vanilla Deodorant',
+         reason="Coconut wash + cocoa oil amplify Le Beau's tropical coconut-tonka — a full creamy summer combo."),
+    dict(frag='Le Male Le Parfum', gel='Pampering Body Wash', lotion='Cocoa Radiant Lotion',
+         oil='Cocoa Radiant Body Oil', deo='Coconut & Vanilla Deodorant',
+         layer='Le Beau Le Parfum',
+         layer_notes='1 spritz Le Beau on chest, Le Male on neck — coconut + vanilla-amber.',
+         reason='Both are sweet JPG scents; the cocoa/vanilla base makes an addictive cold-weather date combo.'),
+    dict(frag='Y Eau de Parfum', gel='Original Shower Gel', lotion='Body Love Essential Care Lotion',
+         deo='Cotton Dry Antiperspirant',
+         reason='Fresh aromatic-woody stays sharp on a clean herbal base — ideal office/gym scent.'),
+]
+
+
+def seed_fragrance_data():
+    """Insert the collection once. Skipped entirely when fragrances exist, so a
+    live wear history / uploaded images are never clobbered by a redeploy."""
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS n FROM fragrances")
+        if int(cur.fetchone()["n"]):
+            return
+        ph = "%s" if USE_POSTGRES else "?"
+        fcols = ("name, brand, notes, concentration, vibe, best_seasons, "
+                 "time_of_day, occasions, longevity_hrs, is_signature")
+        for row in _FRAGRANCE_SEED:
+            sig = 1 if row[0] == 'Bleu de Chanel Eau de Parfum' else 0
+            cur.execute(
+                f"INSERT INTO fragrances ({fcols}) VALUES ({','.join([ph]*10)})",
+                row + (sig,))
+        for row in _BODY_PRODUCT_SEED:
+            cur.execute(
+                f"INSERT INTO body_products (product_type, brand, name, scent) "
+                f"VALUES ({','.join([ph]*4)})", row)
+
+        def frag_id(name):
+            cur.execute(f"SELECT id FROM fragrances WHERE name = {ph}", (name,))
+            r = cur.fetchone()
+            return r["id"] if r else None
+
+        def product_id(name):
+            cur.execute(f"SELECT id FROM body_products WHERE name = {ph}", (name,))
+            r = cur.fetchone()
+            return r["id"] if r else None
+
+        pcols = ("fragrance_id, shower_gel_id, body_scrub_id, body_lotion_id, "
+                 "body_oil_id, deodorant_id, layering_fragrance_id, "
+                 "layering_notes, recommendation_reason")
+        for p in _PAIRING_SEED:
+            cur.execute(
+                f"INSERT INTO fragrance_pairings ({pcols}) VALUES ({','.join([ph]*9)})",
+                (frag_id(p['frag']),
+                 product_id(p['gel']) if p.get('gel') else None,
+                 product_id(p['scrub']) if p.get('scrub') else None,
+                 product_id(p['lotion']) if p.get('lotion') else None,
+                 product_id(p['oil']) if p.get('oil') else None,
+                 product_id(p['deo']) if p.get('deo') else None,
+                 frag_id(p['layer']) if p.get('layer') else None,
+                 p.get('layer_notes'), p['reason']))
+
+
+def init_fragrance_data():
+    """Create + seed the Scent Vault tables. Safe to call on every boot."""
+    _ensure_fragrance_tables()
+    seed_fragrance_data()
+
+
+def _days_since(iso_date):
+    """Whole days between an ISO date string and today; None if never/unparseable."""
+    if not iso_date:
+        return None
+    try:
+        return (date.today() - date.fromisoformat(str(iso_date)[:10])).days
+    except ValueError:
+        return None
+
+
+def _fragrance_row_to_dict(row) -> dict:
+    d = dict(row)
+    d["days_since_worn"] = _days_since(d.get("last_worn_date"))
+    d.pop("created_at", None)
+    return d
+
+
+def get_fragrances() -> list:
+    """The whole shelf, with computed days_since_worn."""
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM fragrances ORDER BY is_signature DESC, name")
+        return [_fragrance_row_to_dict(r) for r in cur.fetchall()]
+
+
+def get_fragrance(fragrance_id: int):
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM fragrances WHERE id = {ph}", (fragrance_id,))
+        row = cur.fetchone()
+        return _fragrance_row_to_dict(row) if row else None
+
+
+def get_fragrance_pairing(fragrance_id: int):
+    """The fragrance's curated routine with product/fragrance ids resolved to
+    human-readable entries (the UI never sees raw FK ids)."""
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM fragrance_pairings WHERE fragrance_id = {ph} "
+            f"ORDER BY id LIMIT 1", (fragrance_id,))
+        pairing = cur.fetchone()
+        if not pairing:
+            return None
+        pairing = dict(pairing)
+
+        def product(pid):
+            if not pid:
+                return None
+            cur.execute(f"SELECT * FROM body_products WHERE id = {ph}", (pid,))
+            r = cur.fetchone()
+            if not r:
+                return None
+            r = dict(r)
+            return {"id": r["id"], "brand": r["brand"], "name": r["name"], "scent": r["scent"]}
+
+        layering = None
+        if pairing.get("layering_fragrance_id"):
+            cur.execute(f"SELECT id, name, brand FROM fragrances WHERE id = {ph}",
+                        (pairing["layering_fragrance_id"],))
+            r = cur.fetchone()
+            if r:
+                layering = dict(r)
+        return {
+            "shower_gel": product(pairing.get("shower_gel_id")),
+            "body_scrub": product(pairing.get("body_scrub_id")),
+            "body_lotion": product(pairing.get("body_lotion_id")),
+            "body_oil": product(pairing.get("body_oil_id")),
+            "deodorant": product(pairing.get("deodorant_id")),
+            "layering_fragrance": layering,
+            "layering_notes": pairing.get("layering_notes"),
+            "reason": pairing.get("recommendation_reason"),
+        }
+
+
+def get_fragrance_wears(fragrance_id: int, days: int = 90) -> list:
+    """Wear rows for the last `days` days, newest first."""
+    _ensure_fragrance_tables()
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT date, time_of_day, occasion FROM fragrance_wears "
+            f"WHERE fragrance_id = {ph} AND date >= {ph} ORDER BY date DESC, id DESC",
+            (fragrance_id, cutoff))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def log_fragrance_wear(fragrance_id: int, time_of_day=None, occasion=None):
+    """Record one wear today: insert the wear row, bump wear_count and
+    last_worn_date. Returns the updated fragrance dict, or None if unknown."""
+    _ensure_fragrance_tables()
+    today = date.today().isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT id FROM fragrances WHERE id = {ph}", (fragrance_id,))
+        if not cur.fetchone():
+            return None
+        cur.execute(
+            f"INSERT INTO fragrance_wears (fragrance_id, date, time_of_day, occasion) "
+            f"VALUES ({ph}, {ph}, {ph}, {ph})",
+            (fragrance_id, today, time_of_day, occasion))
+        cur.execute(
+            f"UPDATE fragrances SET wear_count = wear_count + 1, "
+            f"last_worn_date = {ph} WHERE id = {ph}", (today, fragrance_id))
+    return get_fragrance(fragrance_id)
+
+
+def undo_last_fragrance_wear(fragrance_id: int):
+    """Mis-tap safety: delete the most recent wear row, decrement wear_count
+    (floored at 0) and re-derive last_worn_date from what's left. Returns the
+    updated fragrance dict, or None if there was nothing to undo."""
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT id FROM fragrance_wears WHERE fragrance_id = {ph} "
+            f"ORDER BY date DESC, id DESC LIMIT 1", (fragrance_id,))
+        last = cur.fetchone()
+        if not last:
+            return None
+        cur.execute(f"DELETE FROM fragrance_wears WHERE id = {ph}", (last["id"],))
+        cur.execute(
+            f"SELECT MAX(date) AS d FROM fragrance_wears WHERE fragrance_id = {ph}",
+            (fragrance_id,))
+        prev = cur.fetchone()["d"]
+        cur.execute(
+            f"UPDATE fragrances SET wear_count = MAX(wear_count - 1, 0), "
+            f"last_worn_date = {ph} WHERE id = {ph}"
+            if not USE_POSTGRES else
+            f"UPDATE fragrances SET wear_count = GREATEST(wear_count - 1, 0), "
+            f"last_worn_date = {ph} WHERE id = {ph}",
+            (prev, fragrance_id))
+    return get_fragrance(fragrance_id)
+
+
+def set_fragrance_image(fragrance_id: int, image_url: str):
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"UPDATE fragrances SET image_url = {ph} WHERE id = {ph}",
+                    (image_url, fragrance_id))
+
+
+def get_fragrance_stats() -> dict:
+    """Collection insights: totals, most/least worn, signature, neglected
+    bottles (>30d unworn), wears this month, and per-fragrance rotation share."""
+    frags = get_fragrances()
+    month_start = date.today().replace(day=1).isoformat()
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT COUNT(*) AS n FROM fragrance_wears WHERE date >= {ph}",
+                    (month_start,))
+        wears_this_month = int(cur.fetchone()["n"])
+    total_wears = sum(f["wear_count"] or 0 for f in frags)
+    worn = sorted(frags, key=lambda f: f["wear_count"] or 0)
+    neglected = [
+        {"id": f["id"], "name": f["name"], "days_since_worn": f["days_since_worn"]}
+        for f in frags
+        if f["days_since_worn"] is None or f["days_since_worn"] > 30
+    ]
+    signature = next((f for f in frags if f["is_signature"]), None)
+    return {
+        "total_wears": total_wears,
+        "wears_this_month": wears_this_month,
+        "most_worn": ({"id": worn[-1]["id"], "name": worn[-1]["name"],
+                       "wear_count": worn[-1]["wear_count"]} if worn and worn[-1]["wear_count"] else None),
+        "least_worn": ({"id": worn[0]["id"], "name": worn[0]["name"],
+                        "wear_count": worn[0]["wear_count"]} if worn else None),
+        "signature": ({"id": signature["id"], "name": signature["name"]} if signature else None),
+        "neglected": neglected,
+        "rotation": [
+            {"id": f["id"], "name": f["name"], "wear_count": f["wear_count"] or 0,
+             "share": round((f["wear_count"] or 0) / total_wears, 3) if total_wears else 0}
+            for f in frags
+        ],
+    }

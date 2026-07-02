@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/fragrances.css') }}">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
@@ -320,6 +321,15 @@
       </div>
       <div class="ticker-fade"></div>
     </div>
+  </section>
+
+  <!-- Today's Scent — compact fragrance recommendation (full tab at /fragrances) -->
+  <section class="card sci-fi-panel" id="scent-card" data-card="scent" data-tabs="home">
+    <div class="card-head">
+      <h2 data-decode>Today's Scent</h2>
+      <a class="mono muted" href="/fragrances" style="font-size:.65rem">VAULT →</a>
+    </div>
+    <div id="scent-body"><span class="muted">— SCANNING SHELF —</span></div>
   </section>
 
   <!-- ROW 5: Biometrics row -->

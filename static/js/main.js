@@ -568,6 +568,7 @@ function loadAll() {
   fetchNews();
   fetchMoney();
   fetchGym();
+  fetchScent();
   fetchReflection();
   fetchGoals();
   fetchSupplements();
@@ -935,6 +936,47 @@ async function fetchGym() {
       bwEl.textContent = d.body_weight[d.body_weight.length - 1].weight_kg + " KG";
     }
   } catch { /* silent */ }
+}
+
+// ── Today's Scent (compact fragrance recommendation) ───────────────────────────
+async function fetchScent() {
+  const body = document.getElementById("scent-body");
+  if (!body) return;
+  try {
+    const rec = await apiGet("/api/fragrances/recommendation");
+    const f = rec.fragrance, ctx = rec.context || {}, r = rec.routine || {};
+    const ctxBits = [ctx.time_bucket, ctx.temp_c != null ? `${Math.round(ctx.temp_c)}°C` : "", ctx.condition]
+      .filter(Boolean).join(" · ");
+    // Two key routine steps: the wash + whichever moisturiser the pairing uses.
+    const steps = [r.shower_gel, r.body_lotion || r.body_oil].filter(Boolean)
+      .map(p => `${esc(p.brand)} ${esc(p.name)}`).join(" → ");
+    body.innerHTML = `
+      <div class="scent-line">
+        <div>
+          <div class="scent-name">${f.is_signature ? "⭐ " : ""}💨 ${esc(f.name)}</div>
+          <div class="scent-context mono">${esc(ctxBits)}</div>
+          ${steps ? `<div class="scent-steps">${steps} → ${esc(f.name)}</div>` : ""}
+        </div>
+        <button class="btn btn-grad scent-wear" id="scent-wear-btn">✓ WEAR</button>
+      </div>`;
+    const btn = document.getElementById("scent-wear-btn");
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        const h = new Date().getHours();
+        const bucket = h >= 5 && h < 11 ? "morning" : h < 17 ? "day" : h < 22 ? "evening" : "night";
+        await apiPost(`/api/fragrances/${f.id}/wear`, { time_of_day: bucket });
+        toast(`💨 ${f.name} logged`);
+        fetchScent(); // re-fetch: today's pick is now penalised, show the next one
+      } catch {
+        toast("Could not log wear");
+        btn.disabled = false;
+      }
+    });
+    glowCard("scent");
+  } catch {
+    body.innerHTML = `<span class="muted">// SCENT VAULT OFFLINE</span>`;
+  }
 }
 
 // ── Reflection ─────────────────────────────────────────────────────────────────
