@@ -159,6 +159,7 @@ async function loadDashboard() {
     renderRankList(ranks, prs);
     renderRecovery(recovery);
     renderQuickStart(sessions);
+    renderNextTargets(sessions);
     renderCalendar(cal, sessions);
     renderWeeklyVolume(weekly);
     renderDeloadBanner(deload);
@@ -294,6 +295,39 @@ function renderQuickStart(sessions) {
     b.addEventListener("click", () => { switchTab("workout"); startRoutine(r.id); });
     wrap.appendChild(b);
   });
+}
+
+/* ── Next Session Targets — per-exercise recs for the up-next routine ── */
+async function renderNextTargets(sessions) {
+  const wrap = $("#next-targets"); if (!wrap) return;
+  const label = $("#next-targets-routine");
+  const nextType = suggestNextDayType(sessions || []);
+  const routine = ROUTINES.find(r => r.day_type === nextType) || ROUTINES[0];
+  if (!routine) { wrap.innerHTML = `<div class="empty-note">No routines yet.</div>`; return; }
+  if (label) label.textContent = `⭐ ${routine.name}`;
+  try {
+    const recs = await apiGet(`${API}/routines/${routine.id}/recommendations`);
+    wrap.innerHTML = "";
+    if (!recs.length) { wrap.innerHTML = `<div class="empty-note">No lifts in this routine.</div>`; return; }
+    recs.forEach(rec => {
+      const row = el("div", "nt-row");
+      const chip = rec.found
+        ? `<span class="nt-chip ${(REC_META[rec.verdict] || {}).cls || ""}">${esc(ntChipText(rec))}</span>`
+        : `<span class="nt-chip nt-new">🆕 first time — set baseline</span>`;
+      row.innerHTML = `<span class="nt-name">${esc(rec.exercise_name)}</span>${chip}`;
+      wrap.appendChild(row);
+    });
+  } catch (e) { wrap.innerHTML = `<div class="empty-note">Could not load targets.</div>`; }
+}
+function ntChipText(rec) {
+  const w = fmtKg(rec.recommended_weight), lw = fmtKg(rec.last_top_weight);
+  switch (rec.verdict) {
+    case "progress":  return `📈 ${w}kg × ${rec.recommended_reps}`;
+    case "beat_reps": return rec.last_top_weight > 0 ? `🎯 same ${lw}kg, +reps` : `🎯 bodyweight, +reps`;
+    case "hold":      return `⏸ hold ${lw}kg`;
+    case "deload":    return `📉 drop to ${w}kg`;
+    default:          return "";
+  }
 }
 
 function renderCalendar(cal, sessions) {
@@ -512,13 +546,39 @@ function buildExState(rex) {
 }
 
 async function hydrateLastSession(ex) {
+  const excl = S ? `?exclude_session=${S.id}` : "";
   try {
-    const ls = await apiGet(`${API}/exercises/${ex.exerciseId}/last-session`);
-    ex.lastSession = (ls && ls.sets) ? ls : null;
+    if (isCardioEx(ex)) {
+      // cardio keeps the raw last-session shape (needs notes for the intensity ghost)
+      const ls = await apiGet(`${API}/exercises/${ex.exerciseId}/last-session${excl}`);
+      ex.lastSession = (ls && ls.sets) ? ls : null;
+    } else {
+      const lp = await apiGet(`${API}/exercises/${ex.exerciseId}/last-performance${excl}`);
+      ex.lastSession = lp.found
+        ? { date: lp.session_date, days_ago: lp.days_ago, sets: lp.sets,
+            best: lp.best_working, top_set_1rm: lp.top_set_1rm }
+        : null;
+      hydrateRecommendation(ex);
+    }
     saveLS();
-    const card = $(`.exercise-card[data-ex="${ex.exerciseId}"]`);
-    if (card) refreshExerciseCard(ex);
+    refreshExerciseCard(ex);
   } catch (e) { ex.lastSession = null; }
+}
+
+async function hydrateRecommendation(ex) {
+  if (isCardioEx(ex)) { ex.recommendation = null; return; }
+  try {
+    const q = new URLSearchParams();
+    if (S) q.set("exclude_session", S.id);
+    if (ex.rep_min) q.set("rep_min", ex.rep_min);
+    if (ex.rep_max) q.set("rep_max", ex.rep_max);
+    const rec = await apiGet(`${API}/exercises/${ex.exerciseId}/recommendation?${q}`);
+    ex.recommendation = (rec && rec.found) ? rec : null;
+  } catch (e) { ex.recommendation = null; }
+  saveLS();
+  // only repaint the chip — a full refresh would wipe half-typed set inputs
+  const card = $(`.exercise-card[data-ex="${ex.exerciseId}"]`);
+  if (card) renderRecChip(ex, card);
 }
 
 async function resumeSession(active) {
@@ -597,12 +657,6 @@ function commitSessionTarget() {
 })();
 
 /* ── Exercise card ── */
-function overloadHint(ex) {
-  if (!ex.lastSession || !ex.lastSession.sets) return false;
-  const working = ex.lastSession.sets.filter(s => (s.set_type || "working") === "working");
-  if (working.length < 2) return false;
-  return working.every(s => (s.reps || 0) >= ex.rep_max);
-}
 function buildExerciseCard(ex) {
   const card = el("div", "exercise-card sci-fi-panel"); card.dataset.ex = ex.exerciseId;
   const cardio = isCardioEx(ex);
@@ -623,7 +677,7 @@ function buildExerciseCard(ex) {
     </div>
     <div class="ec-rankline"></div>
     <div class="ec-lasttime-slot"></div>
-    <div class="ec-overload-slot"></div>
+    <div class="ec-rec-slot"></div>
     <div class="set-rows"></div>
     <button class="btn add-set-btn">${addLabel}</button>`;
   corners(card);
@@ -703,12 +757,86 @@ function refreshExtras(ex, card) {
       ? ex.lastSession.sets.map(s => `${s.reps} min${s.notes ? " (" + esc(s.notes) + ")" : ""}`).join(", ")
       : ex.lastSession.sets.map(s => `${fmtKg(s.weight_kg)}kg×${s.reps}`).join(", ");
     const d = ex.lastSession.date ? new Date(ex.lastSession.date + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
-    slot.innerHTML = `<div class="ec-lasttime"><span class="lt-label">LAST</span>${sets} <span class="muted-sub">(${esc(d)})</span></div>`;
-  } else if (ex.lastSession === null) { slot.innerHTML = ""; }
-  // overload (not for cardio)
-  const os = card.querySelector(".ec-overload-slot");
-  os.innerHTML = (!cardio && overloadHint(ex)) ? `<div class="ec-overload">📈 Add 2.5kg today — you maxed the rep range last time</div>` : "";
+    const daysAgo = ex.lastSession.days_ago != null ? ex.lastSession.days_ago
+      : (ex.lastSession.date ? Math.max(0, Math.round((Date.now() - new Date(ex.lastSession.date + "T00:00:00")) / 86400000)) : null);
+    const ago = daysAgo == null ? "" : ` · ${daysAgo === 0 ? "today" : daysAgo + " day" + (daysAgo > 1 ? "s" : "") + " ago"}`;
+    slot.innerHTML = `<div class="ec-lasttime"><span class="lt-label">LAST</span>${sets} <span class="muted-sub">(${esc(d)}${ago})</span>
+      ${cardio ? "" : `<button class="lt-fill-btn">↻ Fill all from last time (${esc(d)})</button>`}</div>`;
+    const fillBtn = slot.querySelector(".lt-fill-btn");
+    if (fillBtn) fillBtn.addEventListener("click", () => fillAllFromLast(ex, card));
+  } else if (ex.lastSession === null) {
+    slot.innerHTML = cardio ? "" :
+      `<div class="ec-lasttime first-time"><span class="lt-label">NEW</span>First time logging this — set your baseline.</div>`;
+  }
+  // add-weight recommendation chip (replaces v2's flat overload hint)
+  renderRecChip(ex, card);
   renderSetRows(ex, card);
+}
+
+/* ── Smart progression: fill-all + recommendation chip ── */
+function fillAllFromLast(ex, card) {
+  const lastSets = (ex.lastSession && ex.lastSession.sets) || [];
+  if (!lastSets.length) return;
+  if (ex.rowCount < lastSets.length) { ex.rowCount = lastSets.length; renderSetRows(ex, card); }
+  card.querySelectorAll(".set-row").forEach((row, i) => {
+    if (row.classList.contains("done")) return;
+    const ghost = lastSets[i]; if (!ghost) return;   // extra rows stay blank
+    const typeSel = row.querySelector(".set-type-sel");
+    if (typeSel && ghost.set_type) typeSel.value = ghost.set_type;
+    const w = row.querySelector(".w-in"), r = row.querySelector(".r-in");
+    if (w) w.value = fmtKg(ghost.weight_kg);
+    if (r) r.value = ghost.reps;
+  });
+  toast("Filled from last time — edit anything, then ✓ to log");
+}
+
+const REC_META = {
+  progress:  { cls: "rec-progress" },
+  beat_reps: { cls: "rec-beat" },
+  hold:      { cls: "rec-hold" },
+  deload:    { cls: "rec-deload" },
+};
+function recChipText(rec) {
+  const w = fmtKg(rec.recommended_weight), lw = fmtKg(rec.last_top_weight);
+  switch (rec.verdict) {
+    case "progress":  return `📈 Add ${fmtKg(rec.increment)}kg → try ${w}kg × ${rec.recommended_reps}`;
+    case "beat_reps": return rec.last_top_weight > 0
+      ? `🎯 Same ${lw}kg — beat last time, aim ${rec.recommended_reps}+ reps`
+      : `🎯 Bodyweight — beat last time, aim ${rec.recommended_reps}+ reps`;
+    case "hold":      return `⏸ Hold ${lw}kg — consolidate this weight`;
+    case "deload":    return `📉 Drop to ${w}kg — rebuild form, you missed the range`;
+    default:          return "";
+  }
+}
+function renderRecChip(ex, card) {
+  const slot = card.querySelector(".ec-rec-slot"); if (!slot) return;
+  const rec = ex.recommendation;
+  if (isCardioEx(ex) || !rec || !rec.found) { slot.innerHTML = ""; return; }
+  const meta = REC_META[rec.verdict] || REC_META.beat_reps;
+  const reason = (rec.reason || "") + (rec.confidence === "medium"
+    ? " (based on 1 session — more data will sharpen this)" : "");
+  slot.innerHTML = `
+    <div class="rec-chip ${meta.cls}">
+      <button class="rec-text" title="Tap for why">${esc(recChipText(rec))}</button>
+      <button class="btn rec-use">Use</button>
+      <div class="rec-reason" hidden>${esc(reason)}</div>
+    </div>`;
+  slot.querySelector(".rec-text").addEventListener("click", () => {
+    const r = slot.querySelector(".rec-reason"); r.hidden = !r.hidden;
+  });
+  slot.querySelector(".rec-use").addEventListener("click", () => applyRecommendation(ex, card));
+}
+function applyRecommendation(ex, card) {
+  const rec = ex.recommendation; if (!rec || !rec.found) return;
+  card.querySelectorAll(".set-row").forEach(row => {
+    if (row.classList.contains("done")) return;
+    const typeSel = row.querySelector(".set-type-sel");
+    if (typeSel && typeSel.value !== "working") return;  // only working rows
+    const w = row.querySelector(".w-in"), r = row.querySelector(".r-in");
+    if (w) w.value = fmtKg(rec.recommended_weight);
+    if (r) r.value = rec.recommended_reps;
+  });
+  toast("Targets filled — still yours to confirm with ✓");
 }
 
 function renderSetRows(ex, card) {
@@ -1046,7 +1174,7 @@ function swapExercise(ex, newLib) {
   ex.exerciseId = newLib.id; ex.name = newLib.name; ex.muscle_group = newLib.muscle_group;
   ex.equipment = newLib.equipment; ex.exercise_type = newLib.exercise_type;
   ex.is_cardio = newLib.exercise_type === "cardio";
-  ex.loggedSets = []; ex.lastSession = undefined; ex._pr = null; ex.rowCount = ex.plannedSets;
+  ex.loggedSets = []; ex.lastSession = undefined; ex.recommendation = undefined; ex._pr = null; ex.rowCount = ex.plannedSets;
   ex.ranks = { bronze: newLib.rank_bronze, silver: newLib.rank_silver, gold: newLib.rank_gold, platinum: newLib.rank_platinum, diamond: newLib.rank_diamond };
   saveLS();
   renderActiveSession();
