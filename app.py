@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import sys
 from datetime import datetime, timedelta
 
@@ -61,7 +62,10 @@ import requests
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 import database as db
+from flask_limiter.util import get_remote_address
+
 from services import ai
+from services import telegram_bot
 from services.bots import get_bots_health, get_bots_status, get_trading_activity
 from services.briefing import build_briefing
 from services.gcal import add_event, get_todays_events, get_tomorrow_events
@@ -93,7 +97,11 @@ app.config["PREFERRED_URL_SCHEME"] = "https"
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = os.environ.get("GOOGLE_REDIRECT_URI", "").startswith("https")
+# Secure cookies whenever we're on Railway (TLS-terminated) or the OAuth
+# redirect says we're serving https; stays False for local http dev.
+app.config["SESSION_COOKIE_SECURE"] = (
+    _IS_PROD or os.environ.get("GOOGLE_REDIRECT_URI", "").startswith("https")
+)
 
 # Jinja autoescaping guards against XSS in server-rendered templates. It's ON by
 # default for .html in Flask; assert it so an accidental future override fails
@@ -119,6 +127,11 @@ def _require_login():
     if request.endpoint in _PUBLIC_ENDPOINTS:
         return None
     if session.get("authed"):
+        # Sessions created before CSRF protection shipped have no token yet;
+        # mint one on their next (page-load) request so the meta tag and the
+        # header check below agree.
+        if not session.get("csrf_token"):
+            session["csrf_token"] = secrets.token_hex(32)
         return None
     # Fail closed: if no passphrase is configured the app stays locked.
     if not APP_PASSWORD:
@@ -131,6 +144,44 @@ def _require_login():
     return redirect(url_for("login", next=request.path))
 
 
+# ── CSRF protection ────────────────────────────────────────────────────────────
+# Every state-changing request must echo the per-session token in the
+# X-CSRF-Token header (see templates/_csrf.html, which patches window.fetch so
+# all existing frontend calls send it). Runs AFTER the auth gate (registration
+# order), so unauthenticated writes are already 401 before this fires. /login
+# is exempt — it's the request that creates the token. Background jobs
+# (APScheduler) and the Telegram bot call Python functions directly, never
+# HTTP, so they are unaffected.
+_CSRF_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
+
+
+@app.before_request
+def _csrf_protect():
+    if request.method not in _CSRF_METHODS:
+        return None
+    if request.endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    expected = session.get("csrf_token") or ""
+    provided = request.headers.get("X-CSRF-Token") or ""
+    if not expected or not hmac.compare_digest(provided, expected):
+        return jsonify({"error": "CSRF"}), 403
+    return None
+
+
+@app.context_processor
+def _inject_csrf_token():
+    return {"csrf_token": session.get("csrf_token", "")}
+
+
+# ── Login brute-force lockout ──────────────────────────────────────────────────
+# Persistent (DB-backed) failure tracking on top of the 5/min limiter — the
+# limiter's in-memory counters die on every Railway restart. 10 failures from
+# one IP within an hour lock that IP out for an hour, even with the correct
+# passphrase. The lockout response is deliberately generic (no thresholds).
+_LOCKOUT_THRESHOLD = 10
+_LOCKOUT_WINDOW_HOURS = 1
+
+
 @app.route("/login", methods=["GET", "POST"])
 @limiter.limit("5 per minute")
 def login():
@@ -139,23 +190,57 @@ def login():
     if not next_url.startswith("/") or next_url.startswith("//"):
         next_url = "/"
     if request.method == "POST":
+        ip = get_remote_address()
+        try:
+            locked = db.count_auth_failures(ip, hours=_LOCKOUT_WINDOW_HOURS) >= _LOCKOUT_THRESHOLD
+        except Exception as e:
+            logger.error("auth failure lookup failed: %s", e)
+            locked = False  # fail open on DB trouble; the 5/min limiter still applies
+        if locked:
+            return render_template("login.html", error="Too many attempts. Try again later.",
+                                   next_url=next_url), 429
         pw = request.form.get("password") or ""
         if APP_PASSWORD and hmac.compare_digest(pw, APP_PASSWORD):
+            try:
+                db.clear_auth_failures(ip)
+            except Exception as e:
+                logger.error("auth failure clear failed: %s", e)
+            # Rotate the session on login (anti-fixation) and mint the CSRF
+            # token the frontend echoes back on every write.
+            session.clear()
             session["authed"] = True
             session.permanent = True
+            session["csrf_token"] = secrets.token_hex(32)
             return redirect(next_url)
+        try:
+            failures = db.record_auth_failure(ip)
+            if failures == _LOCKOUT_THRESHOLD:
+                # Sentinel's job: page the owner and remember the incident.
+                telegram_bot.send_alert(
+                    f"🚨 {_LOCKOUT_THRESHOLD} failed ASFA logins from {ip} in the last hour")
+                db.log_episodic(
+                    "sentinel", "security_alert",
+                    f"Locked out IP {ip} after {_LOCKOUT_THRESHOLD} failed logins within an hour")
+        except Exception as e:
+            logger.error("auth failure tracking failed: %s", e)
         return render_template("login.html", error="Incorrect passphrase.", next_url=next_url), 401
     return render_template("login.html", error=None, next_url=next_url)
 
 
 @app.errorhandler(429)
 def ratelimit_handler(e):
-    """Rate-limit responses (e.g. >5 login attempts/min) return clean JSON."""
-    return jsonify({"error": "too many login attempts, try again in 1 minute"}), 429
+    """Rate-limit responses return clean JSON (login throttle, API limits)."""
+    return jsonify({"error": "too many requests, try again shortly"}), 429
 
 
-@app.route("/logout", methods=["POST", "GET"])
+@app.route("/logout", methods=["POST"])
 def logout():
+    """CSRF-protected logout (POST-only so a cross-site GET can't kill the
+    session). Audited, then the session is fully cleared."""
+    try:
+        db.log_audit("auth", "logout", "success", reason="user logout")
+    except Exception as e:
+        logger.error("logout audit failed: %s", e)
     session.clear()
     return redirect(url_for("login"))
 
@@ -638,12 +723,13 @@ def api_gym_trainer():
 
 # The gym tracker is chatty by nature — a single logged workout fires one request
 # per set (often 30+), plus dashboard/history reads. That easily exceeds the coarse
-# app-wide "50/hour" abuse guard and would 429 the user mid-workout. These routes
-# are all behind the session auth gate, so skip rate limiting for them (auth already
-# gates them; the tighter login limit and other routes are unaffected).
+# app-wide "50/hour" abuse guard and would 429 the user mid-workout. Only an
+# AUTHENTICATED session gets the exemption: anonymous hits on /api/gym/* stay
+# rate-limited like everything else, so the exemption can't be used as an
+# unthrottled probe surface.
 @limiter.request_filter
 def _exempt_gym_api():
-    return request.path.startswith("/api/gym")
+    return request.path.startswith("/api/gym") and bool(session.get("authed"))
 
 
 # ── Money ──────────────────────────────────────────────────────────────────────
@@ -970,12 +1056,28 @@ def api_bots_health():
 
 @app.route("/api/system/health", methods=["GET"])
 def api_system_health():
-    """Full system health report. Public (in _PUBLIC_ENDPOINTS) so Railway can
-    probe it without a session. Pushes a Telegram alert if state is critical."""
+    """Probe-safe health check. Public (in _PUBLIC_ENDPOINTS) so Railway can
+    hit it without a session, so it returns ONLY coarse statuses — no error
+    strings, file paths, job names, agent internals, or integration/env
+    details (those leaked here before; they now live on the auth-gated /full
+    variant below). Still pushes a Telegram alert if state is critical."""
     from services import monitor
     health = monitor.get_system_health()
     monitor.alert_if_critical(health)
-    return jsonify(health)
+    return jsonify({
+        "status": health.get("status"),
+        "db": (health.get("database") or {}).get("status"),
+        "backup": (health.get("backups") or {}).get("status"),
+    })
+
+
+@app.route("/api/system/health/full", methods=["GET"])
+def api_system_health_full():
+    """Full per-subsystem health detail for the System screen. Auth-gated
+    (NOT in _PUBLIC_ENDPOINTS) — this payload includes exception strings,
+    scheduler job ids and integration configuration state."""
+    from services import monitor
+    return jsonify(monitor.get_system_health())
 
 
 # ── Database backup (manual trigger) ───────────────────────────────────────────
@@ -1366,12 +1468,13 @@ def mission_control_health():
         except Exception as e:
             logger.warning("Sentinel alert check failed: %s", e)
 
-    return jsonify({
-        "power": "OK",
-        "connectivity": connectivity,
-        "security": security,
-        "details": details,
-    })
+    # Public endpoint (unauthenticated health checks): expose only the coarse
+    # per-pillar statuses. The details block (probe internals, alert counts)
+    # is included for logged-in sessions only.
+    payload = {"power": "OK", "connectivity": connectivity, "security": security}
+    if session.get("authed"):
+        payload["details"] = details
+    return jsonify(payload)
 
 
 @app.route("/api/agents")
@@ -1792,6 +1895,34 @@ def scout_daily_scan():
         db.update_error_budget("scout", outcome == "success")
     except Exception as e:
         logger.error("scout audit log failed: %s", e)
+
+
+# ── Security response headers ──────────────────────────────────────────────────
+# CSP ships in Report-Only mode: the app relies on inline scripts on every
+# page plus cdnjs/jsdelivr (Three.js, Chart.js, Phaser), Google Fonts, and
+# YouTube embeds in the gym video modal. This policy allows all of those, but
+# until it's verified against every screen in a real browser it observes
+# rather than enforces (violations show in DevTools, nothing breaks).
+_CSP_REPORT_ONLY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' data: https://fonts.gstatic.com; "
+    "img-src 'self' data: https:; "
+    "connect-src 'self'; "
+    "frame-src https://www.youtube.com; "
+    "object-src 'none'; "
+    "base-uri 'self'"
+)
+
+
+@app.after_request
+def _security_headers(resp):
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    resp.headers.setdefault("Content-Security-Policy-Report-Only", _CSP_REPORT_ONLY)
+    return resp
 
 
 # ── Background services (started once, even under gunicorn) ───────────────────

@@ -695,7 +695,7 @@ function renderTradingActivity(d) {
     const pnl = p.total_pnl;
     const pnlNum = parseFloat(pnl);
     const pnlClass = isNaN(pnlNum) ? "" : (pnlNum >= 0 ? "pos" : "neg");
-    const pct = (p.total_pnl_pct != null) ? ` (${p.total_pnl_pct}%)` : "";
+    const pct = (p.total_pnl_pct != null) ? ` (${esc(p.total_pnl_pct)}%)` : "";
     rows.push(`<div class="t-row"><span class="t-label">EQUITY      :</span><span class="t-val glow">$${esc(p.equity)}</span></div>`);
     rows.push(`<div class="t-row"><span class="t-label">TOTAL P&amp;L  :</span><span class="t-val ${pnlClass}">$${esc(pnl)}${pct}</span></div>`);
   }
@@ -961,9 +961,9 @@ async function fetchGoals() {
       <div class="goal-row">
         <div class="goal-top">
           <span>${esc(g.title)}</span>
-          <span class="mono" style="color:var(--cyan)">${g.progress || 0}%</span>
+          <span class="mono" style="color:var(--cyan)">${Number(g.progress) || 0}%</span>
         </div>
-        <div class="progress"><div class="progress-fill" style="width:${g.progress || 0}%"></div></div>
+        <div class="progress"><div class="progress-fill" style="width:${Number(g.progress) || 0}%"></div></div>
       </div>`
     ).join("") || `<div class="muted mono">// NO ACTIVE OBJECTIVES</div>`;
   } catch { el.innerHTML = `<div class="muted">—</div>`; }
@@ -1596,11 +1596,15 @@ function toast(msg, ms = 2200) {
   setTimeout(() => t.remove(), ms);
 }
 
+// Escapes quotes too — esc() output is interpolated into double-quoted
+// attributes (href/data-name), where an unescaped `"` breaks out.
 function esc(s) {
   return String(s || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function fmtTime(dt) {
