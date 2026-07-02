@@ -13,6 +13,18 @@
 .frag-head { text-align: center; margin: 10px 0 18px; }
 .frag-head .screen-sub { color: var(--muted); font-size: .85rem; margin-top: 2px; }
 
+/* ── Loading skeletons ───────────────────────────────────────────────────
+   Shimmering placeholders shown until the API populates hero/shelf/stats.
+   (Mirrors gym.css — this standalone page doesn't load gym.css.) */
+.skeleton, .skeleton-card {
+  background: linear-gradient(100deg, rgba(255,255,255,.03) 30%, rgba(0,217,255,.08) 50%, rgba(255,255,255,.03) 70%);
+  background-size: 200% 100%; animation: shimmer 1.3s ease-in-out infinite; border-radius: 10px;
+}
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.skeleton-card { min-height: 120px; }
+.skeleton-row { height: 42px; margin-bottom: 8px; }
+.skeleton-block { height: 120px; }
+
 /* ── Stats strip ─────────────────────────────────────────────────────── */
 .frag-stats-strip {
   display: flex;
