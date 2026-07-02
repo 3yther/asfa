@@ -2904,22 +2904,27 @@ def get_routine_efficiency_avg(routine_id, exclude_session_id=None) -> float:
 
 # ── Frontend helpers (last-session, recovery, weekly volume, notes, active) ────
 
-def get_last_session_for_exercise(exercise_id: int) -> dict:
+def get_last_session_for_exercise(exercise_id: int, exclude_session_id=None) -> dict:
     """Return the most recent *previous* session that contains this exercise,
     with every set logged for it plus the best set (by est. 1RM). Used to show
     the "LAST TIME" row and ghost placeholders in the workout screen.
+    ``exclude_session_id`` skips the in-progress session so mid-workout logging
+    never shadows the true prior session.
     Shape: {session_id, date, sets: [...], best: {...}} or None."""
     _ensure_gym_tables()
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
         # newest session id that has a set for this exercise
-        cur.execute(
-            f"""SELECT st.session_id, s.date
+        sql = (f"""SELECT st.session_id, s.date
                 FROM gym_sets st JOIN gym_sessions s ON s.id = st.session_id
-                WHERE st.exercise_id = {ph}
-                ORDER BY s.date DESC, st.session_id DESC LIMIT 1""",
-            (exercise_id,))
+                WHERE st.exercise_id = {ph}""")
+        params = [exercise_id]
+        if exclude_session_id is not None:
+            sql += f" AND st.session_id <> {ph}"
+            params.append(exclude_session_id)
+        sql += " ORDER BY s.date DESC, st.session_id DESC LIMIT 1"
+        cur.execute(sql, tuple(params))
         row = cur.fetchone()
         if not row:
             return None
@@ -2939,6 +2944,237 @@ def get_last_session_for_exercise(exercise_id: int) -> dict:
             best = s
     return {"session_id": session_id, "date": session_date,
             "sets": sets, "best": best}
+
+
+# ── Smart progression (autofill + add-weight recommendations) ────────────────
+# Session-only suggestions: nothing here ever writes a set — the user always
+# confirms via the normal ✓. Cardio is excluded everywhere (reps = minutes,
+# weight = 0, so weight math is meaningless for it).
+
+# Typical dumbbell rack, per hand — suggestions snap to these fixed steps.
+DUMBBELL_STEPS = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20,
+                  22.5, 25, 27.5, 30, 32.5, 35, 40]
+PLATE_STEP = 2.5            # barbell/machine plate math granularity
+DEFAULT_REP_RANGE = (8, 12)  # when the exercise isn't in any routine
+MAX_JUMP_PCT = 0.10          # novice safety cap on a single load jump
+
+
+def _round_to_plate(weight_kg: float) -> float:
+    return round(round(float(weight_kg) / PLATE_STEP) * PLATE_STEP, 2)
+
+
+def _next_dumbbell_step(weight_kg: float) -> float:
+    """Next rack weight strictly above ``weight_kg`` (extrapolates in 2.5s past
+    the heaviest rack dumbbell)."""
+    for s in DUMBBELL_STEPS:
+        if s > weight_kg + 1e-9:
+            return float(s)
+    return round(weight_kg + PLATE_STEP, 2)
+
+
+def _prev_dumbbell_step(weight_kg: float) -> float:
+    """Next rack weight strictly below ``weight_kg`` (floored at the lightest)."""
+    for s in reversed(DUMBBELL_STEPS):
+        if s < weight_kg - 1e-9:
+            return float(s)
+    return float(DUMBBELL_STEPS[0])
+
+
+def _fmt_kg(v) -> str:
+    return ("%g" % round(float(v or 0), 2))
+
+
+def get_rep_range_for_exercise(exercise_id: int) -> tuple:
+    """(rep_min, rep_max) from the first routine containing this exercise,
+    else the 8–12 default."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT rep_min, rep_max FROM gym_routine_exercises
+                WHERE exercise_id = {ph} ORDER BY routine_id, id LIMIT 1""",
+            (exercise_id,))
+        row = cur.fetchone()
+    if row:
+        return (int(row["rep_min"] or DEFAULT_REP_RANGE[0]),
+                int(row["rep_max"] or DEFAULT_REP_RANGE[1]))
+    return DEFAULT_REP_RANGE
+
+
+def _prior_working_session_count(exercise_id: int, exclude_session_id=None) -> int:
+    """Distinct prior sessions with working sets for this exercise — drives the
+    recommendation confidence (1 session = medium, 2+ = high)."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        sql = (f"""SELECT COUNT(DISTINCT session_id) AS n FROM gym_sets
+                   WHERE exercise_id = {ph} AND set_type = 'working'""")
+        params = [exercise_id]
+        if exclude_session_id is not None:
+            sql += f" AND session_id <> {ph}"
+            params.append(exclude_session_id)
+        cur.execute(sql, tuple(params))
+        row = cur.fetchone()
+    return int(row["n"] or 0) if row else 0
+
+
+def get_last_performance(exercise_id: int, exclude_session_id=None) -> dict:
+    """Feature A: the most recent prior session's warmup+working sets for an
+    exercise, shaped for the workout-screen autofill. Cardio and first-timers
+    return {"found": False}."""
+    ex = get_exercise(exercise_id)
+    if not ex or _is_cardio_exercise(ex):
+        return {"found": False}
+    last = get_last_session_for_exercise(exercise_id, exclude_session_id)
+    if not last:
+        return {"found": False}
+    sets = [s for s in last["sets"]
+            if (s.get("set_type") or "working") in ("warmup", "working")]
+    if not sets:
+        return {"found": False}
+    best = None
+    for s in sets:
+        if (s.get("set_type") or "working") != "working":
+            continue
+        if best is None or s["one_rep_max"] > best["one_rep_max"]:
+            best = s
+    try:
+        days_ago = (date.today() - date.fromisoformat(last["date"])).days
+    except (TypeError, ValueError):
+        days_ago = None
+    return {
+        "found": True,
+        "session_id": last["session_id"],
+        "session_date": last["date"],
+        "days_ago": days_ago,
+        "sets": [{"set_number": s["set_number"],
+                  "set_type": s.get("set_type") or "working",
+                  "weight_kg": s.get("weight_kg"), "reps": s.get("reps")}
+                 for s in sets],
+        "best_working": ({"weight_kg": best["weight_kg"], "reps": best["reps"]}
+                         if best else None),
+        "top_set_1rm": (best["one_rep_max"] if best else None),
+    }
+
+
+def _progression_increment(equipment: str, last_top_weight: float) -> float:
+    """Load increment (kg) for a progression, by how the exercise is loaded.
+    Dumbbells jump to the next fixed rack step (the smallest possible jump, so
+    the % cap doesn't apply); barbell/machine/cable use plate math with the
+    novice ~10% single-jump cap (never below one 2.5 plate step)."""
+    eq = (equipment or "").lower()
+    if eq == "dumbbell":
+        return round(_next_dumbbell_step(last_top_weight) - last_top_weight, 2)
+    if eq in ("machine", "cable"):
+        inc = 5.0 if last_top_weight >= 60 else PLATE_STEP
+    else:  # barbell + anything else weight-loaded
+        inc = PLATE_STEP
+    cap = _round_to_plate(last_top_weight * MAX_JUMP_PCT)
+    if inc > cap:
+        inc = max(PLATE_STEP, cap)
+    return inc
+
+
+def get_progression_recommendation(exercise_id: int, rep_min=None, rep_max=None,
+                                   exclude_session_id=None) -> dict:
+    """Feature B: double-progression recommendation off the last prior session's
+    working sets. Fill the rep range at a weight, THEN add load:
+      all working sets at the top weight hit rep_max → progress (+increment),
+      in range but not maxed → beat_reps (same weight, +1 rep),
+      below rep_min → hold, or deload (-2.5kg/step) if >2 reps under on the
+      top set. Cardio and first-timers return {"found": False}."""
+    ex = get_exercise(exercise_id)
+    if not ex or _is_cardio_exercise(ex):
+        return {"found": False}
+    last = get_last_session_for_exercise(exercise_id, exclude_session_id)
+    if not last:
+        return {"found": False}
+    working = [s for s in last["sets"]
+               if (s.get("set_type") or "working") == "working"]
+    if not working:
+        return {"found": False}
+
+    if rep_min is None or rep_max is None:
+        default_min, default_max = get_rep_range_for_exercise(exercise_id)
+        rep_min = int(rep_min or default_min)
+        rep_max = int(rep_max or default_max)
+
+    equipment = (ex.get("equipment") or "").lower()
+    dumbbell = equipment == "dumbbell"
+    last_top_weight = max(float(s.get("weight_kg") or 0) for s in working)
+    reps_at_top = [int(s.get("reps") or 0) for s in working
+                   if abs(float(s.get("weight_kg") or 0) - last_top_weight) < 1e-6]
+    top_reps = max(reps_at_top)
+    sessions_n = _prior_working_session_count(exercise_id, exclude_session_id)
+    confidence = "high" if sessions_n >= 2 else "medium"
+
+    base = {"found": True, "last_top_weight": last_top_weight,
+            "rep_range": [rep_min, rep_max], "confidence": confidence}
+
+    # Bodyweight-style work logged at 0kg has no load to progress — keep the
+    # verdict rep-based instead of suggesting phantom kilos.
+    if last_top_weight <= 0:
+        target = top_reps + 1
+        return {**base, "verdict": "beat_reps", "recommended_weight": 0,
+                "recommended_reps": target, "increment": 0,
+                "reason": (f"Bodyweight work — progress by adding reps. You got "
+                           f"{top_reps} last time; aim for {target}+.")}
+
+    if all(r >= rep_max for r in reps_at_top):
+        inc = _progression_increment(equipment, last_top_weight)
+        if dumbbell:
+            new_w = _next_dumbbell_step(last_top_weight)
+        else:
+            new_w = _round_to_plate(last_top_weight + inc)
+            while new_w <= last_top_weight + 1e-9:   # rounding must never stall
+                new_w = round(new_w + PLATE_STEP, 2)
+            inc = round(new_w - last_top_weight, 2)
+        return {**base, "verdict": "progress", "recommended_weight": new_w,
+                "recommended_reps": rep_min, "increment": inc,
+                "reason": (f"You hit {rep_max}+ reps on all working sets at "
+                           f"{_fmt_kg(last_top_weight)}kg last time. Add "
+                           f"{_fmt_kg(inc)}kg and aim for {rep_min}.")}
+
+    if any(r < rep_min for r in reps_at_top):
+        if (rep_min - top_reps) > 2:
+            new_w = (_prev_dumbbell_step(last_top_weight) if dumbbell
+                     else max(_round_to_plate(last_top_weight - PLATE_STEP), 0))
+            return {**base, "verdict": "deload", "recommended_weight": new_w,
+                    "recommended_reps": rep_min,
+                    "increment": round(new_w - last_top_weight, 2),
+                    "reason": (f"Your top set was {top_reps} reps at "
+                               f"{_fmt_kg(last_top_weight)}kg — well under the "
+                               f"{rep_min}–{rep_max} range. Drop to "
+                               f"{_fmt_kg(new_w)}kg and rebuild form.")}
+        return {**base, "verdict": "hold", "recommended_weight": last_top_weight,
+                "recommended_reps": rep_min, "increment": 0,
+                "reason": (f"Some sets fell under {rep_min} reps at "
+                           f"{_fmt_kg(last_top_weight)}kg. Hold this weight and "
+                           f"get every set into the {rep_min}–{rep_max} range.")}
+
+    target = min(min(reps_at_top) + 1, rep_max)
+    return {**base, "verdict": "beat_reps", "recommended_weight": last_top_weight,
+            "recommended_reps": target, "increment": 0,
+            "reason": (f"You're inside the {rep_min}–{rep_max} range at "
+                       f"{_fmt_kg(last_top_weight)}kg but haven't maxed it. Keep "
+                       f"the weight and beat last time — aim {target}+ per set.")}
+
+
+def get_routine_recommendations(routine_id: int) -> list:
+    """Per-exercise recommendations for a whole routine (dashboard 'Next
+    Session Targets'). Cardio entries are skipped."""
+    out = []
+    for rex in get_routine_exercises(routine_id):
+        if rex.get("is_cardio") or _is_cardio_exercise(rex):
+            continue
+        rec = get_progression_recommendation(
+            rex["exercise_id"], rex.get("rep_min"), rex.get("rep_max"))
+        rec["exercise_id"] = rex["exercise_id"]
+        rec["exercise_name"] = rex["name"]
+        out.append(rec)
+    return out
 
 
 def delete_set(set_id: int) -> bool:

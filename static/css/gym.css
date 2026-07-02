@@ -633,3 +633,52 @@ body.rest-active .exercise-list { padding-bottom: 210px; }
   .trainer-log { max-height: 220px; }
   .bodygraph-views { gap: 6px; }
 }
+
+/* ── Smart progression: rec chips, fill-all, next-session targets ─────── */
+.ec-lasttime.first-time { color: var(--muted); font-style: italic; }
+.lt-fill-btn {
+  display: block; width: 100%; margin-top: 7px; padding: 8px 10px; min-height: 38px;
+  border-radius: 8px; font: 600 .72rem 'Inter', sans-serif; cursor: pointer;
+  background: rgba(0,217,255,.08); border: 1px dashed rgba(0,217,255,.35); color: var(--gym-cyan);
+  transition: background .2s ease;
+}
+.lt-fill-btn:hover { background: rgba(0,217,255,.16); }
+
+.rec-chip {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  border: 1px solid; border-radius: 8px; padding: 7px 10px; margin-bottom: 8px;
+  font-size: .76rem; line-height: 1.4;
+}
+.rec-chip .rec-text {
+  flex: 1 1 auto; min-width: 0; min-height: 30px; padding: 0; text-align: left;
+  background: none; border: none; color: inherit; font: 600 .76rem 'Inter', sans-serif;
+  cursor: pointer;
+}
+.rec-chip .rec-use {
+  flex: 0 0 auto; min-height: 36px; padding: 4px 16px; border-radius: 8px;
+  font-size: .72rem; font-weight: 700; color: inherit;
+  background: rgba(255,255,255,.06); border: 1px solid currentColor; cursor: pointer;
+}
+.rec-chip .rec-use:hover { background: rgba(255,255,255,.14); }
+.rec-chip .rec-reason { flex-basis: 100%; font-size: .7rem; color: var(--muted); font-weight: 400; }
+.rec-progress { color: var(--gym-green); background: rgba(63,185,80,.12); border-color: rgba(63,185,80,.3); }
+.rec-beat     { color: var(--gym-cyan);  background: rgba(0,217,255,.08);  border-color: rgba(0,217,255,.3); }
+.rec-hold     { color: var(--gym-amber); background: rgba(245,185,66,.1);  border-color: rgba(245,185,66,.3); }
+.rec-deload   { color: var(--gym-red);   background: rgba(255,77,77,.1);   border-color: rgba(255,77,77,.3); }
+
+.next-targets { display: flex; flex-direction: column; }
+.nt-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,.05); font-size: .78rem;
+}
+.nt-row:last-child { border-bottom: none; }
+.nt-name { font-weight: 600; min-width: 0; }
+.nt-chip {
+  font: 600 .72rem 'JetBrains Mono', monospace; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid rgba(140,170,200,.2); white-space: nowrap;
+}
+.nt-chip.rec-progress { color: var(--gym-green); background: rgba(63,185,80,.12); border-color: rgba(63,185,80,.3); }
+.nt-chip.rec-beat     { color: var(--gym-cyan);  background: rgba(0,217,255,.08);  border-color: rgba(0,217,255,.3); }
+.nt-chip.rec-hold     { color: var(--gym-amber); background: rgba(245,185,66,.1);  border-color: rgba(245,185,66,.3); }
+.nt-chip.rec-deload   { color: var(--gym-red);   background: rgba(255,77,77,.1);   border-color: rgba(255,77,77,.3); }
+.nt-chip.nt-new       { color: var(--muted); background: rgba(255,255,255,.04); }
