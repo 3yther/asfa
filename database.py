@@ -2896,3 +2896,65 @@ def get_active_session() -> dict:
         session = dict(row)
     session["sets"] = get_session_sets(session["id"])
     return session
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUTH FAILURES — persistent login brute-force tracking
+# ═══════════════════════════════════════════════════════════════════════════════
+# DB-backed (not in-memory) so lockout state survives Railway restarts.
+# Timestamps are stored as ISO-8601 UTC TEXT ("YYYY-MM-DD HH:MM:SS.ffffff"),
+# which compares correctly as a string on both SQLite and Postgres. Rows older
+# than the window are pruned opportunistically on each write.
+
+def _ensure_auth_failures_table():
+    with get_db() as conn:
+        cur = conn.cursor()
+        stmt = """CREATE TABLE IF NOT EXISTS auth_failures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            attempted_at TEXT NOT NULL
+        )"""
+        if USE_POSTGRES:
+            stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        cur.execute(stmt)
+
+
+def record_auth_failure(ip: str) -> int:
+    """Record one failed login for this IP. Returns the IP's failure count
+    within the last hour (including the one just recorded)."""
+    _ensure_auth_failures_table()
+    now = datetime.utcnow()
+    cutoff = (now - timedelta(hours=1)).isoformat(sep=" ")
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"DELETE FROM auth_failures WHERE attempted_at < {ph}", (cutoff,))
+        cur.execute(
+            f"INSERT INTO auth_failures (ip, attempted_at) VALUES ({ph}, {ph})",
+            (ip, now.isoformat(sep=" ")))
+        cur.execute(
+            f"SELECT COUNT(*) AS n FROM auth_failures WHERE ip = {ph} AND attempted_at >= {ph}",
+            (ip, cutoff))
+        return int(cur.fetchone()["n"])
+
+
+def count_auth_failures(ip: str, hours: int = 1) -> int:
+    """Failures recorded for this IP within the last `hours` hours."""
+    _ensure_auth_failures_table()
+    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat(sep=" ")
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT COUNT(*) AS n FROM auth_failures WHERE ip = {ph} AND attempted_at >= {ph}",
+            (ip, cutoff))
+        return int(cur.fetchone()["n"])
+
+
+def clear_auth_failures(ip: str):
+    """Wipe an IP's failure history (called on successful login)."""
+    _ensure_auth_failures_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"DELETE FROM auth_failures WHERE ip = {ph}", (ip,))

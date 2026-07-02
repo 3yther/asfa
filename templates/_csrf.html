@@ -1,0 +1,25 @@
+{# ── CSRF wiring ─────────────────────────────────────────────────────────────
+   Exposes the per-session token and patches window.fetch so every
+   POST/PUT/DELETE/PATCH automatically carries X-CSRF-Token (checked by the
+   _csrf_protect before_request hook in app.py). Included at the top of
+   nav.html — i.e. on every navigated screen — and directly by standalone
+   pages that don't render the nav (scout.html). Inline so it executes during
+   parse, before any inline page script or deferred script can call fetch. #}
+<meta name="csrf-token" content="{{ csrf_token }}">
+<script>
+(function () {
+  const _origFetch = window.fetch;
+  window.fetch = (url, opts = {}) => {
+    const method = (opts.method || "GET").toUpperCase();
+    if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
+      const token = document.querySelector("meta[name=csrf-token]")?.content || "";
+      if (opts.headers instanceof Headers) {
+        opts.headers.set("X-CSRF-Token", token);
+      } else {
+        opts.headers = { ...(opts.headers || {}), "X-CSRF-Token": token };
+      }
+    }
+    return _origFetch(url, opts);
+  };
+})();
+</script>

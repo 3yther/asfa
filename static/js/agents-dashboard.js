@@ -75,10 +75,11 @@
     return "low";
   }
 
+  // Regex-based (not the innerHTML round-trip, which leaves quotes intact):
+  // esc() output lands inside double-quoted attributes like title="…".
   function esc(s) {
-    const d = document.createElement("div");
-    d.textContent = s == null ? "" : String(s);
-    return d.innerHTML;
+    return String(s == null ? "" : s).replace(/[&<>"']/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
   function addCorners(el) {
