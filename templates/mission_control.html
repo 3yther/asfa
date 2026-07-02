@@ -368,6 +368,11 @@ function agentColor(a){ const rid=AGENT_ROOM[a.id]; return rid ? roomColor(rid) 
 const WALK_SPEED = 70;
 const MC = { agents:[], live:null, alerts:[], missions:[], chars:{}, rooms:{}, taskText:{}, scene:null, failCount:0, ready:false };
 
+/* DB-origin strings (agent names/roles, mission text, log messages posted via
+   the API) get interpolated into innerHTML below — escape them all. */
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+  (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
 const J = { 'Content-Type':'application/json' };
 const API = {
   agents:         ()       => fetch('/api/agents',{credentials:'include'}).then(r=>r.json()),
@@ -971,7 +976,7 @@ function renderRoster(){
     const rid=currentRoomId(a), rdotCol=rid?hex(roomColor(rid)):'#333355', rdotName=rid?ROOMS[rid].name:'OFFLINE';
     return `<div class="arow" data-id="${a.id}" style="border-left-color:${a.status==='active'?col:'transparent'}">
       <span class="dot ${a.status==='active'?'on':''}" style="background:${sc};box-shadow:0 0 6px ${sc}"></span>
-      <div><div class="nm" style="color:${nameColor(a.status,col)}"><span class="rdot" style="background:${rdotCol}" title="Currently in: ${rdotName}"></span>${a.icon||''} ${a.name}</div><div class="rl">${a.role||''}</div><div class="tk">${taskFor(a)}</div></div>
+      <div><div class="nm" style="color:${nameColor(a.status,col)}"><span class="rdot" style="background:${rdotCol}" title="Currently in: ${esc(rdotName)}"></span>${esc(a.icon||'')} ${esc(a.name)}</div><div class="rl">${esc(a.role||'')}</div><div class="tk">${esc(taskFor(a))}</div></div>
       <div class="lv">LV ${a.level}</div>
       <div class="xpwrap"><div class="xpfill" style="width:${ratio}%;background:${col}"></div></div></div>`;
   }).join('');
@@ -994,15 +999,15 @@ function renderAlerts(){
   const items=[...localAlerts, ...(MC.alerts||[])].slice(0,5);
   const icon=l=>l==='crit'?'🔴':l==='warn'?'🟡':'🟢';
   $('activity-list').innerHTML=items.length
-    ? items.map(a=>`<div class="ln"><span class="a">${icon(a.level)}</span> ${a.text}</div>`).join('')
+    ? items.map(a=>`<div class="ln"><span class="a">${icon(a.level)}</span> ${esc(a.text)}</div>`).join('')
     : '<div class="ln" style="color:#5a7a5a">All systems nominal · agents standing by</div>';
 }
 let missionsLoaded=false;
 function renderMissions(){
   $('missions-count').textContent=MC.missions.filter(m=>m.completed).length+'/'+MC.missions.length;
   $('missions-list').innerHTML=MC.missions.map(m=>`<div class="mission ${m.completed?'done':''}" data-id="${m.id}">
-    <div class="chk">${m.completed?'✓':''}</div><div><div class="m-title">${m.title}</div><div class="m-desc">${m.description||''}</div></div>
-    <div class="m-xp">+${m.xp_reward} XP</div></div>`).join('');
+    <div class="chk">${m.completed?'✓':''}</div><div><div class="m-title">${esc(m.title)}</div><div class="m-desc">${esc(m.description||'')}</div></div>
+    <div class="m-xp">+${Number(m.xp_reward)||0} XP</div></div>`).join('');
   document.querySelectorAll('.mission .chk').forEach(el=>{ el.onclick=async()=>{
     const id=el.closest('.mission').dataset.id, m=MC.missions.find(x=>String(x.id)===String(id)); if(!m||m.completed) return;
     m.completed=1; renderMissions(); try{ await API.completeMission(id); }catch(e){} loadMissions(); if(MC.scene) MC.scene.refresh(false); }; });
@@ -1057,8 +1062,8 @@ function openModal(id){
   const ratio=Math.min(100,((a.xp||0)/((a.xp_max||1)))*100);
   requestAnimationFrame(()=>{ fill.style.transition='width .8s ease'; fill.style.width=ratio+'%'; });
   $('m-log').textContent='Loading…';
-  API.log(id).then(rows=>{ $('m-log').innerHTML=(rows&&rows.length)?rows.slice(0,8).map(r=>{ const t=(r.timestamp||'').slice(11,16); const xp=r.xp_earned?` <span style="color:#ffd60a">+${r.xp_earned}</span>`:'';
-    return `<div class="ln"><span class="t">[${t}]</span> ${r.message||''}${xp}</div>`; }).join(''):'<div class="ln" style="color:#5a7a5a">No log entries yet.</div>'; }).catch(()=>{ $('m-log').textContent='Log unavailable.'; });
+  API.log(id).then(rows=>{ $('m-log').innerHTML=(rows&&rows.length)?rows.slice(0,8).map(r=>{ const t=(r.timestamp||'').slice(11,16); const xp=r.xp_earned?` <span style="color:#ffd60a">+${Number(r.xp_earned)||0}</span>`:'';
+    return `<div class="ln"><span class="t">[${esc(t)}]</span> ${esc(r.message||'')}${xp}</div>`; }).join(''):'<div class="ln" style="color:#5a7a5a">No log entries yet.</div>'; }).catch(()=>{ $('m-log').textContent='Log unavailable.'; });
 }
 function closeModal(){ $('modal').classList.remove('show'); modalAgentId=null; }
 $('modal-close').onclick=closeModal;

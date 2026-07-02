@@ -1,7 +1,9 @@
 {# ── ASFA top navigation bar — shared across all five screens ──────────────
    Usage: {% include "nav.html" %} with an `active` variable set to one of:
    command | agents | approvals | system | mission. Self-contained: ships its
-   own UTC clock + mission-day counter so it works on pages without main.js. #}
+   own UTC clock + mission-day counter so it works on pages without main.js.
+   Also pulls in the CSRF meta tag + fetch wrapper for every screen. #}
+{% include "_csrf.html" %}
 <nav class="asfa-nav" aria-label="Primary">
   <div class="nav-left">
     <a class="nav-logo" href="/"><span class="lb">[</span><span data-decode>ASFA</span><span class="rb">]</span></a>
@@ -19,6 +21,9 @@
     <button id="sound-toggle" type="button" title="Toggle UI sounds"
       onclick="if(window.SoundFX){SoundFX.toggle(); this.textContent = SoundFX.isEnabled() ? '🔊' : '🔇';}">🔇</button>
     <span class="nav-clock" id="nav-clock">--:--:-- UTC</span>
+    <button id="nav-logout" type="button" title="Log out"
+      style="background:none;border:1px solid rgba(0,217,255,.25);color:rgba(0,217,255,.55);
+             border-radius:4px;padding:2px 8px;cursor:pointer;font:inherit;font-size:.8em;">⏻</button>
   </div>
 </nav>
 <script>
@@ -39,5 +44,13 @@
   }
   tick();
   setInterval(tick, 1000);
+
+  // Logout — POST (CSRF header added by the fetch wrapper in _csrf.html,
+  // included above), then hard-redirect to the login screen.
+  var lo = document.getElementById("nav-logout");
+  if (lo) lo.addEventListener("click", async function () {
+    try { await fetch("/logout", { method: "POST", credentials: "include" }); } catch (e) {}
+    window.location.href = "/login";
+  });
 })();
 </script>
