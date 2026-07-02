@@ -582,7 +582,37 @@ def api_gym_delete_set(set_id):
 
 @app.route("/api/gym/exercises/<int:exercise_id>/last-session")
 def api_gym_last_session(exercise_id):
-    return jsonify(db.get_last_session_for_exercise(exercise_id) or {})
+    exclude = request.args.get("exclude_session", type=int)
+    return jsonify(db.get_last_session_for_exercise(exercise_id, exclude) or {})
+
+
+@app.route("/api/gym/exercises/<int:exercise_id>/last-performance")
+def api_gym_last_performance(exercise_id):
+    """Feature A — prior-session sets for autofill. ?exclude_session=<id> skips
+    the in-progress session. Cardio/first-timers → {"found": false}."""
+    exclude = request.args.get("exclude_session", type=int)
+    return jsonify(db.get_last_performance(exercise_id, exclude_session_id=exclude))
+
+
+@app.route("/api/gym/exercises/<int:exercise_id>/recommendation")
+def api_gym_recommendation(exercise_id):
+    """Feature B — double-progression add-weight recommendation. Optional
+    ?rep_min/?rep_max override the routine's rep range (the active session
+    knows its own targets); ?exclude_session skips the in-progress session."""
+    exclude = request.args.get("exclude_session", type=int)
+    rep_min = request.args.get("rep_min", type=int)
+    rep_max = request.args.get("rep_max", type=int)
+    return jsonify(db.get_progression_recommendation(
+        exercise_id, rep_min, rep_max, exclude_session_id=exclude))
+
+
+@app.route("/api/gym/routines/<int:routine_id>/recommendations")
+def api_gym_routine_recommendations(routine_id):
+    """Per-exercise recommendations for a routine (dashboard Next Session
+    Targets card). Read-only; cardio entries are skipped."""
+    if not db.get_routine(routine_id):
+        return jsonify({"error": "routine not found"}), 404
+    return jsonify(db.get_routine_recommendations(routine_id))
 
 
 @app.route("/api/gym/volume/weekly")
