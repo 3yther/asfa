@@ -598,7 +598,7 @@ async function resumeSession(active) {
     const logged = byEx[ex.exerciseId] || [];
     ex.loggedSets = logged.map(st => ({
       setId: st.id, setNumber: st.set_number, setType: st.set_type,
-      weight: st.weight_kg, reps: st.reps, isPr: st.is_pr, oneRm: oneRm(st.weight_kg, st.reps),
+      weight: st.weight_kg, reps: st.reps, rpe: st.rpe, isPr: st.is_pr, oneRm: oneRm(st.weight_kg, st.reps),
     }));
     if (ex.loggedSets.length > ex.rowCount) ex.rowCount = ex.loggedSets.length;
     delete byEx[ex.exerciseId];
@@ -612,7 +612,7 @@ async function resumeSession(active) {
       rank_bronze: lib.rank_bronze, rank_silver: lib.rank_silver, rank_gold: lib.rank_gold,
       rank_platinum: lib.rank_platinum, rank_diamond: lib.rank_diamond });
     st.loggedSets = byEx[exId].map(x => ({ setId: x.id, setNumber: x.set_number, setType: x.set_type,
-      weight: x.weight_kg, reps: x.reps, isPr: x.is_pr, oneRm: oneRm(x.weight_kg, x.reps) }));
+      weight: x.weight_kg, reps: x.reps, rpe: x.rpe, isPr: x.is_pr, oneRm: oneRm(x.weight_kg, x.reps) }));
     S.exercises.push(st);
   });
   saveLS();
@@ -887,6 +887,9 @@ function renderSetRows(ex, card) {
         ${barbell ? '<button class="plate-btn" title="Plate calculator" tabindex="-1">🏋️</button>' : ""}
       </div>
       <input class="num-input r-in" inputmode="numeric" ${rGhost} value="${logged ? logged.reps : ""}" ${logged ? "disabled" : ""}>
+      <input class="num-input rpe-in" inputmode="numeric" min="6" max="10" placeholder="RPE"
+             title="RPE — 6 = easy · 10 = max effort · blank if unsure"
+             value="${logged && logged.rpe != null ? logged.rpe : ""}" ${logged ? "disabled" : ""}>
       <button class="set-check" title="${logged ? "Delete set" : "Complete set"}">${logged ? "🗑" : "✓"}</button>`;
     const check = row.querySelector(".set-check");
     if (logged) {
@@ -954,7 +957,7 @@ function renderCardioRows(ex, card) {
 async function completeSet(ex, idx, row, card) {
   const cardio = isCardioEx(ex);
   const setNumber = idx + 1;
-  let weight, reps, type, notes = "";
+  let weight, reps, type, notes = "", rpe = null;
   if (cardio) {
     reps = parseInt(row.querySelector(".dur-min").value, 10);
     if (isNaN(reps) || reps <= 0) reps = CARDIO_DEFAULT_MIN;
@@ -966,12 +969,15 @@ async function completeSet(ex, idx, row, card) {
     type = row.querySelector(".set-type-sel").value;
     if (isNaN(reps) || reps <= 0) { toast("Enter reps"); return; }
     weight = isNaN(w) ? 0 : w;
+    const rpeEl = row.querySelector(".rpe-in");           // optional 6–10, blank = null
+    const rv = rpeEl ? parseInt(rpeEl.value, 10) : NaN;
+    rpe = (!isNaN(rv) && rv >= 6 && rv <= 10) ? rv : null;
   }
   CURRENT_EX_ID = ex.exerciseId;
   try {
     const res = await apiPost(`${API}/sets`, { session_id: S.id, exercise_id: ex.exerciseId,
-      set_number: setNumber, set_type: type, weight_kg: weight, reps, notes });
-    ex.loggedSets[idx] = { setId: res.id, setNumber, setType: type, weight, reps, notes,
+      set_number: setNumber, set_type: type, weight_kg: weight, reps, notes, rpe });
+    ex.loggedSets[idx] = { setId: res.id, setNumber, setType: type, weight, reps, notes, rpe,
       isPr: res.is_pr, oneRm: res.one_rep_max };
     saveLS();
     row.classList.add("done");

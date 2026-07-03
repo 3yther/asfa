@@ -275,11 +275,15 @@
 
 /* set rows */
 .set-row {
-  display: grid; grid-template-columns: 26px 1fr 1.1fr 1.1fr 44px; gap: 6px; align-items: center;
+  display: grid; grid-template-columns: 26px 1fr 1.1fr 1.1fr 46px 44px; gap: 6px; align-items: center;
   margin-bottom: 7px; position: relative;
 }
-/* ⚡ quick-log (fill+confirm) + ↻ fill-only, overlaid just left of the manual ✓ */
-.set-mini { position: absolute; right: 50px; top: 50%; transform: translateY(-50%); display: flex; gap: 3px; }
+/* Optional RPE (6–10) input — narrower + dimmer than reps to read as optional */
+.rpe-in { font-size: .82rem; }
+.rpe-in::placeholder { font-size: .62rem; letter-spacing: .04em; }
+/* ⚡ quick-log (fill+confirm) + ↻ fill-only, overlaid over the reps column
+   (left of the RPE field + manual ✓, which sit to their right) */
+.set-mini { position: absolute; right: 102px; top: 50%; transform: translateY(-50%); display: flex; gap: 3px; }
 .set-mini .set-fill { width: 30px; height: 30px; min-height: 30px; }
 .set-quicklog {
   width: 30px; height: 30px; min-height: 30px; padding: 0; border-radius: 7px; cursor: pointer;
@@ -628,7 +632,8 @@ body.rest-active .exercise-list { padding-bottom: 210px; }
 
 @media (max-width: 420px) {
   .gym-screen { padding: 14px 10px 130px; }
-  .set-row { grid-template-columns: 22px 1fr 1fr 1fr 44px; gap: 4px; }
+  .set-row { grid-template-columns: 22px 1fr 1fr 1fr 40px 44px; gap: 4px; }
+  .set-mini { right: 92px; }
   .cardio-row { grid-template-columns: 22px auto 1fr 44px; }
   .set-type-sel { font-size: .64rem; }
   /* keep the rest timer clear of the ✓ buttons: smaller + tucked lower-right */

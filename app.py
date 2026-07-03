@@ -578,7 +578,7 @@ def api_gym_log_set():
     result = db.log_set(
         d["session_id"], d["exercise_id"], d["set_number"],
         d.get("set_type", "working"), d.get("weight_kg", 0), d.get("reps", 0),
-        d.get("notes", ""))
+        d.get("notes", ""), rpe=d.get("rpe"))
     return jsonify({"ok": True, **result})
 
 

@@ -51,6 +51,26 @@ def get_db():
             conn.close()
 
 
+def _column_exists(cur, table: str, column: str) -> bool:
+    """True if `column` already exists on `table`. Works on SQLite + Postgres.
+    Used to make ALTER TABLE ... ADD COLUMN migrations idempotent."""
+    if USE_POSTGRES:
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = %s AND column_name = %s",
+            (table, column))
+        return cur.fetchone() is not None
+    cur.execute(f"PRAGMA table_info({table})")
+    return any((r["name"] if isinstance(r, sqlite3.Row) else r[1]) == column
+               for r in cur.fetchall())
+
+
+def _add_column(cur, table: str, column: str, coldef: str):
+    """Idempotently add a column. No-op if it already exists."""
+    if not _column_exists(cur, table, column):
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coldef}")
+
+
 def init_db():
     with get_db() as conn:
         cursor = conn.cursor()
@@ -2284,6 +2304,9 @@ def _ensure_gym_tables():
             if USE_POSTGRES:
                 stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
             cur.execute(stmt)
+        # Optional per-set RPE (reps-in-reserve proxy). NULL = not logged.
+        _add_column(cur, "gym_sets", "rpe",
+                    "INTEGER CHECK (rpe IS NULL OR rpe BETWEEN 6 AND 10)")
     _GYM_READY = True
 
 
@@ -2673,7 +2696,7 @@ def _is_cardio_exercise(ex: dict) -> bool:
 
 
 def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps,
-            notes="") -> dict:
+            notes="", rpe=None) -> dict:
     """Log a single set. Detects a personal record (by estimated 1RM), updates
     the PR table, awards XP, and bumps the exercise's muscle-group rank.
     Cardio sets (Incline Walk etc.) store duration-in-minutes in ``reps`` with
@@ -2685,6 +2708,14 @@ def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps,
     reps = int(reps or 0)
     ex = get_exercise(exercise_id)
     cardio = _is_cardio_exercise(ex)
+
+    # Optional RPE (6–10). Blank/invalid → NULL. Cardio never carries RPE.
+    try:
+        rpe = None if rpe in (None, "") else int(rpe)
+    except (TypeError, ValueError):
+        rpe = None
+    if rpe is not None and (cardio or not (6 <= rpe <= 10)):
+        rpe = None
 
     if cardio:
         # Cardio never counts as a PR (guards the 0kg-cardio-PR bug) and has no 1RM.
@@ -2699,9 +2730,9 @@ def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps,
         cur = conn.cursor()
         set_id = _gym_insert(
             cur, "gym_sets",
-            "session_id, exercise_id, set_number, set_type, weight_kg, reps, is_pr, notes",
+            "session_id, exercise_id, set_number, set_type, weight_kg, reps, is_pr, notes, rpe",
             (session_id, exercise_id, set_number, set_type, weight_kg, reps,
-             bool(is_pr), notes or ""))
+             bool(is_pr), notes or "", rpe))
 
     today = date.today().isoformat()
     if is_pr:
@@ -3105,7 +3136,7 @@ def get_last_session_for_exercise(exercise_id: int, exclude_session_id=None) -> 
         session_id = row["session_id"]
         session_date = str(row["date"])[:10]
         cur.execute(
-            f"""SELECT id, set_number, set_type, weight_kg, reps, is_pr, notes
+            f"""SELECT id, set_number, set_type, weight_kg, reps, is_pr, notes, rpe
                 FROM gym_sets
                 WHERE session_id = {ph} AND exercise_id = {ph}
                 ORDER BY set_number, id""",
@@ -3296,20 +3327,43 @@ def get_progression_recommendation(exercise_id: int, rep_min=None, rep_max=None,
                 "reason": (f"Bodyweight work — progress by adding reps. You got "
                            f"{top_reps} last time; aim for {target}+.")}
 
+    # Most recent prior working set's RPE (reps-in-reserve proxy), if logged.
+    # It only nudges the load increment on a *progress* verdict; all existing
+    # guardrails (rep-range, deload, 10% cap, rack steps) stay intact.
+    rpe_sets = [s for s in working if s.get("rpe") is not None]
+    last_rpe = rpe_sets[-1]["rpe"] if rpe_sets else None
+
     if all(r >= rep_max for r in reps_at_top):
+        # RPE 9–10: near-max effort last time — hold and consolidate, don't push.
+        if last_rpe is not None and last_rpe >= 9:
+            return {**base, "verdict": "hold", "recommended_weight": last_top_weight,
+                    "recommended_reps": rep_max, "increment": 0, "rpe_last": last_rpe,
+                    "reason": (f"You maxed the {rep_min}–{rep_max} range at "
+                               f"{_fmt_kg(last_top_weight)}kg but logged RPE {last_rpe} "
+                               f"— that's near max. Hold this weight and own it "
+                               f"before adding load.")}
         inc = _progression_increment(equipment, last_top_weight)
         if dumbbell:
             new_w = _next_dumbbell_step(last_top_weight)
+            if last_rpe is not None and last_rpe <= 7:   # too easy → extra rack step
+                new_w = _next_dumbbell_step(new_w)
+            inc = round(new_w - last_top_weight, 2)
         else:
+            if last_rpe is not None and last_rpe <= 7:   # too easy → bigger jump,
+                cap = _round_to_plate(last_top_weight * MAX_JUMP_PCT)  # still ≤10% cap
+                inc = min(inc + PLATE_STEP, max(inc, cap))
             new_w = _round_to_plate(last_top_weight + inc)
             while new_w <= last_top_weight + 1e-9:   # rounding must never stall
                 new_w = round(new_w + PLATE_STEP, 2)
             inc = round(new_w - last_top_weight, 2)
+        reason = (f"You hit {rep_max}+ reps on all working sets at "
+                  f"{_fmt_kg(last_top_weight)}kg last time. Add "
+                  f"{_fmt_kg(inc)}kg and aim for {rep_min}.")
+        if last_rpe is not None and last_rpe <= 7:
+            reason += f" (RPE {last_rpe} — that was easy, so a bigger jump.)"
         return {**base, "verdict": "progress", "recommended_weight": new_w,
-                "recommended_reps": rep_min, "increment": inc,
-                "reason": (f"You hit {rep_max}+ reps on all working sets at "
-                           f"{_fmt_kg(last_top_weight)}kg last time. Add "
-                           f"{_fmt_kg(inc)}kg and aim for {rep_min}.")}
+                "recommended_reps": rep_min, "increment": inc, "rpe_last": last_rpe,
+                "reason": reason}
 
     if any(r < rep_min for r in reps_at_top):
         if (rep_min - top_reps) > 2:
