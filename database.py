@@ -1140,6 +1140,22 @@ def _ensure_scout_tables():
             status TEXT DEFAULT 'pending',
             notes TEXT
         )""",
+        """CREATE TABLE IF NOT EXISTS scout_pipeline (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_title TEXT NOT NULL,
+            company TEXT NOT NULL,
+            job_url TEXT,
+            location TEXT,
+            stage TEXT NOT NULL DEFAULT 'saved',
+            notes TEXT,
+            cv_version TEXT,
+            date_saved TEXT,
+            date_applied TEXT,
+            date_stage_changed TEXT,
+            source TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )""",
     ]
     with get_db() as conn:
         cur = conn.cursor()
@@ -1253,6 +1269,164 @@ def delete_scout_application(app_id) -> None:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
         cur.execute(f"DELETE FROM scout_applications WHERE id = {ph}", (app_id,))
+
+
+# ── Scout pipeline (CRM-style stage board) ──────────────────────────────────
+SCOUT_STAGES = ("saved", "applied", "interview", "offer", "rejected")
+
+
+def get_scout_pipeline(stage=None) -> list:
+    """Pipeline rows, most-recently-touched first; optional stage filter."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        order = "ORDER BY COALESCE(updated_at, created_at) DESC, id DESC"
+        if stage:
+            cur.execute(f"SELECT * FROM scout_pipeline WHERE stage = {ph} {order}", (stage,))
+        else:
+            cur.execute(f"SELECT * FROM scout_pipeline {order}")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_scout_pipeline_job(pid):
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM scout_pipeline WHERE id = {ph}", (pid,))
+        r = cur.fetchone()
+        return dict(r) if r else None
+
+
+def add_scout_pipeline_job(job_title, company, job_url=None, location=None,
+                           source=None, stage="saved", notes=None, cv_version=None):
+    """Add a job to the pipeline. Returns the new row id."""
+    _ensure_scout_tables()
+    if stage not in SCOUT_STAGES:
+        stage = "saved"
+    now = datetime.now().isoformat()
+    today = date.today().isoformat()
+    date_applied = today if stage == "applied" else None
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cols = ("job_title, company, job_url, location, stage, notes, cv_version, "
+                "date_saved, date_applied, date_stage_changed, source, created_at, updated_at")
+        values = (job_title, company, job_url, location, stage, notes, cv_version,
+                  today, date_applied, now, source, now, now)
+        if USE_POSTGRES:
+            cur.execute(f"INSERT INTO scout_pipeline ({cols}) VALUES "
+                        f"({','.join([ph]*len(values))}) RETURNING id", values)
+            return cur.fetchone()["id"]
+        cur.execute(f"INSERT INTO scout_pipeline ({cols}) VALUES "
+                    f"({','.join([ph]*len(values))})", values)
+        return cur.lastrowid
+
+
+def update_scout_pipeline(pid, stage=None, notes=None, cv_version=None):
+    """Patch stage/notes/cv_version. A stage change bumps date_stage_changed and,
+    on first entry to 'applied', stamps date_applied. Returns the updated row."""
+    _ensure_scout_tables()
+    existing = get_scout_pipeline_job(pid)
+    if not existing:
+        return None
+    now = datetime.now().isoformat()
+    sets, params = ["updated_at = {ph}"], [now]
+    if stage is not None and stage in SCOUT_STAGES and stage != existing.get("stage"):
+        sets.append("stage = {ph}"); params.append(stage)
+        sets.append("date_stage_changed = {ph}"); params.append(now)
+        if stage == "applied" and not existing.get("date_applied"):
+            sets.append("date_applied = {ph}"); params.append(date.today().isoformat())
+    if notes is not None:
+        sets.append("notes = {ph}"); params.append(notes)
+    if cv_version is not None:
+        sets.append("cv_version = {ph}"); params.append(cv_version)
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        clause = ", ".join(s.replace("{ph}", ph) for s in sets)
+        cur.execute(f"UPDATE scout_pipeline SET {clause} WHERE id = {ph}", tuple(params) + (pid,))
+    return get_scout_pipeline_job(pid)
+
+
+def delete_scout_pipeline(pid) -> bool:
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"DELETE FROM scout_pipeline WHERE id = {ph}", (pid,))
+        return cur.rowcount > 0
+
+
+def get_scout_pipeline_stage_counts() -> dict:
+    """{stage: count} across all five stages (zero-filled)."""
+    _ensure_scout_tables()
+    counts = {s: 0 for s in SCOUT_STAGES}
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT stage, COUNT(*) AS n FROM scout_pipeline GROUP BY stage")
+        for r in cur.fetchall():
+            r = dict(r)
+            if r["stage"] in counts:
+                counts[r["stage"]] = r["n"]
+    return counts
+
+
+def get_scout_pipeline_reminders(days: int = 7) -> list:
+    """Applications that have sat in 'applied' for >= `days` days with no stage
+    change since — i.e. worth a follow-up nudge. Newest-applied first."""
+    _ensure_scout_tables()
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM scout_pipeline WHERE stage = 'applied' "
+            f"AND date_applied IS NOT NULL AND date_applied <= {ph} "
+            f"ORDER BY date_applied ASC", (cutoff,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _backfill_scout_pipeline() -> int:
+    """Idempotently pull already-scraped scout_jobs into the pipeline at
+    stage='saved'. Dedups by job_url (or title+company when the url is blank),
+    so re-running never creates duplicates. Returns the number inserted."""
+    _ensure_scout_tables()
+    inserted = 0
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT title, company, location, url, source, found_date FROM scout_jobs")
+        jobs = [dict(r) for r in cur.fetchall()]
+        cur.execute("SELECT job_url, job_title, company FROM scout_pipeline")
+        existing = [dict(r) for r in cur.fetchall()]
+        by_url = {e["job_url"] for e in existing if e.get("job_url")}
+        by_key = {(e["job_title"], e["company"]) for e in existing}
+        ph = "%s" if USE_POSTGRES else "?"
+        now = datetime.now().isoformat()
+        cols = ("job_title, company, job_url, location, stage, source, "
+                "date_saved, date_stage_changed, created_at, updated_at")
+        for j in jobs:
+            if not j.get("title") or not j.get("company"):
+                continue
+            if j.get("url") and j["url"] in by_url:
+                continue
+            if not j.get("url") and (j["title"], j["company"]) in by_key:
+                continue
+            cur.execute(
+                f"INSERT INTO scout_pipeline ({cols}) VALUES ({','.join([ph]*10)})",
+                (j["title"], j["company"], j.get("url"), j.get("location"), "saved",
+                 j.get("source"), j.get("found_date") or date.today().isoformat(),
+                 now, now, now))
+            by_url.add(j.get("url")); by_key.add((j["title"], j["company"]))
+            inserted += 1
+    return inserted
+
+
+def init_scout_pipeline():
+    """Create the pipeline table and backfill from scout_jobs. Safe every boot."""
+    _ensure_scout_tables()
+    _backfill_scout_pipeline()
 
 
 # ════════════════════════════════════════════════════════════════════════════

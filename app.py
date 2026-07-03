@@ -264,6 +264,8 @@ init_all_skills()
 db.init_gym_data()
 # Scent Vault — fragrance shelf, body products, curated pairings + wear log.
 db.init_fragrance_data()
+# Scout pipeline — Kanban stage board; create table + backfill from scout_jobs.
+db.init_scout_pipeline()
 # Bottle photos live outside git (see .gitignore); recreate the dir on boot so
 # a fresh clone/deploy can accept uploads immediately.
 FRAGRANCE_UPLOAD_DIR = os.path.join(app.static_folder, "uploads", "fragrances")
@@ -1948,6 +1950,52 @@ def api_scout_application_update(app_id):
 def api_scout_application_delete(app_id):
     db.delete_scout_application(app_id)
     return jsonify({"ok": True})
+
+
+# ── Scout pipeline (Kanban board) ──────────────────────────────────────────────
+# CRUD + follow-up reminders. Writes ride the global CSRF gate (POST/PUT/DELETE)
+# and the auth gate like every other endpoint.
+@app.route("/api/scout/pipeline", methods=["GET", "POST"])
+def api_scout_pipeline():
+    if request.method == "POST":
+        d = request.get_json(force=True) or {}
+        job_title = (d.get("job_title") or "").strip()
+        company = (d.get("company") or "").strip()
+        if not job_title or not company:
+            return jsonify({"error": "job_title and company required"}), 400
+        stage = (d.get("stage") or "saved").strip()
+        if stage not in db.SCOUT_STAGES:
+            return jsonify({"error": f"stage must be one of {', '.join(db.SCOUT_STAGES)}"}), 400
+        pid = db.add_scout_pipeline_job(
+            job_title, company, job_url=d.get("job_url") or None,
+            location=d.get("location") or None, source=d.get("source") or None,
+            stage=stage, notes=d.get("notes") or None, cv_version=d.get("cv_version") or None)
+        return jsonify({"ok": True, "id": pid, "job": db.get_scout_pipeline_job(pid)})
+    stage = request.args.get("stage")
+    if stage and stage not in db.SCOUT_STAGES:
+        return jsonify({"error": "unknown stage"}), 400
+    return jsonify(db.get_scout_pipeline(stage=stage))
+
+
+@app.route("/api/scout/pipeline/reminders")
+def api_scout_pipeline_reminders():
+    return jsonify(db.get_scout_pipeline_reminders())
+
+
+@app.route("/api/scout/pipeline/<int:pid>", methods=["PUT", "DELETE"])
+def api_scout_pipeline_item(pid):
+    if request.method == "DELETE":
+        ok = db.delete_scout_pipeline(pid)
+        return (jsonify({"ok": True}) if ok else (jsonify({"error": "not found"}), 404))
+    d = request.get_json(force=True) or {}
+    stage = d.get("stage")
+    if stage is not None and stage not in db.SCOUT_STAGES:
+        return jsonify({"error": f"stage must be one of {', '.join(db.SCOUT_STAGES)}"}), 400
+    job = db.update_scout_pipeline(pid, stage=stage, notes=d.get("notes"),
+                                   cv_version=d.get("cv_version"))
+    if not job:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"ok": True, "job": job})
 
 
 # ── Agent data layer: memory / audit / error budgets (Phase 3) ────────────────

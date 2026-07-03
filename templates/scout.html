@@ -164,6 +164,30 @@
   .log-submit:active { transform: scale(.97); }
   .log-submit:disabled { opacity: .6; cursor: progress; }
   @media (max-width: 620px) { .log-grid { grid-template-columns: 1fr; } }
+
+  /* ── Pipeline Kanban ─────────────────────────────────────────────────── */
+  .kanban { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+  .kan-col { background: rgba(2,17,10,.5); border: 1px solid rgba(57,255,20,.18); border-radius: var(--radius); padding: 8px; }
+  .kan-col-head { display: flex; align-items: center; justify-content: space-between; font-family: 'JetBrains Mono', monospace; font-size: .58rem; letter-spacing: 1px; color: var(--scout); text-transform: uppercase; padding: 2px 4px 8px; }
+  .kan-count { background: rgba(57,255,20,.14); border-radius: 10px; padding: 1px 7px; color: var(--scout); }
+  .kan-cards { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+  .kan-card { background: rgba(4,10,6,.85); border: 1px solid var(--scout-dim); border-radius: var(--radius); padding: 9px 10px; }
+  .kan-card.nudge { border-color: var(--gold); box-shadow: 0 0 10px rgba(245,197,66,.25); }
+  .kan-title { font-size: .74rem; font-weight: 600; color: var(--text); line-height: 1.25; }
+  .kan-title a { color: var(--scout); text-decoration: none; }
+  .kan-title a:hover { text-decoration: underline; }
+  .kan-company { font-size: .64rem; color: var(--muted); margin: 2px 0 6px; }
+  .kan-meta { display: flex; align-items: center; gap: 6px; }
+  .kan-move { background: #02110a; color: var(--scout); border: 1px solid var(--scout-dim); border-radius: 5px; font-family: 'JetBrains Mono', monospace; font-size: .58rem; padding: 5px 6px; flex: 1; min-width: 0; }
+  .kan-days { font-family: 'JetBrains Mono', monospace; font-size: .54rem; letter-spacing: .5px; color: var(--muted); white-space: nowrap; }
+  .kan-days.stale { color: var(--gold); }
+  .kan-actions { display: flex; gap: 5px; margin-top: 7px; }
+  .kan-icon { background: rgba(57,255,20,.08); color: var(--scout); border: 1px solid var(--scout-dim); border-radius: 5px; font-size: .62rem; padding: 5px 8px; cursor: pointer; }
+  .kan-icon:hover { box-shadow: 0 0 8px rgba(57,255,20,.35); }
+  .kan-icon.del { color: var(--red); border-color: rgba(248,81,73,.4); background: rgba(248,81,73,.08); }
+  .kan-icon.del:hover { box-shadow: 0 0 8px rgba(248,81,73,.4); }
+  .kan-empty { color: var(--muted); font-size: .6rem; text-align: center; padding: 8px 2px; }
+  @media (max-width: 820px) { .kanban { grid-template-columns: repeat(5, 210px); } }
 </style>
 </head>
 <body>
@@ -183,6 +207,30 @@
     <canvas id="scout-radar-hero" width="400" height="400" aria-label="Scout job radar"></canvas>
     <button class="scan-btn" id="scan-btn" type="button">⚡ SCAN NOW</button>
     <div class="scan-status" id="scan-status"></div>
+  </div>
+
+  <!-- ── Pipeline (Kanban) ──────────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Pipeline</h2>
+      <button class="log-toggle" id="pl-add-toggle" type="button" aria-expanded="false">＋ ADD JOB</button>
+    </div>
+    <form class="log-form" id="pl-form" hidden>
+      <div class="log-grid">
+        <div class="log-field"><label for="pl-title">Job Title</label><input type="text" id="pl-title" required autocomplete="off"></div>
+        <div class="log-field"><label for="pl-company">Company</label><input type="text" id="pl-company" required autocomplete="off"></div>
+        <div class="log-field"><label for="pl-url">Job URL</label><input type="url" id="pl-url" autocomplete="off" placeholder="https://…"></div>
+        <div class="log-field"><label for="pl-location">Location</label><input type="text" id="pl-location" autocomplete="off"></div>
+        <div class="log-field"><label for="pl-source">Source</label>
+          <select id="pl-source"><option>indeed</option><option>in-person</option><option>referral</option><option>company site</option><option>other</option></select>
+        </div>
+        <div class="log-field"><label for="pl-stage">Stage</label>
+          <select id="pl-stage"><option value="saved">Saved</option><option value="applied">Applied</option><option value="interview">Interview</option><option value="offer">Offer</option><option value="rejected">Rejected</option></select>
+        </div>
+      </div>
+      <button class="log-submit" id="pl-submit" type="submit">ADD TO PIPELINE</button>
+    </form>
+    <div class="kanban" id="kanban"><div class="kan-empty">Loading…</div></div>
   </div>
 
   <!-- ── Jobs ───────────────────────────────────────────────────────────── -->
@@ -498,8 +546,108 @@
   document.getElementById("loc-filter").addEventListener("change", loadJobs);
   document.getElementById("new-only").addEventListener("change", loadJobs);
 
+  /* ── Pipeline Kanban ─────────────────────────────────────────────────── */
+  const PL_STAGES = [
+    ["saved", "Saved"], ["applied", "Applied"], ["interview", "Interview"],
+    ["offer", "Offer"], ["rejected", "Rejected"],
+  ];
+  function daysSince(iso) {
+    if (!iso) return null;
+    const d = new Date(iso.length <= 10 ? iso + "T00:00:00" : iso);
+    if (isNaN(d)) return null;
+    return Math.floor((Date.now() - d.getTime()) / 86400000);
+  }
+  async function loadPipeline() {
+    const board = document.getElementById("kanban");
+    let jobs;
+    try { jobs = await apiGet("/api/scout/pipeline"); }
+    catch (e) { board.innerHTML = '<div class="kan-empty">Could not load pipeline</div>'; return; }
+    const byStage = {}; PL_STAGES.forEach(([k]) => byStage[k] = []);
+    jobs.forEach(j => { (byStage[j.stage] || (byStage[j.stage] = [])).push(j); });
+    board.innerHTML = "";
+    PL_STAGES.forEach(([key, label]) => {
+      const items = byStage[key] || [];
+      const col = document.createElement("div"); col.className = "kan-col";
+      col.innerHTML = `<div class="kan-col-head"><span>${label}</span><span class="kan-count">${items.length}</span></div>`;
+      const cards = document.createElement("div"); cards.className = "kan-cards";
+      if (!items.length) cards.innerHTML = '<div class="kan-empty">—</div>';
+      items.forEach(j => cards.appendChild(renderPipelineCard(j)));
+      col.appendChild(cards); board.appendChild(col);
+    });
+  }
+  function renderPipelineCard(j) {
+    const card = document.createElement("div");
+    const inStage = daysSince(j.date_stage_changed);
+    const appliedDays = daysSince(j.date_applied);
+    const stale = j.stage === "applied" && appliedDays != null && appliedDays >= 7;
+    card.className = "kan-card" + (stale ? " nudge" : "");
+    const opts = PL_STAGES.map(([k, l]) => `<option value="${k}"${k === j.stage ? " selected" : ""}>${l}</option>`).join("");
+    const title = j.job_url
+      ? `<a href="${esc(j.job_url)}" target="_blank" rel="noopener">${esc(j.job_title)}</a>`
+      : esc(j.job_title);
+    card.innerHTML = `
+      <div class="kan-title">${title}</div>
+      <div class="kan-company">${esc(j.company)}${j.location ? " · " + esc(j.location) : ""}</div>
+      <div class="kan-meta">
+        <select class="kan-move" title="Move to stage">${opts}</select>
+        <span class="kan-days${stale ? " stale" : ""}">${inStage == null ? "" : (stale ? "⚠ " : "") + inStage + "d"}</span>
+      </div>
+      <div class="kan-actions">
+        <button class="kan-icon note" type="button" title="Notes">📝${j.notes ? " •" : ""}</button>
+        <button class="kan-icon del" type="button" title="Remove">✕</button>
+      </div>`;
+    card.querySelector(".kan-move").addEventListener("change", async (e) => {
+      await apiSend(`/api/scout/pipeline/${j.id}`, { stage: e.target.value }, "PUT");
+      loadPipeline();
+    });
+    card.querySelector(".note").addEventListener("click", async () => {
+      const val = prompt("Notes for " + j.job_title + ":", j.notes || "");
+      if (val == null) return;
+      await apiSend(`/api/scout/pipeline/${j.id}`, { notes: val }, "PUT");
+      loadPipeline();
+    });
+    card.querySelector(".del").addEventListener("click", async () => {
+      if (!confirm(`Remove "${j.job_title}" from the pipeline?`)) return;
+      await apiSend(`/api/scout/pipeline/${j.id}`, null, "DELETE");
+      loadPipeline();
+    });
+    return card;
+  }
+  (function () {
+    const toggle = document.getElementById("pl-add-toggle");
+    const form = document.getElementById("pl-form");
+    const submit = document.getElementById("pl-submit");
+    toggle.addEventListener("click", () => {
+      const open = form.hidden; form.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.textContent = open ? "✕ CLOSE" : "＋ ADD JOB";
+      if (open) document.getElementById("pl-title").focus();
+    });
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const job_title = document.getElementById("pl-title").value.trim();
+      const company = document.getElementById("pl-company").value.trim();
+      if (!job_title || !company) return;
+      submit.disabled = true;
+      try {
+        await apiSend("/api/scout/pipeline", {
+          job_title, company,
+          job_url: document.getElementById("pl-url").value.trim(),
+          location: document.getElementById("pl-location").value.trim(),
+          source: document.getElementById("pl-source").value,
+          stage: document.getElementById("pl-stage").value,
+        });
+        form.reset(); form.hidden = true;
+        toggle.setAttribute("aria-expanded", "false");
+        toggle.textContent = "＋ ADD JOB";
+        await loadPipeline();
+      } finally { submit.disabled = false; }
+    });
+  })();
+
   loadJobs();
   loadApps();
+  loadPipeline();
 </script>
 </body>
 </html>

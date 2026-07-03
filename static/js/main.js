@@ -579,7 +579,43 @@ function loadAll() {
   fetchFocusToday();
   fetchSystems();
   fetchValidation();
+  fetchScoutPipeline();
   initMarketClock();
+}
+
+// ── Scout Pipeline ─────────────────────────────────────────────────────────────
+const SP_STAGES = [["saved", "Saved"], ["applied", "Applied"], ["interview", "Interview"],
+                   ["offer", "Offer"], ["rejected", "Rejected"]];
+function spDaysAgo(iso) {
+  if (!iso) return null;
+  const d = new Date(iso.length <= 10 ? iso + "T00:00:00" : iso);
+  return isNaN(d) ? null : Math.floor((Date.now() - d.getTime()) / 86400000);
+}
+async function fetchScoutPipeline() {
+  const stagesEl = document.getElementById("sp-stages");
+  const nudgesEl = document.getElementById("sp-nudges");
+  if (!stagesEl) return;
+  try {
+    const [jobs, reminders] = await Promise.all([
+      apiGet("/api/scout/pipeline"),
+      apiGet("/api/scout/pipeline/reminders"),
+    ]);
+    const counts = {}; SP_STAGES.forEach(([k]) => counts[k] = 0);
+    jobs.forEach(j => { if (counts[j.stage] != null) counts[j.stage]++; });
+    stagesEl.innerHTML = SP_STAGES.map(([k, l]) =>
+      `<div class="sp-stage"><span class="sp-num">${counts[k]}</span><span class="sp-lbl">${l}</span></div>`).join("");
+    if (!reminders.length) {
+      nudgesEl.innerHTML = `<div class="sp-none">No follow-ups due 🎉</div>`;
+    } else {
+      nudgesEl.innerHTML = `<div class="sp-nudge-head">NEEDS FOLLOW-UP</div>` +
+        reminders.slice(0, 3).map(r => {
+          const d = spDaysAgo(r.date_applied);
+          return `<div class="sp-nudge"><span class="sp-nudge-job">${esc(r.job_title)} — ${esc(r.company)}</span>` +
+                 `<span class="sp-nudge-days">nudge · ${d == null ? "?" : d}d</span></div>`;
+        }).join("");
+    }
+    glowCard("scout-pipeline");
+  } catch { /* silent */ }
 }
 
 // ── Briefing ───────────────────────────────────────────────────────────────────
