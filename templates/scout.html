@@ -67,6 +67,7 @@
     box-shadow: 0 0 18px rgba(57,255,20,.08);
   }
   .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+  .panel-head-actions { display: flex; align-items: center; gap: 8px; }
   .panel-head h2 { font-family: 'JetBrains Mono', monospace; font-size: .8rem; letter-spacing: 2px; color: var(--scout); text-transform: uppercase; }
 
   .filter-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
@@ -213,7 +214,10 @@
   <div class="panel">
     <div class="panel-head">
       <h2>Pipeline</h2>
-      <button class="log-toggle" id="pl-add-toggle" type="button" aria-expanded="false">＋ ADD JOB</button>
+      <div class="panel-head-actions">
+        <button class="log-toggle" id="pl-export-csv" type="button">⬇ CSV</button>
+        <button class="log-toggle" id="pl-add-toggle" type="button" aria-expanded="false">＋ ADD JOB</button>
+      </div>
     </div>
     <form class="log-form" id="pl-form" hidden>
       <div class="log-grid">
@@ -545,6 +549,13 @@
 
   document.getElementById("loc-filter").addEventListener("change", loadJobs);
   document.getElementById("new-only").addEventListener("change", loadJobs);
+
+  /* ── Export pipeline as CSV (same-origin GET carries the session cookie) ── */
+  document.getElementById("pl-export-csv").addEventListener("click", () => {
+    const a = document.createElement("a");
+    a.href = "/api/scout/export/csv"; a.download = "";
+    document.body.appendChild(a); a.click(); a.remove();
+  });
 
   /* ── Pipeline Kanban ─────────────────────────────────────────────────── */
   const PL_STAGES = [

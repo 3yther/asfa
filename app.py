@@ -1,6 +1,8 @@
 """ASFA — AI Software For Amir. JARVIS-style life command centre."""
 import base64
+import csv
 import hmac
+import io
 import json
 import logging
 import os
@@ -59,7 +61,7 @@ os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 import requests
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 
 import database as db
 from flask_limiter.util import get_remote_address
@@ -593,6 +595,32 @@ def api_gym_delete_set(set_id):
     if not ok:
         return jsonify({"error": "set not found"}), 404
     return jsonify({"ok": True})
+
+
+def _csv_response(fieldnames, rows, filename):
+    """Build a downloadable CSV response. csv.DictWriter handles quoting of
+    commas, quotes and newlines inside fields; extrasaction='ignore' keeps
+    unexpected keys out. Auth-gated like every non-public route."""
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for r in rows:
+        writer.writerow(r)
+    return Response(
+        buf.getvalue(), mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.route("/api/gym/export/csv")
+def api_gym_export_csv():
+    """Export logged gym sets as CSV. Optional ?start_date=&end_date= (inclusive
+    ISO dates on the session date)."""
+    start = request.args.get("start_date") or None
+    end = request.args.get("end_date") or None
+    rows = db.get_gym_sets_for_export(start, end)
+    fields = ["date", "exercise", "weight_kg", "reps", "rpe",
+              "duration_min", "pr", "xp_earned"]
+    return _csv_response(fields, rows, f"asfa_gym_{_today()}.csv")
 
 
 @app.route("/api/gym/exercises/<int:exercise_id>/last-session")
@@ -1909,6 +1937,18 @@ def api_scout_scan():
         logger.error("scout scan failed: %s", e)
         return jsonify({"new_jobs": 0, "error": str(e)[:200]})
     return jsonify({"new_jobs": count})
+
+
+@app.route("/api/scout/export/csv")
+def api_scout_export_csv():
+    """Export the Scout pipeline as CSV. Includes cv_match_score once the Part 4
+    CV-match column exists."""
+    rows = db.get_scout_pipeline_for_export()
+    fields = ["date_saved", "job_title", "company", "stage", "date_applied",
+              "date_stage_changed", "source", "notes"]
+    if rows and "cv_match_score" in rows[0]:
+        fields.append("cv_match_score")
+    return _csv_response(fields, rows, f"asfa_scout_{_today()}.csv")
 
 
 @app.route("/api/scout/apply", methods=["POST"])

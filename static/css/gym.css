@@ -543,6 +543,11 @@ body.rest-active .exercise-list { padding-bottom: 210px; }
 .eff-cmp.up { color: var(--gym-green); }
 .eff-cmp.down { color: var(--gym-red); }
 
+/* ── CSV export ───────────────────────────────────────────────────────── */
+.export-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-bottom: 8px; }
+.export-field { display: flex; flex-direction: column; gap: 4px; font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.export-field input { min-height: 40px; padding: 6px 8px; border-radius: 8px; background: var(--panel-2); color: var(--text); border: 1px solid rgba(140,170,200,.16); font: 600 .9rem 'JetBrains Mono', monospace; }
+
 /* ── Cardio set rows ──────────────────────────────────────────────────── */
 .cardio-row { grid-template-columns: 26px auto 1fr 44px; }
 .cardio-dur { display: flex; align-items: center; gap: 4px; }

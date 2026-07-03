@@ -3405,6 +3405,79 @@ def get_routine_recommendations(routine_id: int) -> list:
     return out
 
 
+def get_gym_sets_for_export(start_date=None, end_date=None) -> list:
+    """Flat rows for CSV export: one dict per logged set joined to its session
+    date + exercise. Optional inclusive ISO date range (on the session date).
+    Cardio rows carry duration (minutes) in ``reps``; the caller splits them.
+    Per-set XP is recomputed with the same rules used when it was awarded."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        sql = (f"""SELECT s.date AS date, e.name AS exercise,
+                          e.exercise_type AS exercise_type, e.muscle_group AS muscle_group,
+                          st.weight_kg AS weight_kg, st.reps AS reps, st.rpe AS rpe,
+                          st.set_type AS set_type, st.is_pr AS is_pr
+                   FROM gym_sets st
+                   JOIN gym_sessions s ON s.id = st.session_id
+                   JOIN gym_exercises e ON e.id = st.exercise_id""")
+        conds, params = [], []
+        if start_date:
+            conds.append(f"s.date >= {ph}"); params.append(start_date)
+        if end_date:
+            conds.append(f"s.date <= {ph}"); params.append(end_date)
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY s.date, st.id"
+        cur.execute(sql, tuple(params))
+        rows = [dict(r) for r in cur.fetchall()]
+    out = []
+    for r in rows:
+        cardio = (r.get("exercise_type") == "cardio") or (r.get("muscle_group") == "cardio")
+        weight = float(r.get("weight_kg") or 0)
+        reps = int(r.get("reps") or 0)
+        is_pr = bool(r.get("is_pr"))
+        xp = 50 if cardio else _xp_for_set(weight, reps, is_pr)
+        out.append({
+            "date": str(r.get("date") or "")[:10],
+            "exercise": r.get("exercise") or "",
+            "weight_kg": "" if cardio else _fmt_kg(weight),
+            "reps": "" if cardio else reps,
+            "rpe": r.get("rpe") if r.get("rpe") is not None else "",
+            "duration_min": reps if cardio else "",
+            "pr": "yes" if is_pr else "",
+            "xp_earned": xp,
+        })
+    return out
+
+
+def get_scout_pipeline_for_export() -> list:
+    """Flat rows for CSV export of the Scout pipeline. Includes cv_match_score
+    only if that column exists yet (added by the Part 4 CV-match feature)."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        has_score = _column_exists(cur, "scout_pipeline", "cv_match_score")
+        cur.execute("SELECT * FROM scout_pipeline ORDER BY date_saved DESC, id DESC")
+        rows = [dict(r) for r in cur.fetchall()]
+    out = []
+    for r in rows:
+        row = {
+            "date_saved": r.get("date_saved") or "",
+            "job_title": r.get("job_title") or "",
+            "company": r.get("company") or "",
+            "stage": r.get("stage") or "",
+            "date_applied": r.get("date_applied") or "",
+            "date_stage_changed": r.get("date_stage_changed") or "",
+            "source": r.get("source") or "",
+            "notes": r.get("notes") or "",
+        }
+        if has_score:
+            row["cv_match_score"] = r.get("cv_match_score") if r.get("cv_match_score") is not None else ""
+        out.append(row)
+    return out
+
+
 def delete_set(set_id: int) -> bool:
     """Delete a single logged set. Returns True if a row was removed. Note: XP,
     PRs and ranks are not rolled back (they never downgrade by design)."""

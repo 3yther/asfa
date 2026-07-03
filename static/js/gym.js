@@ -1758,6 +1758,24 @@ const LOADERS = {
   exercises: loadExercises, progress: loadProgress,
 };
 
+/* Download the gym log as CSV. Same-origin GET carries the session cookie, and
+   Content-Disposition: attachment triggers the browser download in-place. */
+function initExport() {
+  const btn = document.getElementById("export-gym-csv");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    const start = (document.getElementById("export-start") || {}).value || "";
+    const end = (document.getElementById("export-end") || {}).value || "";
+    const qs = new URLSearchParams();
+    if (start) qs.set("start_date", start);
+    if (end) qs.set("end_date", end);
+    const url = `${API}/export/csv` + (qs.toString() ? `?${qs}` : "");
+    const a = document.createElement("a");
+    a.href = url; a.download = "";
+    document.body.appendChild(a); a.click(); a.remove();
+  });
+}
+
 /* ── Boot ── */
 async function boot() {
   try {
@@ -1767,6 +1785,7 @@ async function boot() {
   } catch (e) { console.error("boot failed", e); toast("Could not load gym data — are you logged in?"); }
   initSettings();
   initTrainer();
+  initExport();
   // restore in-memory session from localStorage if present
   const saved = localStorage.getItem(LS_KEY);
   if (saved) { try { S = JSON.parse(saved); } catch (e) { S = null; } }
