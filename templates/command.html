@@ -29,6 +29,12 @@
     display: flex; flex-direction: column; gap: 3px; text-align: center;
   }
   #scout-card .scout-hi { color: #00d9ff; text-shadow: 0 0 6px rgba(0,217,255,.5); }
+  /* Body composition card */
+  #bodycomp-card .bc-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 8px; }
+  #bodycomp-card .bc-stat { text-align: center; }
+  #bodycomp-card .bc-val { font-size: 1.15rem; margin-top: 2px; }
+  #bodycomp-card .bc-manual summary { cursor: pointer; font-size: .68rem; letter-spacing: 1px; color: var(--muted); padding: 4px 0; }
+  #bodycomp-card .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 </style>
 </head>
 <body class="nav-with-mission">
@@ -378,6 +384,39 @@
       <button class="btn btn-grad" type="submit">LOG</button>
     </form>
     <canvas id="weight-chart" height="110" style="margin-top:14px"></canvas>
+  </section>
+
+  <section class="card sci-fi-panel" id="bodycomp-card" data-tabs="body">
+    <div class="card-head">
+      <h2 data-decode>Body Composition</h2>
+      <a class="btn btn-ghost" href="/gym/photos">▣ PHOTOS</a>
+    </div>
+    <div class="bc-stats">
+      <div class="bc-stat"><div class="hud-label">MASS</div><div class="bc-val mono glow" id="bc-weight">—</div></div>
+      <div class="bc-stat"><div class="hud-label">BODY FAT</div><div class="bc-val mono glow" id="bc-bf">—</div></div>
+      <div class="bc-stat"><div class="hud-label">FFM</div><div class="bc-val mono glow" id="bc-ffm">—</div></div>
+    </div>
+    <details id="bodycomp-details" class="bc-manual">
+      <summary>+ LOG SCAN (RENPHO)</summary>
+      <form id="bodycomp-form" class="stack-form" style="margin-top:10px">
+        <div class="row2">
+          <input type="number" step="0.1" id="bc-in-weight" placeholder="WEIGHT KG">
+          <input type="number" step="0.1" id="bc-in-bf" placeholder="BODY FAT %">
+        </div>
+        <div class="row2">
+          <input type="number" step="0.1" id="bc-in-ffm" placeholder="FFM KG">
+          <input type="number" step="0.1" id="bc-in-bmi" placeholder="BMI">
+        </div>
+        <div class="row2">
+          <input type="number" step="0.1" id="bc-in-water" placeholder="WATER %">
+          <input type="number" step="1" id="bc-in-bmr" placeholder="BMR">
+        </div>
+        <input type="date" id="bc-in-date">
+        <button class="btn btn-grad full" type="submit">LOG SCAN</button>
+      </form>
+    </details>
+    <canvas id="bodycomp-chart" height="120" style="margin-top:14px"></canvas>
+    <div id="bodycomp-empty" class="muted" hidden style="margin-top:10px">WAITING FOR DATA — LOG A FEW SCANS.</div>
   </section>
 
   <!-- ROW 6: Financial + PBs + Reflection -->

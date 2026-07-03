@@ -4117,3 +4117,159 @@ def get_fragrance_stats() -> dict:
             for f in frags
         ],
     }
+
+
+# ── Body composition + progress photos (Part 5) ──────────────────────────────
+# Renpho ("Rephno") ships no official public API — only a manual CSV export in
+# its app and unofficial reverse-engineered clients. So manual entry is the
+# primary path; services/rephno.py is a gated seam for a future sync.
+
+_BODY_READY = False
+
+
+def _ensure_body_tables():
+    global _BODY_READY
+    if _BODY_READY:
+        return
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS body_composition (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date_scanned TEXT NOT NULL,
+            weight_kg REAL,
+            bmi REAL,
+            body_fat_percent REAL,
+            ffm_kg REAL,
+            body_water_percent REAL,
+            bmr INTEGER,
+            subcutaneous_fat_percent REAL,
+            source_id TEXT,
+            synced_at TEXT,
+            created_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS gym_photos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            weight_kg REAL,
+            body_fat_percent REAL,
+            created_at TEXT
+        )""",
+    ]
+    with get_db() as conn:
+        cur = conn.cursor()
+        for stmt in stmts:
+            if USE_POSTGRES:
+                stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+            cur.execute(stmt)
+    _BODY_READY = True
+
+
+_BODY_FIELDS = ("weight_kg", "bmi", "body_fat_percent", "ffm_kg",
+                "body_water_percent", "bmr", "subcutaneous_fat_percent")
+
+
+def _to_float(v):
+    try:
+        return None if v in (None, "") else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def upsert_body_composition(date_scanned, metrics: dict, source_id=None) -> dict:
+    """Insert or update a body-composition scan. Manual entries dedup on the
+    scan date (one row per day, last write wins). A sync dedups on source_id
+    when given. Returns the stored row."""
+    _ensure_body_tables()
+    now = datetime.now().isoformat()
+    vals = {k: _to_float(metrics.get(k)) for k in _BODY_FIELDS}
+    if vals.get("bmr") is not None:
+        vals["bmr"] = int(vals["bmr"])
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        existing = None
+        if source_id:
+            cur.execute(f"SELECT id FROM body_composition WHERE source_id = {ph}", (source_id,))
+            existing = cur.fetchone()
+        if not existing:
+            cur.execute(f"SELECT id FROM body_composition WHERE date_scanned = {ph}", (date_scanned,))
+            existing = cur.fetchone()
+        if existing:
+            set_clause = ", ".join(f"{k} = {ph}" for k in _BODY_FIELDS)
+            cur.execute(
+                f"UPDATE body_composition SET {set_clause}, source_id = {ph}, synced_at = {ph} "
+                f"WHERE id = {ph}",
+                tuple(vals[k] for k in _BODY_FIELDS) + (source_id, now, existing["id"]))
+            row_id = existing["id"]
+        else:
+            cols = "date_scanned, " + ", ".join(_BODY_FIELDS) + ", source_id, synced_at, created_at"
+            values = (date_scanned,) + tuple(vals[k] for k in _BODY_FIELDS) + (source_id, now, now)
+            row_id = _gym_insert(cur, "body_composition", cols, values)
+    return get_body_composition_row(row_id)
+
+
+def get_body_composition_row(row_id) -> dict:
+    _ensure_body_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM body_composition WHERE id = {ph}", (row_id,))
+        r = cur.fetchone()
+        return dict(r) if r else None
+
+
+def get_body_composition(days=30) -> list:
+    """Latest scans within the last `days`, newest first."""
+    _ensure_body_tables()
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM body_composition WHERE date_scanned >= {ph} "
+            f"ORDER BY date_scanned DESC, id DESC", (cutoff,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def body_composition_source_exists(source_id) -> bool:
+    """True if a synced scan with this source_id already exists (sync dedup)."""
+    if not source_id:
+        return False
+    _ensure_body_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT 1 FROM body_composition WHERE source_id = {ph} LIMIT 1", (source_id,))
+        return cur.fetchone() is not None
+
+
+def latest_body_composition() -> dict:
+    """Most recent scan of any date, or None."""
+    _ensure_body_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM body_composition ORDER BY date_scanned DESC, id DESC LIMIT 1")
+        r = cur.fetchone()
+        return dict(r) if r else None
+
+
+def add_gym_photo(date_str, filename, weight_kg=None, body_fat_percent=None) -> dict:
+    """Record an uploaded progress photo, auto-tagged with the day's weight/bf%."""
+    _ensure_body_tables()
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        pid = _gym_insert(
+            cur, "gym_photos", "date, filename, weight_kg, body_fat_percent, created_at",
+            (date_str, filename, _to_float(weight_kg), _to_float(body_fat_percent), now))
+    return {"id": pid, "date": date_str, "filename": filename,
+            "weight_kg": _to_float(weight_kg), "body_fat_percent": _to_float(body_fat_percent)}
+
+
+def get_gym_photos() -> list:
+    """All progress photos, newest first."""
+    _ensure_body_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM gym_photos ORDER BY date DESC, id DESC")
+        return [dict(r) for r in cur.fetchall()]
