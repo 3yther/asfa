@@ -108,9 +108,11 @@ app.config["SESSION_COOKIE_SECURE"] = (
 # loudly at boot rather than silently opening an injection hole.
 assert app.jinja_env.autoescape, "Jinja autoescape is OFF — XSS vulnerability!"
 
-# Brute-force protection. Coarse default limits app-wide; the /login route adds
-# a tighter explicit limit below. In-memory storage is correct for our single
-# gunicorn worker (see services/security.py).
+# Rate limiting, tiered per request: the owner's authenticated dashboard reads
+# get a generous budget, while anonymous traffic and all writes keep the strict
+# budget (see services/security.py). The /login route overrides these with its
+# own tighter explicit limit below, and authenticated /api/gym/* is exempted via
+# a request_filter further down. In-memory storage suits our single worker.
 limiter = init_rate_limiter(app)
 
 # ── App access gate ────────────────────────────────────────────────────────────
