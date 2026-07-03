@@ -1255,17 +1255,21 @@ def api_spotify_status():
     return jsonify(spotify.current_playback())
 
 
-@app.route("/api/asfa/spotify/play")
+@app.route("/api/asfa/spotify/play", methods=["POST"])
 def api_spotify_play():
-    """Resume playback on the user's active/default device. Always 200 so the
-    frontend can surface the friendly message regardless of outcome."""
+    """Resume playback on the user's active/default device. POST-only so the
+    global CSRF gate covers this external action. Always 200 so the frontend can
+    surface the friendly message regardless of outcome."""
     return jsonify(spotify.resume_playback())
 
 
-@app.route("/api/asfa/spotify/focus")
+@app.route("/api/asfa/spotify/focus", methods=["POST"])
 def api_spotify_focus():
-    """Start a mood playlist by search query (Think Mode ambient / Lock In focus)."""
-    query = request.args.get("q", "deep focus")
+    """Start a mood playlist by search query (Think Mode ambient / Lock In
+    focus). POST-only so the global CSRF gate covers this external action.
+    `q` may arrive as a query param or JSON body."""
+    body = request.get_json(silent=True) or {}
+    query = request.args.get("q") or body.get("q") or "deep focus"
     return jsonify(spotify.play_query(query))
 
 
@@ -1374,10 +1378,11 @@ def api_backup_run_now():
 
 # ── Obsidian sync (local markdown daily logs) ──────────────────────────────────
 
-@app.route("/api/asfa/obsidian/sync-now")
+@app.route("/api/asfa/obsidian/sync-now", methods=["POST"])
 def api_obsidian_sync():
-    """Write the full ASFA vault tree to OBSIDIAN_VAULT_PATH. Only writes when
-    ASFA runs on a machine with that local folder (i.e. the Mac, not Railway)."""
+    """Write the full ASFA vault tree to OBSIDIAN_VAULT_PATH. POST-only so the
+    global CSRF gate covers this filesystem side effect. Only writes when ASFA
+    runs on a machine with that local folder (i.e. the Mac, not Railway)."""
     result = sync_to_obsidian()
     result.setdefault("vault", OBSIDIAN_VAULT_PATH)
     return jsonify(result)
@@ -1892,10 +1897,11 @@ def api_scout_jobs():
     return jsonify(db.get_scout_jobs(location=location, new_only=new_only))
 
 
-@app.route("/api/scout/scan")
+@app.route("/api/scout/scan", methods=["POST"])
 def api_scout_scan():
-    """Trigger a manual Indeed scrape. Always returns 200 with a count so the
-    frontend gets valid JSON even if the scrape is blocked/empty."""
+    """Trigger a manual Indeed scrape. POST-only so the global CSRF gate covers
+    this side effect. Always returns 200 with a count so the frontend gets valid
+    JSON even if the scrape is blocked/empty."""
     from services import scout
     try:
         count = scout.scan()

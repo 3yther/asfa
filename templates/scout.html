@@ -530,7 +530,7 @@
     const status = document.getElementById("scan-status");
     btn.disabled = true; status.textContent = "SCANNING…";
     try {
-      const res = await apiGet("/api/scout/scan");
+      const res = await apiSend("/api/scout/scan", {});
       const n = res.new_jobs ?? 0;
       status.textContent = `▸ ${n} NEW JOB${n === 1 ? "" : "S"} FOUND${res.error ? " (partial)" : ""}`;
       btn.classList.add("flash"); setTimeout(() => btn.classList.remove("flash"), 600);

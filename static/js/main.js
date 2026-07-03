@@ -52,7 +52,7 @@ function wireObsidian() {
       const label = b.textContent;
       b.disabled = true; b.textContent = "SYNCING…";
       try {
-        const d = await apiGet("/api/asfa/obsidian/sync-now");
+        const d = await apiPost("/api/asfa/obsidian/sync-now", {});
         if (d.status === "synced") {
           const extra = d.agents ? ` · ${d.agents} agents` : "";
           toast("OBSIDIAN · " + d.file + extra);
@@ -1103,7 +1103,7 @@ async function initSpotify() {
   // don't yank a track that's already going.
   if (status.connected && !status.is_playing) {
     try {
-      const r = await apiGet("/api/asfa/spotify/play");
+      const r = await apiPost("/api/asfa/spotify/play", {});
       if (r.ok) {
         setTimeout(async () => {
           try { renderSpotify(await apiGet("/api/asfa/spotify/status")); } catch {}
@@ -1382,7 +1382,7 @@ const Think = (function () {
     b.classList.toggle("on", ambientOn);
     if (!ambientOn) return;
     try {
-      const res = await apiGet("/api/asfa/spotify/focus?q=" + encodeURIComponent("ambient focus"));
+      const res = await apiPost("/api/asfa/spotify/focus", { q: "ambient focus" });
       if (!res.ok) { if (res.message) toast(res.message); ambientOn = false; b.classList.remove("on"); }
     } catch { toast("Spotify unavailable"); ambientOn = false; b.classList.remove("on"); }
   }
@@ -1420,7 +1420,7 @@ const LockIn = (function () {
     const orb = $("orb-stage"); if (orb) orb.classList.add("orb-focus");
     update();
     try {
-      const res = await apiGet("/api/asfa/spotify/focus?q=" + encodeURIComponent("deep focus"));
+      const res = await apiPost("/api/asfa/spotify/focus", { q: "deep focus" });
       if (!res.ok && res.reason !== "not_connected" && res.message) toast(res.message);
     } catch { /* music optional */ }
     toast("LOCKED IN");
