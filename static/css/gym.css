@@ -276,8 +276,18 @@
 /* set rows */
 .set-row {
   display: grid; grid-template-columns: 26px 1fr 1.1fr 1.1fr 44px; gap: 6px; align-items: center;
-  margin-bottom: 7px;
+  margin-bottom: 7px; position: relative;
 }
+/* ⚡ quick-log (fill+confirm) + ↻ fill-only, overlaid just left of the manual ✓ */
+.set-mini { position: absolute; right: 50px; top: 50%; transform: translateY(-50%); display: flex; gap: 3px; }
+.set-mini .set-fill { width: 30px; height: 30px; min-height: 30px; }
+.set-quicklog {
+  width: 30px; height: 30px; min-height: 30px; padding: 0; border-radius: 7px; cursor: pointer;
+  font-size: .95rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(63,185,80,.14); border: 1px solid rgba(63,185,80,.5); color: var(--gym-green);
+  transition: all .15s ease;
+}
+.set-quicklog:hover { background: var(--gym-green); color: #001008; }
 .set-row .set-num { font: 700 .82rem 'JetBrains Mono', monospace; color: var(--muted); text-align: center; }
 .set-type-sel {
   min-height: 44px; padding: 4px 6px; border-radius: 8px; font-size: .72rem;

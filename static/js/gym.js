@@ -839,6 +839,31 @@ function applyRecommendation(ex, card) {
   toast("Targets filled — still yours to confirm with ✓");
 }
 
+/* Tap-to-confirm: fill this row from the double-progression recommendation
+   (preferred) or the ghost/last-time values, then log it in the same tap via
+   the normal submit path. Only offered on weight rows that have a ghost — cardio
+   and first-time (no ghost/rec) exercises never show the ⚡ button. */
+function quickLogSet(ex, idx, row, card) {
+  if (isCardioEx(ex)) return;                         // weight-based only
+  if (row.classList.contains("done")) return;
+  const rec = ex.recommendation;
+  const ghost = ((ex.lastSession && ex.lastSession.sets) || [])[idx];
+  const typeSel = row.querySelector(".set-type-sel");
+  const w = row.querySelector(".w-in"), r = row.querySelector(".r-in");
+  const working = !typeSel || typeSel.value === "working";
+  if (rec && rec.found && working) {                  // recommendation takes priority
+    w.value = fmtKg(rec.recommended_weight);
+    r.value = rec.recommended_reps;
+  } else if (ghost) {                                 // else plain last-time values
+    if (typeSel && ghost.set_type) typeSel.value = ghost.set_type;
+    w.value = fmtKg(ghost.weight_kg);
+    r.value = ghost.reps;
+  } else {
+    return;                                           // nothing to pull from
+  }
+  completeSet(ex, idx, row, card);                    // reuse the canonical log path
+}
+
 function renderSetRows(ex, card) {
   if (isCardioEx(ex)) { renderCardioRows(ex, card); return; }
   const wrap = card.querySelector(".set-rows"); wrap.innerHTML = "";
@@ -869,9 +894,20 @@ function renderSetRows(ex, card) {
     } else {
       check.addEventListener("click", () => completeSet(ex, i, row, card));
       if (ghost) {
-        const fill = el("button", "ec-icon-btn", "↻"); fill.title = "Fill last time";
-        fill.style.cssText = "width:26px;height:26px;min-height:26px;position:absolute;right:2px;top:50%;transform:translateY(-50%);";
-        check.insertAdjacentElement("beforebegin", fill);
+        // ⚡ tap-to-confirm (fill from rec/ghost + log in one tap) alongside the
+        // ↻ fill-only button, grouped just left of the manual ✓. Ghost-gated, so
+        // first-time exercises (no ghost) show neither and keep baseline messaging.
+        const mini = el("div", "set-mini");
+        const quick = el("button", "set-quicklog", "⚡");
+        quick.title = (ex.recommendation && ex.recommendation.found)
+          ? "Log this set with the recommended weight × reps"
+          : "Log this set with last time's weight × reps";
+        const fill = el("button", "ec-icon-btn set-fill", "↻");
+        fill.title = "Fill last time (edit before logging)";
+        mini.appendChild(quick);
+        mini.appendChild(fill);
+        check.insertAdjacentElement("beforebegin", mini);
+        quick.addEventListener("click", () => quickLogSet(ex, i, row, card));
         fill.addEventListener("click", () => {
           row.querySelector(".w-in").value = fmtKg(ghost.weight_kg);
           row.querySelector(".r-in").value = ghost.reps;

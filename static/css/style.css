@@ -317,6 +317,20 @@ body {
 #score-card      { grid-column: span 4; }
 #bots-card       { grid-column: span 8; }
 #scout-card      { grid-column: span 4; }
+#scout-pipeline-card { grid-column: span 4; }
+/* Scout Pipeline dashboard card */
+.sp-stages { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.sp-stage { flex: 1; min-width: 56px; text-align: center; padding: 8px 4px; border-radius: var(--radius);
+  background: rgba(0,217,255,.05); border: 1px solid rgba(0,217,255,.16); }
+.sp-num { display: block; font: 700 1.2rem 'JetBrains Mono', monospace; color: var(--primary); }
+.sp-lbl { display: block; font-size: .52rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 2px; }
+.sp-nudge-head { font-size: .58rem; letter-spacing: .12em; color: var(--amber); margin-bottom: 6px; }
+.sp-nudge { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px; margin-bottom: 4px; border-radius: var(--radius);
+  background: rgba(245,158,11,.06); border: 1px solid rgba(245,158,11,.28); }
+.sp-nudge-job { font-size: .74rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-nudge-days { font: 600 .58rem 'JetBrains Mono', monospace; color: var(--amber); white-space: nowrap; }
+.sp-none { font-size: .74rem; color: var(--muted); }
 #calendar-card   { grid-column: span 4; }
 #inbox-card      { grid-column: span 4; }
 #news-card       { grid-column: span 12; }
@@ -787,7 +801,7 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
 @media (max-width: 760px) {
   .grid { grid-template-columns: 1fr; padding: 10px 12px 110px; gap: 10px; }
   #briefing-card, #score-card, #bots-card,
-  #scout-card, #calendar-card, #inbox-card, #news-card,
+  #scout-card, #scout-pipeline-card, #calendar-card, #inbox-card, #news-card,
   #water-card, #sleep-card, #bodyweight-card,
   #money-card, #pbs-card, #reflection-card,
   #goals-card, #chat-card, #supplements-card { grid-column: span 1; }
@@ -817,7 +831,7 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
   .grid { grid-template-columns: repeat(6,1fr); }
   #score-card { grid-column: span 2; }
   #bots-card  { grid-column: span 4; }
-  #scout-card, #calendar-card, #inbox-card { grid-column: span 2; }
+  #scout-card, #scout-pipeline-card, #calendar-card, #inbox-card { grid-column: span 2; }
   #water-card, #sleep-card, #bodyweight-card { grid-column: span 2; }
   #money-card, #pbs-card, #reflection-card { grid-column: span 2; }
   #supplements-card { grid-column: span 6; }
