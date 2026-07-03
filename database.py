@@ -1,7 +1,9 @@
+import hashlib
 import json
 import os
 import random
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, date, timedelta
 
@@ -1633,6 +1635,12 @@ def _ensure_agent_data_tables():
             if USE_POSTGRES:
                 stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
             cur.execute(stmt)
+        # Tier 3 Part 1: tamper-evident hash chain over the audit log. Added as
+        # idempotent ALTERs (not baked into CREATE) so existing rows on a live
+        # Postgres/SQLite pick them up without a table rebuild. Both start NULL
+        # and are filled by _backfill_audit_chain() oldest→newest on first boot.
+        _add_column(cur, "agent_audit_log", "prev_hash", "TEXT")
+        _add_column(cur, "agent_audit_log", "entry_hash", "TEXT")
     _AGENT_DATA_READY = True
 
 
@@ -1776,20 +1784,145 @@ def seed_relationships():
         upsert_relationship(*r)
 
 
-# ── Audit trail ────────────────────────────────────────────────────────────────
+# ── Audit trail (tamper-evident hash chain, Tier 3 Part 1) ──────────────────────
+# Each row stores entry_hash = sha256(prev_hash|timestamp|agent|action|details),
+# where prev_hash is the previous row's entry_hash (or "ASFA_GENESIS" for the very
+# first row). Any silent edit/delete of an intervening row makes a later row's
+# stored hash stop matching a recomputation, so verify_audit_chain() detects it.
+#
+# CONCURRENCY: the read-previous + insert must be atomic or two racing writes can
+# both chain off the same prev_hash and fork the chain. We serialise every write
+# with a process-level lock (single gunicorn worker / single dev process, so this
+# is sufficient for both backends) AND, on Postgres, additionally take an EXCLUSIVE
+# table lock inside the transaction — plain SELECTs (verify) use ACCESS SHARE and
+# are not blocked by it, so verification still runs concurrently.
+
+_AUDIT_GENESIS = "ASFA_GENESIS"
+_AUDIT_WRITE_LOCK = threading.Lock()
+
+
+def _audit_ts_str(created_at) -> str:
+    """Canonical string form of a row's created_at for hashing. Used identically
+    in the write, backfill, and verify paths so recomputation is unambiguous.
+    SQLite returns the stored TEXT verbatim; Postgres returns a datetime — both
+    normalise to 'YYYY-MM-DD HH:MM:SS' (second precision, no microseconds/tz)."""
+    if created_at is None:
+        return ""
+    if isinstance(created_at, datetime):
+        return created_at.strftime("%Y-%m-%d %H:%M:%S")
+    return str(created_at)
+
+
+def _compute_audit_hash(prev_hash, ts, agent_id, action, details) -> str:
+    """The exact, deterministic entry hash. `details` is the already-serialised
+    JSON string (or None → hashed as empty), matching the stored column value."""
+    raw = f"{prev_hash}|{ts}|{agent_id}|{action}|{details if details is not None else ''}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
 
 def log_audit(agent_id, action, outcome, reason=None, details=None, duration_ms=None):
-    """Log an agent action to the audit trail."""
+    """Log an agent action to the audit trail, extending the tamper-evident hash
+    chain. Serialised across threads so concurrent writes can't fork the chain."""
+    _ensure_agent_data_tables()
+    details_json = _json_or_none(details)
+    # Second-precision timestamp we control, so the value we hash is exactly what
+    # the DB stores and returns on read-back (round-trips cleanly on both engines).
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _AUDIT_WRITE_LOCK:
+        with get_db() as conn:
+            cur = conn.cursor()
+            ph = "%s" if USE_POSTGRES else "?"
+            if USE_POSTGRES:
+                cur.execute("LOCK TABLE agent_audit_log IN EXCLUSIVE MODE")
+            cur.execute(
+                "SELECT entry_hash FROM agent_audit_log ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+            prev_hash = (row["entry_hash"] if row and row["entry_hash"]
+                         else _AUDIT_GENESIS)
+            entry_hash = _compute_audit_hash(prev_hash, ts, agent_id, action,
+                                             details_json)
+            cur.execute(
+                f"INSERT INTO agent_audit_log "
+                f"(agent_id, action, reason, outcome, details, duration_ms, "
+                f"created_at, prev_hash, entry_hash) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+                (agent_id, action, reason, outcome, details_json,
+                 int(duration_ms) if duration_ms is not None else None,
+                 ts, prev_hash, entry_hash))
+
+
+def _backfill_audit_chain(batch_size: int = 500) -> int:
+    """Fill prev_hash/entry_hash for rows that don't have them yet, oldest→newest,
+    in batches. Only touches rows where entry_hash IS NULL — already-chained rows
+    are immutable, so this is a no-op after the first run and (crucially) never
+    recomputes over tampering, which would hide it. Returns rows hashed."""
+    _ensure_agent_data_tables()
+    hashed = 0
+    with _AUDIT_WRITE_LOCK:
+        with get_db() as conn:
+            cur = conn.cursor()
+            ph = "%s" if USE_POSTGRES else "?"
+            if USE_POSTGRES:
+                cur.execute("LOCK TABLE agent_audit_log IN EXCLUSIVE MODE")
+            prev_hash = _AUDIT_GENESIS
+            last_id = -1
+            while True:
+                cur.execute(
+                    f"SELECT id, created_at, agent_id, action, details, entry_hash "
+                    f"FROM agent_audit_log WHERE id > {ph} ORDER BY id ASC LIMIT {ph}",
+                    (last_id, batch_size))
+                rows = [dict(r) for r in cur.fetchall()]
+                if not rows:
+                    break
+                for r in rows:
+                    last_id = r["id"]
+                    if r["entry_hash"]:
+                        # Already part of the established chain — trust and extend.
+                        prev_hash = r["entry_hash"]
+                        continue
+                    ts = _audit_ts_str(r["created_at"])
+                    entry_hash = _compute_audit_hash(
+                        prev_hash, ts, r["agent_id"], r["action"], r["details"])
+                    cur.execute(
+                        f"UPDATE agent_audit_log SET prev_hash = {ph}, "
+                        f"entry_hash = {ph} WHERE id = {ph}",
+                        (prev_hash, entry_hash, r["id"]))
+                    prev_hash = entry_hash
+                    hashed += 1
+    return hashed
+
+
+def verify_audit_chain(batch_size: int = 500) -> dict:
+    """Walk the audit log oldest→newest recomputing each entry hash; the chain is
+    valid iff every stored entry_hash matches. Streamed in batches so a large
+    table doesn't load into memory at once.
+    Returns {valid, total_entries, first_broken_id}."""
     _ensure_agent_data_tables()
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
-        cur.execute(
-            f"INSERT INTO agent_audit_log "
-            f"(agent_id, action, reason, outcome, details, duration_ms) "
-            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph})",
-            (agent_id, action, reason, outcome, _json_or_none(details),
-             int(duration_ms) if duration_ms is not None else None))
+        cur.execute("SELECT COUNT(*) AS n FROM agent_audit_log")
+        total = int(cur.fetchone()["n"])
+        prev_hash = _AUDIT_GENESIS
+        last_id = -1
+        while True:
+            cur.execute(
+                f"SELECT id, created_at, agent_id, action, details, entry_hash "
+                f"FROM agent_audit_log WHERE id > {ph} ORDER BY id ASC LIMIT {ph}",
+                (last_id, batch_size))
+            rows = [dict(r) for r in cur.fetchall()]
+            if not rows:
+                break
+            for r in rows:
+                last_id = r["id"]
+                ts = _audit_ts_str(r["created_at"])
+                expected = _compute_audit_hash(
+                    prev_hash, ts, r["agent_id"], r["action"], r["details"])
+                if expected != (r["entry_hash"] or ""):
+                    return {"valid": False, "total_entries": total,
+                            "first_broken_id": r["id"]}
+                prev_hash = r["entry_hash"]
+    return {"valid": True, "total_entries": total, "first_broken_id": None}
 
 
 def get_audit_log(agent_id=None, limit=50):
@@ -2215,6 +2348,10 @@ def init_agent_data():
     for aid in AGENT_IDS:
         init_error_budget(aid)
         init_energy(aid)
+    # Tier 3 Part 1: hash-chain any pre-existing audit rows exactly once. No-op on
+    # every subsequent boot (only fills NULL entry_hash rows), so it never papers
+    # over tampering introduced after the initial backfill.
+    _backfill_audit_chain()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

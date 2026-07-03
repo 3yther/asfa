@@ -2235,6 +2235,15 @@ def api_audit():
     return jsonify(db.get_audit_log(agent_id, limit))
 
 
+@app.route("/api/system/audit/verify")
+@limiter.limit("10 per hour")
+def api_system_audit_verify():
+    """Verify the tamper-evident audit hash chain (Tier 3 Part 1). Read-only and
+    occasional, so it carries an explicit strict limit on top of the default
+    tiers. Returns {valid, total_entries, first_broken_id}."""
+    return jsonify(db.verify_audit_chain())
+
+
 @app.route("/api/error-budgets")
 def api_error_budgets():
     """Error budget status for all agents (agent_id, target, current_rate,
