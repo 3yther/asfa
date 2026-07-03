@@ -14,7 +14,10 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres"):
     USE_POSTGRES = True
 else:
     USE_POSTGRES = False
-    SQLITE_PATH = os.path.join(os.path.dirname(__file__), "asfa.db")
+    # ASFA_DB_PATH lets a subprocess (e.g. the MCP server) or a test point at a
+    # specific SQLite file; defaults to the repo-local asfa.db.
+    SQLITE_PATH = os.environ.get("ASFA_DB_PATH") or os.path.join(
+        os.path.dirname(__file__), "asfa.db")
 
 # Canonical daily supplements: (key, display label). Shared by the API,
 # scheduler reminders, and briefing so they never drift.
@@ -49,6 +52,26 @@ def get_db():
             raise
         finally:
             conn.close()
+
+
+def _column_exists(cur, table: str, column: str) -> bool:
+    """True if `column` already exists on `table`. Works on SQLite + Postgres.
+    Used to make ALTER TABLE ... ADD COLUMN migrations idempotent."""
+    if USE_POSTGRES:
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = %s AND column_name = %s",
+            (table, column))
+        return cur.fetchone() is not None
+    cur.execute(f"PRAGMA table_info({table})")
+    return any((r["name"] if isinstance(r, sqlite3.Row) else r[1]) == column
+               for r in cur.fetchall())
+
+
+def _add_column(cur, table: str, column: str, coldef: str):
+    """Idempotently add a column. No-op if it already exists."""
+    if not _column_exists(cur, table, column):
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coldef}")
 
 
 def init_db():
@@ -1163,6 +1186,10 @@ def _ensure_scout_tables():
             if USE_POSTGRES:
                 stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
             cur.execute(stmt)
+        # CV keyword-match analysis (Part 4). All nullable.
+        _add_column(cur, "scout_pipeline", "cv_match_score", "INTEGER")
+        _add_column(cur, "scout_pipeline", "missing_keywords", "TEXT")
+        _add_column(cur, "scout_pipeline", "match_analysis_at", "TEXT")
     _SCOUT_READY = True
 
 
@@ -1297,6 +1324,46 @@ def get_scout_pipeline_job(pid):
         cur.execute(f"SELECT * FROM scout_pipeline WHERE id = {ph}", (pid,))
         r = cur.fetchone()
         return dict(r) if r else None
+
+
+def find_scout_job_description(job_url=None, title=None, company=None):
+    """Best-effort lookup of a scraped job's description text for CV analysis:
+    match a scout_jobs row by url first, else by title+company. Returns the
+    description string or None."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if job_url:
+            cur.execute(f"SELECT description FROM scout_jobs WHERE url = {ph} "
+                        f"AND description IS NOT NULL AND description <> '' LIMIT 1", (job_url,))
+            r = cur.fetchone()
+            if r and r["description"]:
+                return r["description"]
+        if title and company:
+            cur.execute(f"SELECT description FROM scout_jobs WHERE title = {ph} AND company = {ph} "
+                        f"AND description IS NOT NULL AND description <> '' LIMIT 1", (title, company))
+            r = cur.fetchone()
+            if r and r["description"]:
+                return r["description"]
+    return None
+
+
+def save_cv_match(pid, score, missing_keywords, analyzed_at):
+    """Persist a CV-match result on a pipeline row. missing_keywords is stored as
+    a JSON array string. Returns the updated row, or None if the id is unknown."""
+    _ensure_scout_tables()
+    if not get_scout_pipeline_job(pid):
+        return None
+    missing_json = json.dumps(missing_keywords or [])
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"UPDATE scout_pipeline SET cv_match_score = {ph}, missing_keywords = {ph}, "
+            f"match_analysis_at = {ph} WHERE id = {ph}",
+            (int(score), missing_json, analyzed_at, pid))
+    return get_scout_pipeline_job(pid)
 
 
 def add_scout_pipeline_job(job_title, company, job_url=None, location=None,
@@ -2284,6 +2351,9 @@ def _ensure_gym_tables():
             if USE_POSTGRES:
                 stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
             cur.execute(stmt)
+        # Optional per-set RPE (reps-in-reserve proxy). NULL = not logged.
+        _add_column(cur, "gym_sets", "rpe",
+                    "INTEGER CHECK (rpe IS NULL OR rpe BETWEEN 6 AND 10)")
     _GYM_READY = True
 
 
@@ -2673,7 +2743,7 @@ def _is_cardio_exercise(ex: dict) -> bool:
 
 
 def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps,
-            notes="") -> dict:
+            notes="", rpe=None) -> dict:
     """Log a single set. Detects a personal record (by estimated 1RM), updates
     the PR table, awards XP, and bumps the exercise's muscle-group rank.
     Cardio sets (Incline Walk etc.) store duration-in-minutes in ``reps`` with
@@ -2685,6 +2755,14 @@ def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps,
     reps = int(reps or 0)
     ex = get_exercise(exercise_id)
     cardio = _is_cardio_exercise(ex)
+
+    # Optional RPE (6–10). Blank/invalid → NULL. Cardio never carries RPE.
+    try:
+        rpe = None if rpe in (None, "") else int(rpe)
+    except (TypeError, ValueError):
+        rpe = None
+    if rpe is not None and (cardio or not (6 <= rpe <= 10)):
+        rpe = None
 
     if cardio:
         # Cardio never counts as a PR (guards the 0kg-cardio-PR bug) and has no 1RM.
@@ -2699,9 +2777,9 @@ def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps,
         cur = conn.cursor()
         set_id = _gym_insert(
             cur, "gym_sets",
-            "session_id, exercise_id, set_number, set_type, weight_kg, reps, is_pr, notes",
+            "session_id, exercise_id, set_number, set_type, weight_kg, reps, is_pr, notes, rpe",
             (session_id, exercise_id, set_number, set_type, weight_kg, reps,
-             bool(is_pr), notes or ""))
+             bool(is_pr), notes or "", rpe))
 
     today = date.today().isoformat()
     if is_pr:
@@ -3105,7 +3183,7 @@ def get_last_session_for_exercise(exercise_id: int, exclude_session_id=None) -> 
         session_id = row["session_id"]
         session_date = str(row["date"])[:10]
         cur.execute(
-            f"""SELECT id, set_number, set_type, weight_kg, reps, is_pr, notes
+            f"""SELECT id, set_number, set_type, weight_kg, reps, is_pr, notes, rpe
                 FROM gym_sets
                 WHERE session_id = {ph} AND exercise_id = {ph}
                 ORDER BY set_number, id""",
@@ -3296,20 +3374,43 @@ def get_progression_recommendation(exercise_id: int, rep_min=None, rep_max=None,
                 "reason": (f"Bodyweight work — progress by adding reps. You got "
                            f"{top_reps} last time; aim for {target}+.")}
 
+    # Most recent prior working set's RPE (reps-in-reserve proxy), if logged.
+    # It only nudges the load increment on a *progress* verdict; all existing
+    # guardrails (rep-range, deload, 10% cap, rack steps) stay intact.
+    rpe_sets = [s for s in working if s.get("rpe") is not None]
+    last_rpe = rpe_sets[-1]["rpe"] if rpe_sets else None
+
     if all(r >= rep_max for r in reps_at_top):
+        # RPE 9–10: near-max effort last time — hold and consolidate, don't push.
+        if last_rpe is not None and last_rpe >= 9:
+            return {**base, "verdict": "hold", "recommended_weight": last_top_weight,
+                    "recommended_reps": rep_max, "increment": 0, "rpe_last": last_rpe,
+                    "reason": (f"You maxed the {rep_min}–{rep_max} range at "
+                               f"{_fmt_kg(last_top_weight)}kg but logged RPE {last_rpe} "
+                               f"— that's near max. Hold this weight and own it "
+                               f"before adding load.")}
         inc = _progression_increment(equipment, last_top_weight)
         if dumbbell:
             new_w = _next_dumbbell_step(last_top_weight)
+            if last_rpe is not None and last_rpe <= 7:   # too easy → extra rack step
+                new_w = _next_dumbbell_step(new_w)
+            inc = round(new_w - last_top_weight, 2)
         else:
+            if last_rpe is not None and last_rpe <= 7:   # too easy → bigger jump,
+                cap = _round_to_plate(last_top_weight * MAX_JUMP_PCT)  # still ≤10% cap
+                inc = min(inc + PLATE_STEP, max(inc, cap))
             new_w = _round_to_plate(last_top_weight + inc)
             while new_w <= last_top_weight + 1e-9:   # rounding must never stall
                 new_w = round(new_w + PLATE_STEP, 2)
             inc = round(new_w - last_top_weight, 2)
+        reason = (f"You hit {rep_max}+ reps on all working sets at "
+                  f"{_fmt_kg(last_top_weight)}kg last time. Add "
+                  f"{_fmt_kg(inc)}kg and aim for {rep_min}.")
+        if last_rpe is not None and last_rpe <= 7:
+            reason += f" (RPE {last_rpe} — that was easy, so a bigger jump.)"
         return {**base, "verdict": "progress", "recommended_weight": new_w,
-                "recommended_reps": rep_min, "increment": inc,
-                "reason": (f"You hit {rep_max}+ reps on all working sets at "
-                           f"{_fmt_kg(last_top_weight)}kg last time. Add "
-                           f"{_fmt_kg(inc)}kg and aim for {rep_min}.")}
+                "recommended_reps": rep_min, "increment": inc, "rpe_last": last_rpe,
+                "reason": reason}
 
     if any(r < rep_min for r in reps_at_top):
         if (rep_min - top_reps) > 2:
@@ -3348,6 +3449,79 @@ def get_routine_recommendations(routine_id: int) -> list:
         rec["exercise_id"] = rex["exercise_id"]
         rec["exercise_name"] = rex["name"]
         out.append(rec)
+    return out
+
+
+def get_gym_sets_for_export(start_date=None, end_date=None) -> list:
+    """Flat rows for CSV export: one dict per logged set joined to its session
+    date + exercise. Optional inclusive ISO date range (on the session date).
+    Cardio rows carry duration (minutes) in ``reps``; the caller splits them.
+    Per-set XP is recomputed with the same rules used when it was awarded."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        sql = (f"""SELECT s.date AS date, e.name AS exercise,
+                          e.exercise_type AS exercise_type, e.muscle_group AS muscle_group,
+                          st.weight_kg AS weight_kg, st.reps AS reps, st.rpe AS rpe,
+                          st.set_type AS set_type, st.is_pr AS is_pr
+                   FROM gym_sets st
+                   JOIN gym_sessions s ON s.id = st.session_id
+                   JOIN gym_exercises e ON e.id = st.exercise_id""")
+        conds, params = [], []
+        if start_date:
+            conds.append(f"s.date >= {ph}"); params.append(start_date)
+        if end_date:
+            conds.append(f"s.date <= {ph}"); params.append(end_date)
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY s.date, st.id"
+        cur.execute(sql, tuple(params))
+        rows = [dict(r) for r in cur.fetchall()]
+    out = []
+    for r in rows:
+        cardio = (r.get("exercise_type") == "cardio") or (r.get("muscle_group") == "cardio")
+        weight = float(r.get("weight_kg") or 0)
+        reps = int(r.get("reps") or 0)
+        is_pr = bool(r.get("is_pr"))
+        xp = 50 if cardio else _xp_for_set(weight, reps, is_pr)
+        out.append({
+            "date": str(r.get("date") or "")[:10],
+            "exercise": r.get("exercise") or "",
+            "weight_kg": "" if cardio else _fmt_kg(weight),
+            "reps": "" if cardio else reps,
+            "rpe": r.get("rpe") if r.get("rpe") is not None else "",
+            "duration_min": reps if cardio else "",
+            "pr": "yes" if is_pr else "",
+            "xp_earned": xp,
+        })
+    return out
+
+
+def get_scout_pipeline_for_export() -> list:
+    """Flat rows for CSV export of the Scout pipeline. Includes cv_match_score
+    only if that column exists yet (added by the Part 4 CV-match feature)."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        has_score = _column_exists(cur, "scout_pipeline", "cv_match_score")
+        cur.execute("SELECT * FROM scout_pipeline ORDER BY date_saved DESC, id DESC")
+        rows = [dict(r) for r in cur.fetchall()]
+    out = []
+    for r in rows:
+        row = {
+            "date_saved": r.get("date_saved") or "",
+            "job_title": r.get("job_title") or "",
+            "company": r.get("company") or "",
+            "stage": r.get("stage") or "",
+            "date_applied": r.get("date_applied") or "",
+            "date_stage_changed": r.get("date_stage_changed") or "",
+            "source": r.get("source") or "",
+            "notes": r.get("notes") or "",
+        }
+        if has_score:
+            row["cv_match_score"] = r.get("cv_match_score") if r.get("cv_match_score") is not None else ""
+        out.append(row)
     return out
 
 
@@ -3946,3 +4120,159 @@ def get_fragrance_stats() -> dict:
             for f in frags
         ],
     }
+
+
+# ── Body composition + progress photos (Part 5) ──────────────────────────────
+# Renpho ("Rephno") ships no official public API — only a manual CSV export in
+# its app and unofficial reverse-engineered clients. So manual entry is the
+# primary path; services/rephno.py is a gated seam for a future sync.
+
+_BODY_READY = False
+
+
+def _ensure_body_tables():
+    global _BODY_READY
+    if _BODY_READY:
+        return
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS body_composition (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date_scanned TEXT NOT NULL,
+            weight_kg REAL,
+            bmi REAL,
+            body_fat_percent REAL,
+            ffm_kg REAL,
+            body_water_percent REAL,
+            bmr INTEGER,
+            subcutaneous_fat_percent REAL,
+            source_id TEXT,
+            synced_at TEXT,
+            created_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS gym_photos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            weight_kg REAL,
+            body_fat_percent REAL,
+            created_at TEXT
+        )""",
+    ]
+    with get_db() as conn:
+        cur = conn.cursor()
+        for stmt in stmts:
+            if USE_POSTGRES:
+                stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+            cur.execute(stmt)
+    _BODY_READY = True
+
+
+_BODY_FIELDS = ("weight_kg", "bmi", "body_fat_percent", "ffm_kg",
+                "body_water_percent", "bmr", "subcutaneous_fat_percent")
+
+
+def _to_float(v):
+    try:
+        return None if v in (None, "") else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def upsert_body_composition(date_scanned, metrics: dict, source_id=None) -> dict:
+    """Insert or update a body-composition scan. Manual entries dedup on the
+    scan date (one row per day, last write wins). A sync dedups on source_id
+    when given. Returns the stored row."""
+    _ensure_body_tables()
+    now = datetime.now().isoformat()
+    vals = {k: _to_float(metrics.get(k)) for k in _BODY_FIELDS}
+    if vals.get("bmr") is not None:
+        vals["bmr"] = int(vals["bmr"])
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        existing = None
+        if source_id:
+            cur.execute(f"SELECT id FROM body_composition WHERE source_id = {ph}", (source_id,))
+            existing = cur.fetchone()
+        if not existing:
+            cur.execute(f"SELECT id FROM body_composition WHERE date_scanned = {ph}", (date_scanned,))
+            existing = cur.fetchone()
+        if existing:
+            set_clause = ", ".join(f"{k} = {ph}" for k in _BODY_FIELDS)
+            cur.execute(
+                f"UPDATE body_composition SET {set_clause}, source_id = {ph}, synced_at = {ph} "
+                f"WHERE id = {ph}",
+                tuple(vals[k] for k in _BODY_FIELDS) + (source_id, now, existing["id"]))
+            row_id = existing["id"]
+        else:
+            cols = "date_scanned, " + ", ".join(_BODY_FIELDS) + ", source_id, synced_at, created_at"
+            values = (date_scanned,) + tuple(vals[k] for k in _BODY_FIELDS) + (source_id, now, now)
+            row_id = _gym_insert(cur, "body_composition", cols, values)
+    return get_body_composition_row(row_id)
+
+
+def get_body_composition_row(row_id) -> dict:
+    _ensure_body_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM body_composition WHERE id = {ph}", (row_id,))
+        r = cur.fetchone()
+        return dict(r) if r else None
+
+
+def get_body_composition(days=30) -> list:
+    """Latest scans within the last `days`, newest first."""
+    _ensure_body_tables()
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM body_composition WHERE date_scanned >= {ph} "
+            f"ORDER BY date_scanned DESC, id DESC", (cutoff,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def body_composition_source_exists(source_id) -> bool:
+    """True if a synced scan with this source_id already exists (sync dedup)."""
+    if not source_id:
+        return False
+    _ensure_body_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT 1 FROM body_composition WHERE source_id = {ph} LIMIT 1", (source_id,))
+        return cur.fetchone() is not None
+
+
+def latest_body_composition() -> dict:
+    """Most recent scan of any date, or None."""
+    _ensure_body_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM body_composition ORDER BY date_scanned DESC, id DESC LIMIT 1")
+        r = cur.fetchone()
+        return dict(r) if r else None
+
+
+def add_gym_photo(date_str, filename, weight_kg=None, body_fat_percent=None) -> dict:
+    """Record an uploaded progress photo, auto-tagged with the day's weight/bf%."""
+    _ensure_body_tables()
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        pid = _gym_insert(
+            cur, "gym_photos", "date, filename, weight_kg, body_fat_percent, created_at",
+            (date_str, filename, _to_float(weight_kg), _to_float(body_fat_percent), now))
+    return {"id": pid, "date": date_str, "filename": filename,
+            "weight_kg": _to_float(weight_kg), "body_fat_percent": _to_float(body_fat_percent)}
+
+
+def get_gym_photos() -> list:
+    """All progress photos, newest first."""
+    _ensure_body_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM gym_photos ORDER BY date DESC, id DESC")
+        return [dict(r) for r in cur.fetchall()]

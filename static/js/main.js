@@ -42,6 +42,7 @@ function wireControls() {
   Think.wire();
   LockIn.wire();
   wireObsidian();
+  wireBodyComp();
 }
 
 // ── Obsidian sync (manual) ───────────────────────────────────────────────────────
@@ -52,7 +53,7 @@ function wireObsidian() {
       const label = b.textContent;
       b.disabled = true; b.textContent = "SYNCING…";
       try {
-        const d = await apiGet("/api/asfa/obsidian/sync-now");
+        const d = await apiPost("/api/asfa/obsidian/sync-now", {});
         if (d.status === "synced") {
           const extra = d.agents ? ` · ${d.agents} agents` : "";
           toast("OBSIDIAN · " + d.file + extra);
@@ -580,7 +581,83 @@ function loadAll() {
   fetchSystems();
   fetchValidation();
   fetchScoutPipeline();
+  fetchBodyComp();
   initMarketClock();
+}
+
+// ── Body composition (Renpho manual entry) ──────────────────────────────────────
+let bodyCompChart = null;
+async function fetchBodyComp() {
+  const card = document.getElementById("bodycomp-card");
+  if (!card) return;
+  let data;
+  try { data = await apiGet("/api/body-composition"); } catch (e) { return; }
+  const latest = data.latest || null;
+  const setVal = (id, v, suffix) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = (v == null || v === "") ? "—" : (v + suffix);
+  };
+  setVal("bc-weight", latest && latest.weight_kg, " KG");
+  setVal("bc-bf", latest && latest.body_fat_percent, "%");
+  setVal("bc-ffm", latest && latest.ffm_kg, " KG");
+
+  // API returns newest-first; chart wants oldest→newest.
+  const scans = (data.scans || []).slice().reverse();
+  const points = scans.filter(s => s.weight_kg != null || s.body_fat_percent != null);
+  const canvas = document.getElementById("bodycomp-chart");
+  const empty = document.getElementById("bodycomp-empty");
+  if (points.length < 5) {                    // waiting state, not a blank chart
+    if (canvas) canvas.style.display = "none";
+    if (empty) empty.hidden = false;
+    if (bodyCompChart) { bodyCompChart.destroy(); bodyCompChart = null; }
+    return;
+  }
+  if (canvas) canvas.style.display = "";
+  if (empty) empty.hidden = true;
+  const labels = points.map(s => String(s.date_scanned).slice(5));
+  if (bodyCompChart) bodyCompChart.destroy();
+  bodyCompChart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "Mass (kg)", data: points.map(s => s.weight_kg), borderColor: "#00d9ff",
+        backgroundColor: "rgba(0,217,255,.1)", yAxisID: "y", tension: .3, spanGaps: true },
+      { label: "Body fat (%)", data: points.map(s => s.body_fat_percent), borderColor: "#f5c542",
+        backgroundColor: "rgba(245,197,66,.1)", yAxisID: "y1", tension: .3, spanGaps: true },
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: "#9fb2c0", font: { size: 10 } } } },
+      scales: {
+        y:  { position: "left",  ticks: { color: "#00d9ff" }, grid: { color: "rgba(255,255,255,.05)" } },
+        y1: { position: "right", ticks: { color: "#f5c542" }, grid: { drawOnChartArea: false } },
+        x:  { ticks: { color: "#8aa4b0", maxRotation: 0, autoSkip: true }, grid: { color: "rgba(255,255,255,.04)" } },
+      },
+    },
+  });
+}
+
+function wireBodyComp() {
+  const form = document.getElementById("bodycomp-form");
+  if (!form) return;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const num = id => { const v = parseFloat(document.getElementById(id)?.value); return isNaN(v) ? null : v; };
+    const body = {
+      date: document.getElementById("bc-in-date")?.value || undefined,
+      weight_kg: num("bc-in-weight"), body_fat_percent: num("bc-in-bf"),
+      ffm_kg: num("bc-in-ffm"), bmi: num("bc-in-bmi"),
+      body_water_percent: num("bc-in-water"), bmr: num("bc-in-bmr"),
+    };
+    const metricKeys = ["weight_kg", "body_fat_percent", "ffm_kg", "bmi", "body_water_percent", "bmr"];
+    if (metricKeys.every(k => body[k] == null)) { toast("ENTER A METRIC"); return; }
+    try {
+      await apiPost("/api/body-composition/manual", body);
+      toast("SCAN LOGGED");
+      form.reset();
+      const d = document.getElementById("bodycomp-details"); if (d) d.open = false;
+      fetchBodyComp();
+    } catch (err) { toast("LOG FAILED"); }
+  });
 }
 
 // ── Scout Pipeline ─────────────────────────────────────────────────────────────
@@ -1103,7 +1180,7 @@ async function initSpotify() {
   // don't yank a track that's already going.
   if (status.connected && !status.is_playing) {
     try {
-      const r = await apiGet("/api/asfa/spotify/play");
+      const r = await apiPost("/api/asfa/spotify/play", {});
       if (r.ok) {
         setTimeout(async () => {
           try { renderSpotify(await apiGet("/api/asfa/spotify/status")); } catch {}
@@ -1382,7 +1459,7 @@ const Think = (function () {
     b.classList.toggle("on", ambientOn);
     if (!ambientOn) return;
     try {
-      const res = await apiGet("/api/asfa/spotify/focus?q=" + encodeURIComponent("ambient focus"));
+      const res = await apiPost("/api/asfa/spotify/focus", { q: "ambient focus" });
       if (!res.ok) { if (res.message) toast(res.message); ambientOn = false; b.classList.remove("on"); }
     } catch { toast("Spotify unavailable"); ambientOn = false; b.classList.remove("on"); }
   }
@@ -1420,7 +1497,7 @@ const LockIn = (function () {
     const orb = $("orb-stage"); if (orb) orb.classList.add("orb-focus");
     update();
     try {
-      const res = await apiGet("/api/asfa/spotify/focus?q=" + encodeURIComponent("deep focus"));
+      const res = await apiPost("/api/asfa/spotify/focus", { q: "deep focus" });
       if (!res.ok && res.reason !== "not_connected" && res.message) toast(res.message);
     } catch { /* music optional */ }
     toast("LOCKED IN");

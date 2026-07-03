@@ -1,6 +1,8 @@
 """ASFA — AI Software For Amir. JARVIS-style life command centre."""
 import base64
+import csv
 import hmac
+import io
 import json
 import logging
 import os
@@ -59,7 +61,7 @@ os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 import requests
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 
 import database as db
 from flask_limiter.util import get_remote_address
@@ -270,6 +272,9 @@ db.init_scout_pipeline()
 # a fresh clone/deploy can accept uploads immediately.
 FRAGRANCE_UPLOAD_DIR = os.path.join(app.static_folder, "uploads", "fragrances")
 os.makedirs(FRAGRANCE_UPLOAD_DIR, exist_ok=True)
+# Progress photos also live outside git (see .gitignore); same boot-time recreate.
+GYM_PHOTO_UPLOAD_DIR = os.path.join(app.static_folder, "uploads", "gym-photos")
+os.makedirs(GYM_PHOTO_UPLOAD_DIR, exist_ok=True)
 
 
 def _today():
@@ -306,6 +311,11 @@ def system():
 @app.route("/gym")
 def gym():
     return render_template("gym.html", active="gym", active_tab="gym")
+
+
+@app.route("/gym/photos")
+def gym_photos():
+    return render_template("gym-photos.html", active="gym")
 
 
 @app.route("/fragrances")
@@ -578,7 +588,7 @@ def api_gym_log_set():
     result = db.log_set(
         d["session_id"], d["exercise_id"], d["set_number"],
         d.get("set_type", "working"), d.get("weight_kg", 0), d.get("reps", 0),
-        d.get("notes", ""))
+        d.get("notes", ""), rpe=d.get("rpe"))
     return jsonify({"ok": True, **result})
 
 
@@ -593,6 +603,113 @@ def api_gym_delete_set(set_id):
     if not ok:
         return jsonify({"error": "set not found"}), 404
     return jsonify({"ok": True})
+
+
+def _csv_response(fieldnames, rows, filename):
+    """Build a downloadable CSV response. csv.DictWriter handles quoting of
+    commas, quotes and newlines inside fields; extrasaction='ignore' keeps
+    unexpected keys out. Auth-gated like every non-public route."""
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for r in rows:
+        writer.writerow(r)
+    return Response(
+        buf.getvalue(), mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.route("/api/gym/export/csv")
+def api_gym_export_csv():
+    """Export logged gym sets as CSV. Optional ?start_date=&end_date= (inclusive
+    ISO dates on the session date)."""
+    start = request.args.get("start_date") or None
+    end = request.args.get("end_date") or None
+    rows = db.get_gym_sets_for_export(start, end)
+    fields = ["date", "exercise", "weight_kg", "reps", "rpe",
+              "duration_min", "pr", "xp_earned"]
+    return _csv_response(fields, rows, f"asfa_gym_{_today()}.csv")
+
+
+# ── Body composition (Renpho manual entry — see services/rephno.py seam) ────────
+
+@app.route("/api/body-composition")
+def api_body_composition():
+    """Latest body-composition scans (default last 30 days), newest first."""
+    days = request.args.get("days", default=30, type=int) or 30
+    rows = db.get_body_composition(days=days)
+    return jsonify({"scans": rows, "latest": db.latest_body_composition()})
+
+
+@app.route("/api/body-composition/manual", methods=["POST"])
+def api_body_composition_manual():
+    """Manually log a body-composition scan. Upserts on the scan date (one row
+    per day). Body: {date?, weight_kg, bmi, body_fat_percent, ffm_kg,
+    body_water_percent, bmr, subcutaneous_fat_percent} — all metrics optional."""
+    d = request.get_json(force=True) or {}
+    date_scanned = (d.get("date") or d.get("date_scanned") or _today())[:10]
+    metrics = {k: d.get(k) for k in (
+        "weight_kg", "bmi", "body_fat_percent", "ffm_kg",
+        "body_water_percent", "bmr", "subcutaneous_fat_percent")}
+    if all(db._to_float(v) is None for v in metrics.values()):
+        return jsonify({"error": "provide at least one metric"}), 400
+    row = db.upsert_body_composition(date_scanned, metrics, source_id=None)
+    return jsonify({"ok": True, "scan": row})
+
+
+@app.route("/api/gym/photos")
+def api_gym_photos():
+    """Progress-photo gallery, newest first."""
+    photos = db.get_gym_photos()
+    for p in photos:
+        p["url"] = f"/static/uploads/gym-photos/{p['filename']}"
+    return jsonify({"photos": photos})
+
+
+@app.route("/api/gym/photos", methods=["POST"])
+def api_gym_photo_upload():
+    """Upload a progress photo. Reuses the fragrance image pipeline (magic-byte
+    sniff → Pillow decode/re-encode → EXIF strip, 5MB cap). Auto-tags today's
+    date and that day's weight / body-fat if a scan or bodyweight entry exists."""
+    f = request.files.get("image") or request.files.get("photo")
+    if not f:
+        return jsonify({"error": "no image file"}), 400
+    data = f.read(_IMG_MAX_BYTES + 1)
+    if len(data) > _IMG_MAX_BYTES:
+        return jsonify({"error": "image too large (max 5MB)"}), 413
+    ext = next((e for e, sniff in _IMG_MAGIC.items() if sniff(data)), None)
+    if not ext:
+        return jsonify({"error": "unsupported image type (jpg/png/webp only)"}), 415
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    try:
+        img = Image.open(BytesIO(data))
+        img.load()
+        img = ImageOps.exif_transpose(img)   # bake orientation, then save w/o metadata
+    except Exception:
+        return jsonify({"error": "corrupt or unreadable image"}), 415
+    today = _today()
+    filename = f"{today}_{int(datetime.now().timestamp() * 1000)}.{ext}"
+    path = os.path.join(GYM_PHOTO_UPLOAD_DIR, filename)
+    if img.mode in ("P", "RGBA") and ext == "jpg":
+        img = img.convert("RGB")
+    img.save(path, format=_PIL_FORMATS[ext])
+
+    # Auto-tag with today's body-fat (from a scan) and weight (scan → bodyweight log).
+    scans = db.get_body_composition(days=1)
+    today_scan = next((s for s in scans if str(s.get("date_scanned"))[:10] == today), None)
+    body_fat = today_scan.get("body_fat_percent") if today_scan else None
+    weight = today_scan.get("weight_kg") if today_scan else None
+    if weight is None:
+        try:
+            bw = db.get_body_stats()  # existing bodyweight log (newest first)
+            if bw and str(bw[0].get("date"))[:10] == today:
+                weight = bw[0].get("weight_kg")
+        except Exception:
+            pass
+    photo = db.add_gym_photo(today, filename, weight_kg=weight, body_fat_percent=body_fat)
+    photo["url"] = f"/static/uploads/gym-photos/{filename}"
+    return jsonify({"ok": True, "photo": photo})
 
 
 @app.route("/api/gym/exercises/<int:exercise_id>/last-session")
@@ -1255,17 +1372,21 @@ def api_spotify_status():
     return jsonify(spotify.current_playback())
 
 
-@app.route("/api/asfa/spotify/play")
+@app.route("/api/asfa/spotify/play", methods=["POST"])
 def api_spotify_play():
-    """Resume playback on the user's active/default device. Always 200 so the
-    frontend can surface the friendly message regardless of outcome."""
+    """Resume playback on the user's active/default device. POST-only so the
+    global CSRF gate covers this external action. Always 200 so the frontend can
+    surface the friendly message regardless of outcome."""
     return jsonify(spotify.resume_playback())
 
 
-@app.route("/api/asfa/spotify/focus")
+@app.route("/api/asfa/spotify/focus", methods=["POST"])
 def api_spotify_focus():
-    """Start a mood playlist by search query (Think Mode ambient / Lock In focus)."""
-    query = request.args.get("q", "deep focus")
+    """Start a mood playlist by search query (Think Mode ambient / Lock In
+    focus). POST-only so the global CSRF gate covers this external action.
+    `q` may arrive as a query param or JSON body."""
+    body = request.get_json(silent=True) or {}
+    query = request.args.get("q") or body.get("q") or "deep focus"
     return jsonify(spotify.play_query(query))
 
 
@@ -1374,10 +1495,11 @@ def api_backup_run_now():
 
 # ── Obsidian sync (local markdown daily logs) ──────────────────────────────────
 
-@app.route("/api/asfa/obsidian/sync-now")
+@app.route("/api/asfa/obsidian/sync-now", methods=["POST"])
 def api_obsidian_sync():
-    """Write the full ASFA vault tree to OBSIDIAN_VAULT_PATH. Only writes when
-    ASFA runs on a machine with that local folder (i.e. the Mac, not Railway)."""
+    """Write the full ASFA vault tree to OBSIDIAN_VAULT_PATH. POST-only so the
+    global CSRF gate covers this filesystem side effect. Only writes when ASFA
+    runs on a machine with that local folder (i.e. the Mac, not Railway)."""
     result = sync_to_obsidian()
     result.setdefault("vault", OBSIDIAN_VAULT_PATH)
     return jsonify(result)
@@ -1892,10 +2014,11 @@ def api_scout_jobs():
     return jsonify(db.get_scout_jobs(location=location, new_only=new_only))
 
 
-@app.route("/api/scout/scan")
+@app.route("/api/scout/scan", methods=["POST"])
 def api_scout_scan():
-    """Trigger a manual Indeed scrape. Always returns 200 with a count so the
-    frontend gets valid JSON even if the scrape is blocked/empty."""
+    """Trigger a manual Indeed scrape. POST-only so the global CSRF gate covers
+    this side effect. Always returns 200 with a count so the frontend gets valid
+    JSON even if the scrape is blocked/empty."""
     from services import scout
     try:
         count = scout.scan()
@@ -1903,6 +2026,18 @@ def api_scout_scan():
         logger.error("scout scan failed: %s", e)
         return jsonify({"new_jobs": 0, "error": str(e)[:200]})
     return jsonify({"new_jobs": count})
+
+
+@app.route("/api/scout/export/csv")
+def api_scout_export_csv():
+    """Export the Scout pipeline as CSV. Includes cv_match_score once the Part 4
+    CV-match column exists."""
+    rows = db.get_scout_pipeline_for_export()
+    fields = ["date_saved", "job_title", "company", "stage", "date_applied",
+              "date_stage_changed", "source", "notes"]
+    if rows and "cv_match_score" in rows[0]:
+        fields.append("cv_match_score")
+    return _csv_response(fields, rows, f"asfa_scout_{_today()}.csv")
 
 
 @app.route("/api/scout/apply", methods=["POST"])
@@ -1996,6 +2131,59 @@ def api_scout_pipeline_item(pid):
     if not job:
         return jsonify({"error": "not found"}), 404
     return jsonify({"ok": True, "job": job})
+
+
+_CV_KV_KEY = "scout_cv_text"
+
+
+@app.route("/api/scout/pipeline/<int:pid>/analyze-cv", methods=["POST"])
+def api_scout_analyze_cv(pid):
+    """Score a pipeline job against the CV and list missing required keywords.
+
+    Body: {cv_text?, job_description?}. cv_text is cached in kv_store so later
+    calls can omit it; job_description falls back to the scraped scout_jobs
+    description matched by url or title+company. One Claude call (extract +
+    compare). Stores score + missing_keywords (JSON) + timestamp on the row."""
+    job = db.get_scout_pipeline_job(pid)
+    if not job:
+        return jsonify({"error": "not found"}), 404
+    d = request.get_json(silent=True) or {}
+
+    # CV text: body wins and is remembered; else fall back to the cached CV.
+    cv_text = (d.get("cv_text") or "").strip()
+    if cv_text:
+        db.kv_set(_CV_KV_KEY, cv_text)
+    else:
+        cv_text = (db.kv_get(_CV_KV_KEY) or "").strip()
+    if not cv_text:
+        return jsonify({"error": "No CV on file — send cv_text once and it will "
+                                 "be remembered for future analyses."}), 400
+
+    # Job description: body, else the scraped description for this job.
+    job_description = (d.get("job_description") or "").strip()
+    if not job_description:
+        job_description = (db.find_scout_job_description(
+            job_url=job.get("job_url"), title=job.get("job_title"),
+            company=job.get("company")) or "").strip()
+    if not job_description:
+        return jsonify({"error": "Need a description to analyze — paste the job "
+                                 "description (no scraped text found for this job)."}), 400
+
+    result = ai.analyze_cv_match(cv_text, job_description)
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error", "analysis failed")}), 502
+
+    analyzed_at = datetime.now().isoformat()
+    updated = db.save_cv_match(pid, result["score"], result["missing"], analyzed_at)
+    return jsonify({
+        "ok": True,
+        "id": pid,
+        "cv_match_score": result["score"],
+        "missing_keywords": result["missing"],
+        "required": result["required"],
+        "nice_to_have": result["nice_to_have"],
+        "match_analysis_at": analyzed_at,
+    })
 
 
 # ── Agent data layer: memory / audit / error budgets (Phase 3) ────────────────

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>ASFA // PROGRESS PHOTOS</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
+<style>
+  .gp-screen { max-width: 1100px; margin: 0 auto; padding: 20px 16px 120px; }
+  .gp-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+  .gp-head h1 { font-size: 1.4rem; letter-spacing: 1px; }
+  .gp-sub { color: var(--muted, #8aa4b0); font-size: .8rem; }
+  .gp-upload { display: flex; align-items: center; gap: 10px; }
+  .gp-btn { background: linear-gradient(120deg, #00d9ff, #0077aa); color: #001018; border: none; border-radius: 8px;
+            padding: 10px 16px; font-weight: 700; letter-spacing: .5px; cursor: pointer; font-size: .8rem; }
+  .gp-btn:disabled { opacity: .6; cursor: progress; }
+  .gp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .gp-tile { border: 1px solid rgba(140,170,200,.16); border-radius: 10px; overflow: hidden; background: rgba(4,10,16,.8); cursor: pointer; transition: box-shadow .2s; }
+  .gp-tile:hover { box-shadow: 0 0 16px rgba(0,217,255,.28); }
+  .gp-tile img { width: 100%; height: 180px; object-fit: cover; display: block; }
+  .gp-meta { padding: 8px 9px; font-size: .68rem; }
+  .gp-date { font-family: 'JetBrains Mono', monospace; color: #00d9ff; }
+  .gp-stats { color: var(--muted, #8aa4b0); margin-top: 2px; }
+  .gp-empty { color: var(--muted, #8aa4b0); text-align: center; padding: 40px 0; }
+  /* Lightbox */
+  .gp-lightbox { position: fixed; inset: 0; background: rgba(0,4,8,.94); display: none; align-items: center; justify-content: center; z-index: 999; padding: 20px; }
+  .gp-lightbox.open { display: flex; }
+  .gp-lightbox img { max-width: 92vw; max-height: 82vh; border-radius: 8px; box-shadow: 0 0 40px rgba(0,217,255,.3); }
+  .gp-lightbox .gp-lb-meta { position: absolute; bottom: 22px; left: 0; right: 0; text-align: center; color: #cfe; font-family: 'JetBrains Mono', monospace; font-size: .85rem; }
+  .gp-lb-close { position: absolute; top: 18px; right: 22px; font-size: 1.6rem; color: #cfe; background: none; border: none; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="starfield-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;"></canvas>
+
+{% include "nav.html" with context %}
+
+<main class="gp-screen">
+  <header class="gp-head">
+    <div>
+      <h1 data-decode>Progress Photos</h1>
+      <div class="gp-sub">Auto-tagged with the day's weight &amp; body-fat · <a href="/gym" style="color:#00d9ff">← Gym</a></div>
+    </div>
+    <div class="gp-upload">
+      <input type="file" id="gp-file" accept="image/jpeg,image/png,image/webp" hidden>
+      <button class="gp-btn" id="gp-upload-btn" type="button">⬆ UPLOAD PHOTO</button>
+    </div>
+  </header>
+
+  <div id="gp-grid" class="gp-grid"></div>
+  <div id="gp-empty" class="gp-empty" hidden>No progress photos yet — upload your first.</div>
+</main>
+
+<div class="gp-lightbox" id="gp-lightbox">
+  <button class="gp-lb-close" id="gp-lb-close" type="button">✕</button>
+  <img id="gp-lb-img" alt="Progress photo">
+  <div class="gp-lb-meta" id="gp-lb-meta"></div>
+</div>
+
+<script src="/static/js/starfield.js" defer></script>
+<script>
+(function () {
+  const esc = (s) => (s == null ? "" : String(s)).replace(/[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const grid = document.getElementById("gp-grid");
+  const emptyEl = document.getElementById("gp-empty");
+
+  function metaLine(p) {
+    const bits = [];
+    if (p.weight_kg != null) bits.push(p.weight_kg + "kg");
+    if (p.body_fat_percent != null) bits.push(p.body_fat_percent + "% bf");
+    return bits.join(" · ") || "—";
+  }
+
+  async function load() {
+    let photos = [];
+    try {
+      const r = await fetch("/api/gym/photos", { credentials: "include" });
+      photos = (await r.json()).photos || [];
+    } catch (e) { grid.innerHTML = ""; }
+    grid.innerHTML = "";
+    emptyEl.hidden = photos.length > 0;
+    photos.forEach(p => {
+      const tile = document.createElement("div");
+      tile.className = "gp-tile";
+      tile.innerHTML = `
+        <img src="${esc(p.url)}" loading="lazy" alt="${esc(p.date)}">
+        <div class="gp-meta">
+          <div class="gp-date">${esc(p.date)}</div>
+          <div class="gp-stats">${esc(metaLine(p))}</div>
+        </div>`;
+      tile.addEventListener("click", () => openLightbox(p));
+      grid.appendChild(tile);
+    });
+  }
+
+  // Lightbox
+  const lb = document.getElementById("gp-lightbox");
+  const lbImg = document.getElementById("gp-lb-img");
+  const lbMeta = document.getElementById("gp-lb-meta");
+  function openLightbox(p) {
+    lbImg.src = p.url;
+    lbMeta.textContent = `${p.date} · ${metaLine(p)}`;
+    lb.classList.add("open");
+  }
+  function closeLightbox() { lb.classList.remove("open"); lbImg.src = ""; }
+  document.getElementById("gp-lb-close").addEventListener("click", closeLightbox);
+  lb.addEventListener("click", (e) => { if (e.target === lb) closeLightbox(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLightbox(); });
+
+  // Upload (fetch is CSRF-wrapped by _csrf.html)
+  const fileInput = document.getElementById("gp-file");
+  const uploadBtn = document.getElementById("gp-upload-btn");
+  uploadBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    const f = fileInput.files[0];
+    if (!f) return;
+    if (f.size > 5 * 1024 * 1024) { alert("Image too large (max 5MB)."); fileInput.value = ""; return; }
+    uploadBtn.disabled = true; const label = uploadBtn.textContent; uploadBtn.textContent = "UPLOADING…";
+    try {
+      const fd = new FormData(); fd.append("image", f);
+      const r = await fetch("/api/gym/photos", { method: "POST", credentials: "include", body: fd });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || "upload failed");
+      await load();
+    } catch (e) {
+      alert("Upload failed: " + e.message);
+    } finally {
+      uploadBtn.disabled = false; uploadBtn.textContent = label; fileInput.value = "";
+    }
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

@@ -470,3 +470,74 @@ def gym_coach_reply(message: str, context: dict = None) -> str:
         return resp.content[0].text.strip()
     except Exception as e:
         return f"AI Trainer error: {e}"
+
+
+def analyze_cv_match(cv_text: str, job_description: str) -> dict:
+    """Compare a CV against a job description in a single Claude call.
+
+    Extracts the job's required skills/keywords and identifies which required
+    items are NOT clearly evidenced in the CV, then scores the overlap:
+        score = |required ∩ CV| / |required| * 100  (int 0–100)
+    Returns {ok, score, required, nice_to_have, missing} or {ok: False, error}.
+    """
+    c = _get_client()
+    if not c:
+        return {"ok": False, "error": "AI not configured (no ANTHROPIC_API_KEY)."}
+    cv_text = (cv_text or "").strip()
+    job_description = (job_description or "").strip()
+    if not cv_text:
+        return {"ok": False, "error": "No CV text provided."}
+    if not job_description:
+        return {"ok": False, "error": "No job description to analyze."}
+    prompt = (
+        "You are a technical recruiter. Compare a candidate CV against a job "
+        "description.\n\n"
+        "1. Extract the REQUIRED skills/keywords the job asks for (hard skills, "
+        "tools, certifications, domains). Keep each keyword short (1–4 words).\n"
+        "2. Extract NICE-TO-HAVE / preferred keywords separately.\n"
+        "3. From the REQUIRED list, decide which are NOT clearly evidenced in the "
+        "CV — those are 'missing'. 'missing' must be a subset of 'required'.\n\n"
+        "Return ONLY strict JSON, no prose, no markdown, no backticks:\n"
+        '{"required": [...], "nice_to_have": [...], "missing": [...]}\n\n'
+        f"=== JOB DESCRIPTION ===\n{job_description[:6000]}\n\n"
+        f"=== CANDIDATE CV ===\n{cv_text[:6000]}\n"
+    )
+    try:
+        resp = c.messages.create(
+            model=MODEL,
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        s, e = text.find("{"), text.rfind("}")
+        if s == -1 or e == -1:
+            return {"ok": False, "error": "AI returned an unparseable response."}
+        data = json.loads(text[s:e + 1])
+    except json.JSONDecodeError:
+        return {"ok": False, "error": "AI returned malformed JSON."}
+    except Exception as ex:
+        return {"ok": False, "error": f"AI call failed: {ex}"}
+
+    def _norm_list(v):
+        if not isinstance(v, list):
+            return []
+        out, seen = [], set()
+        for x in v:
+            k = str(x).strip()
+            if k and k.lower() not in seen:
+                seen.add(k.lower())
+                out.append(k)
+        return out
+
+    required = _norm_list(data.get("required"))
+    nice = _norm_list(data.get("nice_to_have"))
+    # Keep only 'missing' items that are genuinely in required (case-insensitive).
+    req_lower = {r.lower(): r for r in required}
+    missing = [req_lower[m.lower()] for m in _norm_list(data.get("missing"))
+               if m.lower() in req_lower]
+    if not required:
+        return {"ok": False, "error": "Could not extract requirements from the description."}
+    score = round((len(required) - len(missing)) / len(required) * 100)
+    score = max(0, min(100, score))
+    return {"ok": True, "score": score, "required": required,
+            "nice_to_have": nice, "missing": missing}

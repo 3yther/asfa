@@ -128,6 +128,17 @@
       <div class="chart-wrap"><canvas id="weekly-volume-chart"></canvas></div>
       <div id="weekly-volume-empty" class="empty-note" hidden>No volume logged in the last 7 days.</div>
     </div>
+
+    <!-- Export -->
+    <div class="card sci-fi-panel">
+      <h3>Export <span class="muted-sub">download your log as CSV</span></h3>
+      <div class="export-row">
+        <label class="export-field">From <input type="date" id="export-start"></label>
+        <label class="export-field">To <input type="date" id="export-end"></label>
+        <button class="btn btn-ghost" id="export-gym-csv">⬇ Download CSV</button>
+      </div>
+      <div class="muted-sub">Leave dates blank to export everything.</div>
+    </div>
   </section>
 
   <!-- ══ TAB 2 — WORKOUT ═══════════════════════════════════════════════ -->
