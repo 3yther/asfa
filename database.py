@@ -14,7 +14,10 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres"):
     USE_POSTGRES = True
 else:
     USE_POSTGRES = False
-    SQLITE_PATH = os.path.join(os.path.dirname(__file__), "asfa.db")
+    # ASFA_DB_PATH lets a subprocess (e.g. the MCP server) or a test point at a
+    # specific SQLite file; defaults to the repo-local asfa.db.
+    SQLITE_PATH = os.environ.get("ASFA_DB_PATH") or os.path.join(
+        os.path.dirname(__file__), "asfa.db")
 
 # Canonical daily supplements: (key, display label). Shared by the API,
 # scheduler reminders, and briefing so they never drift.
