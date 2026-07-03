@@ -204,6 +204,9 @@
   backdrop-filter: blur(3px);
   display: flex; justify-content: flex-end;
 }
+/* The `hidden` attr must win over the class's display:flex, or the overlay's
+   dark scrim + blur sit permanently over the page. (JS toggles .hidden.) */
+.frag-detail-overlay[hidden] { display: none; }
 .frag-detail {
   width: min(440px, 100%);
   height: 100%;
