@@ -2044,6 +2044,59 @@ def api_scout_pipeline_item(pid):
     return jsonify({"ok": True, "job": job})
 
 
+_CV_KV_KEY = "scout_cv_text"
+
+
+@app.route("/api/scout/pipeline/<int:pid>/analyze-cv", methods=["POST"])
+def api_scout_analyze_cv(pid):
+    """Score a pipeline job against the CV and list missing required keywords.
+
+    Body: {cv_text?, job_description?}. cv_text is cached in kv_store so later
+    calls can omit it; job_description falls back to the scraped scout_jobs
+    description matched by url or title+company. One Claude call (extract +
+    compare). Stores score + missing_keywords (JSON) + timestamp on the row."""
+    job = db.get_scout_pipeline_job(pid)
+    if not job:
+        return jsonify({"error": "not found"}), 404
+    d = request.get_json(silent=True) or {}
+
+    # CV text: body wins and is remembered; else fall back to the cached CV.
+    cv_text = (d.get("cv_text") or "").strip()
+    if cv_text:
+        db.kv_set(_CV_KV_KEY, cv_text)
+    else:
+        cv_text = (db.kv_get(_CV_KV_KEY) or "").strip()
+    if not cv_text:
+        return jsonify({"error": "No CV on file — send cv_text once and it will "
+                                 "be remembered for future analyses."}), 400
+
+    # Job description: body, else the scraped description for this job.
+    job_description = (d.get("job_description") or "").strip()
+    if not job_description:
+        job_description = (db.find_scout_job_description(
+            job_url=job.get("job_url"), title=job.get("job_title"),
+            company=job.get("company")) or "").strip()
+    if not job_description:
+        return jsonify({"error": "Need a description to analyze — paste the job "
+                                 "description (no scraped text found for this job)."}), 400
+
+    result = ai.analyze_cv_match(cv_text, job_description)
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error", "analysis failed")}), 502
+
+    analyzed_at = datetime.now().isoformat()
+    updated = db.save_cv_match(pid, result["score"], result["missing"], analyzed_at)
+    return jsonify({
+        "ok": True,
+        "id": pid,
+        "cv_match_score": result["score"],
+        "missing_keywords": result["missing"],
+        "required": result["required"],
+        "nice_to_have": result["nice_to_have"],
+        "match_analysis_at": analyzed_at,
+    })
+
+
 # ── Agent data layer: memory / audit / error budgets (Phase 3) ────────────────
 # All auth-required (not in _PUBLIC_ENDPOINTS). Read endpoints for the three-tier
 # memory, audit trail, and error budgets, plus episodic logging + budget init.

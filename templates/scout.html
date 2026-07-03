@@ -186,6 +186,17 @@
   .kan-icon { background: rgba(57,255,20,.08); color: var(--scout); border: 1px solid var(--scout-dim); border-radius: 5px; font-size: .62rem; padding: 5px 8px; cursor: pointer; }
   .kan-icon:hover { box-shadow: 0 0 8px rgba(57,255,20,.35); }
   .kan-icon.del { color: var(--red); border-color: rgba(248,81,73,.4); background: rgba(248,81,73,.08); }
+  /* CV match badge + gaps panel */
+  .cv-badge { float: right; margin-left: 6px; font-size: .6rem; font-weight: 700; padding: 2px 6px; border-radius: 10px; cursor: pointer; border: 1px solid transparent; line-height: 1.2; }
+  .cv-badge.cv-strong { color: #3fb950; border-color: rgba(63,185,80,.5); background: rgba(63,185,80,.12); }
+  .cv-badge.cv-decent { color: #f5c542; border-color: rgba(245,197,66,.5); background: rgba(245,197,66,.12); }
+  .cv-badge.cv-gaps   { color: #f85149; border-color: rgba(248,81,73,.5); background: rgba(248,81,73,.12); }
+  .kan-cv-panel { margin-top: 8px; padding: 8px; border-radius: 6px; background: rgba(57,255,20,.04); border: 1px solid var(--scout-dim); }
+  .cv-panel-title { font-size: .58rem; letter-spacing: 1px; text-transform: uppercase; color: var(--scout); margin-bottom: 5px; }
+  .cv-kw-list { display: flex; flex-wrap: wrap; gap: 4px; }
+  .cv-kw { font-size: .6rem; padding: 2px 6px; border-radius: 4px; background: rgba(248,81,73,.14); color: #f85149; border: 1px solid rgba(248,81,73,.3); }
+  .cv-none { font-size: .62rem; color: #3fb950; }
+  .cv-tip { font-size: .58rem; color: var(--muted, #8aa); margin-top: 6px; font-style: italic; }
   .kan-icon.del:hover { box-shadow: 0 0 8px rgba(248,81,73,.4); }
   .kan-empty { color: var(--muted); font-size: .6rem; text-align: center; padding: 8px 2px; }
   @media (max-width: 820px) { .kanban { grid-template-columns: repeat(5, 210px); } }
@@ -586,6 +597,42 @@
       col.appendChild(cards); board.appendChild(col);
     });
   }
+  async function apiSendStatus(url, body) {
+    const r = await fetch(url, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}),
+    });
+    let data = {}; try { data = await r.json(); } catch (e) {}
+    return { status: r.status, data };
+  }
+
+  /* Analyze a pipeline job against the CV. Prompts once for the CV text (the
+     server remembers it) and, for jobs with no scraped description, for the
+     job description — retrying until it can score or the user cancels. */
+  async function analyzeCv(j) {
+    const body = {};
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { status, data } = await apiSendStatus(`/api/scout/pipeline/${j.id}/analyze-cv`, body);
+      if (status === 200 && data.ok) {
+        const n = (data.missing_keywords || []).length;
+        toast(`CV MATCH ${data.cv_match_score}% · ${n} GAP${n === 1 ? "" : "S"}`);
+        loadPipeline();
+        return;
+      }
+      const err = (data.error || "").toLowerCase();
+      if (status === 400 && err.includes("no cv") && !body.cv_text) {
+        const cv = prompt("Paste your CV text (remembered for future analyses):", "");
+        if (!cv) return; body.cv_text = cv; continue;
+      }
+      if (status === 400 && err.includes("description") && !body.job_description) {
+        const desc = prompt(`Paste the job description for "${j.job_title}":`, "");
+        if (!desc) return; body.job_description = desc; continue;
+      }
+      toast(data.error || "Analysis failed");
+      return;
+    }
+  }
+
   function renderPipelineCard(j) {
     const card = document.createElement("div");
     const inStage = daysSince(j.date_stage_changed);
@@ -596,17 +643,39 @@
     const title = j.job_url
       ? `<a href="${esc(j.job_url)}" target="_blank" rel="noopener">${esc(j.job_title)}</a>`
       : esc(j.job_title);
+    // CV match badge: 🟢 80–100 · 🟡 60–79 · 🔴 <60
+    const score = j.cv_match_score;
+    const hasScore = score != null && score !== "";
+    let missing = [];
+    try { missing = JSON.parse(j.missing_keywords || "[]"); } catch (e) {}
+    const badge = hasScore
+      ? `<button class="cv-badge ${score >= 80 ? "cv-strong" : score >= 60 ? "cv-decent" : "cv-gaps"}"
+                 type="button" title="CV match — click for gaps">${score >= 80 ? "🟢" : score >= 60 ? "🟡" : "🔴"} ${score}%</button>`
+      : "";
     card.innerHTML = `
-      <div class="kan-title">${title}</div>
+      <div class="kan-title">${title}${badge}</div>
       <div class="kan-company">${esc(j.company)}${j.location ? " · " + esc(j.location) : ""}</div>
+      <div class="kan-cv-panel" hidden>
+        <div class="cv-panel-title">Missing keywords</div>
+        ${missing.length
+          ? `<div class="cv-kw-list">${missing.map(k => `<span class="cv-kw">${esc(k)}</span>`).join("")}</div>`
+          : `<div class="cv-none">No required gaps — strong match.</div>`}
+        <div class="cv-tip">Tune your CV before applying.</div>
+      </div>
       <div class="kan-meta">
         <select class="kan-move" title="Move to stage">${opts}</select>
         <span class="kan-days${stale ? " stale" : ""}">${inStage == null ? "" : (stale ? "⚠ " : "") + inStage + "d"}</span>
       </div>
       <div class="kan-actions">
+        <button class="kan-icon cv" type="button" title="Analyze CV match">🎯</button>
         <button class="kan-icon note" type="button" title="Notes">📝${j.notes ? " •" : ""}</button>
         <button class="kan-icon del" type="button" title="Remove">✕</button>
       </div>`;
+    const badgeEl = card.querySelector(".cv-badge");
+    if (badgeEl) badgeEl.addEventListener("click", () => {
+      const p = card.querySelector(".kan-cv-panel"); p.hidden = !p.hidden;
+    });
+    card.querySelector(".cv").addEventListener("click", () => analyzeCv(j));
     card.querySelector(".kan-move").addEventListener("change", async (e) => {
       await apiSend(`/api/scout/pipeline/${j.id}`, { stage: e.target.value }, "PUT");
       loadPipeline();

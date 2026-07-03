@@ -1183,6 +1183,10 @@ def _ensure_scout_tables():
             if USE_POSTGRES:
                 stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
             cur.execute(stmt)
+        # CV keyword-match analysis (Part 4). All nullable.
+        _add_column(cur, "scout_pipeline", "cv_match_score", "INTEGER")
+        _add_column(cur, "scout_pipeline", "missing_keywords", "TEXT")
+        _add_column(cur, "scout_pipeline", "match_analysis_at", "TEXT")
     _SCOUT_READY = True
 
 
@@ -1317,6 +1321,46 @@ def get_scout_pipeline_job(pid):
         cur.execute(f"SELECT * FROM scout_pipeline WHERE id = {ph}", (pid,))
         r = cur.fetchone()
         return dict(r) if r else None
+
+
+def find_scout_job_description(job_url=None, title=None, company=None):
+    """Best-effort lookup of a scraped job's description text for CV analysis:
+    match a scout_jobs row by url first, else by title+company. Returns the
+    description string or None."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if job_url:
+            cur.execute(f"SELECT description FROM scout_jobs WHERE url = {ph} "
+                        f"AND description IS NOT NULL AND description <> '' LIMIT 1", (job_url,))
+            r = cur.fetchone()
+            if r and r["description"]:
+                return r["description"]
+        if title and company:
+            cur.execute(f"SELECT description FROM scout_jobs WHERE title = {ph} AND company = {ph} "
+                        f"AND description IS NOT NULL AND description <> '' LIMIT 1", (title, company))
+            r = cur.fetchone()
+            if r and r["description"]:
+                return r["description"]
+    return None
+
+
+def save_cv_match(pid, score, missing_keywords, analyzed_at):
+    """Persist a CV-match result on a pipeline row. missing_keywords is stored as
+    a JSON array string. Returns the updated row, or None if the id is unknown."""
+    _ensure_scout_tables()
+    if not get_scout_pipeline_job(pid):
+        return None
+    missing_json = json.dumps(missing_keywords or [])
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"UPDATE scout_pipeline SET cv_match_score = {ph}, missing_keywords = {ph}, "
+            f"match_analysis_at = {ph} WHERE id = {ph}",
+            (int(score), missing_json, analyzed_at, pid))
+    return get_scout_pipeline_job(pid)
 
 
 def add_scout_pipeline_job(job_title, company, job_url=None, location=None,
