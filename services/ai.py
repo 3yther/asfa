@@ -31,6 +31,26 @@ def _get_client():
     return client
 
 
+def _logged_create(c, endpoint, **params):
+    """Call Claude via the shared client and log one telemetry row (Tier 5 Part 4).
+    Tokens are pulled from the response's usage field; if usage is missing (older
+    responses) the row is logged with NULLs. Telemetry never masks the response —
+    logging failures are swallowed. `endpoint` is a short caller-supplied id."""
+    resp = c.messages.create(**params)
+    try:
+        u = getattr(resp, "usage", None)
+        db.log_claude_call(
+            endpoint,
+            input_tokens=getattr(u, "input_tokens", None),
+            output_tokens=getattr(u, "output_tokens", None),
+            cache_read_tokens=getattr(u, "cache_read_input_tokens", None),
+            cache_creation_tokens=getattr(u, "cache_creation_input_tokens", None),
+        )
+    except Exception:
+        pass
+    return resp
+
+
 def build_context_block():
     today = datetime.now().strftime("%Y-%m-%d")
     now_str = datetime.now().strftime("%A, %d %B %Y %H:%M")
@@ -144,7 +164,8 @@ Detect commands in natural speech:
     messages.append({"role": "user", "content": user_message})
 
     try:
-        response = c.messages.create(
+        response = _logged_create(
+            c, "chat",
             model=MODEL,
             max_tokens=1024,
             system=system_prompt,
@@ -165,7 +186,8 @@ def summarise_emails(emails: list) -> list:
             summaries.append(email)
             continue
         try:
-            resp = c.messages.create(
+            resp = _logged_create(
+                c, "briefing.email_summary",
                 model=MODEL,
                 max_tokens=100,
                 messages=[{
@@ -191,7 +213,8 @@ def draft_reply(email: dict) -> str:
         f"Subject: {email.get('subject','')}\n\n{content}"
     )
     try:
-        resp = c.messages.create(
+        resp = _logged_create(
+            c, "email.draft",
             model=MODEL,
             max_tokens=300,
             messages=[{
@@ -222,7 +245,8 @@ def detect_events_in_emails(emails: list) -> list:
         return []
     now = datetime.now().strftime("%A %Y-%m-%d %H:%M")
     try:
-        resp = c.messages.create(
+        resp = _logged_create(
+            c, "email.events",
             model=MODEL,
             max_tokens=500,
             messages=[{
@@ -333,7 +357,8 @@ clear focus for the day based on the goals/progress."""
         return {"content": fallback, "plain_text": fallback}
 
     try:
-        resp = c.messages.create(
+        resp = _logged_create(
+            c, "briefing.summary",
             model=MODEL,
             max_tokens=700,
             messages=[{"role": "user", "content": prompt}],
@@ -379,7 +404,8 @@ def generate_weekly_review() -> str:
     if not c:
         return "Weekly review unavailable — ANTHROPIC_API_KEY not set."
     try:
-        resp = c.messages.create(
+        resp = _logged_create(
+            c, "weekly_review",
             model=MODEL,
             max_tokens=800,
             messages=[{
@@ -397,7 +423,8 @@ def analyse_photo(image_base64: str, mime_type: str = "image/jpeg") -> str:
     if not c:
         return "ANTHROPIC_API_KEY not set."
     try:
-        resp = c.messages.create(
+        resp = _logged_create(
+            c, "vision.photo",
             model=MODEL,
             max_tokens=300,
             messages=[{
@@ -458,7 +485,8 @@ def gym_coach_reply(message: str, context: dict = None) -> str:
     context_block = "\n".join(lines) if lines else "No extra context provided."
 
     try:
-        resp = c.messages.create(
+        resp = _logged_create(
+            c, "gym.trainer",
             model=MODEL,
             max_tokens=300,
             system=GYM_COACH_SYSTEM,
@@ -503,7 +531,8 @@ def analyze_cv_match(cv_text: str, job_description: str) -> dict:
         f"=== CANDIDATE CV ===\n{cv_text[:6000]}\n"
     )
     try:
-        resp = c.messages.create(
+        resp = _logged_create(
+            c, "scout.analyze_cv",
             model=MODEL,
             max_tokens=800,
             messages=[{"role": "user", "content": prompt}],

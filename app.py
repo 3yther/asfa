@@ -2319,6 +2319,8 @@ def api_scout_analyze_cv(pid):
         analyzed_at = datetime.now().isoformat()
         # Refresh the pipeline row so the badge/timestamp update just like a live run.
         db.save_cv_match(pid, cached["score"], cached["missing"], analyzed_at)
+        # Telemetry (Tier 5 Part 4): record the call we DIDN'T make so savings show.
+        db.log_claude_call("scout.analyze_cv", cached_locally=1)
         return jsonify({
             "ok": True,
             "cached": True,
@@ -2442,6 +2444,20 @@ def api_system_audit_verify():
     occasional, so it carries an explicit strict limit on top of the default
     tiers. Returns {valid, total_entries, first_broken_id}."""
     return jsonify(db.verify_audit_chain())
+
+
+@app.route("/api/system/claude-usage")
+def api_system_claude_usage():
+    """Per-endpoint Claude API usage over the last ?days=N (default 30). Auth-gated
+    read (Tier 5 Part 4). Returns per-endpoint {calls, cached_hits,
+    input_tokens_sum, output_tokens_sum} plus a top-line total, so we can see where
+    credits go and how many calls the local caches saved."""
+    try:
+        days = int(request.args.get("days", 30))
+    except (TypeError, ValueError):
+        days = 30
+    days = max(1, min(365, days))
+    return jsonify(db.claude_usage_summary(days))
 
 
 @app.route("/api/error-budgets")

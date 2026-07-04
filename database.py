@@ -202,6 +202,20 @@ def init_db():
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (cv_hash, job_hash)
             )""",
+            # Tier 5 Part 4: per-call Claude API telemetry — one row per real call
+            # (tokens from the response usage) plus one row per local cache hit
+            # (cached_locally=1, NULL tokens) so spend + savings are visible by
+            # endpoint over time.
+            """CREATE TABLE IF NOT EXISTS claude_api_calls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint TEXT NOT NULL,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_creation_tokens INTEGER,
+                cached_locally INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )""",
         ]
         # Postgres uses SERIAL not AUTOINCREMENT
         for stmt in stmts:
@@ -1449,6 +1463,58 @@ def cv_match_cache_set(cv_hash, job_hash, score, missing_keywords):
                 "INSERT OR REPLACE INTO cv_match_cache (cv_hash, job_hash, score, "
                 "missing_keywords, created_at) VALUES (?,?,?,?,?)",
                 (cv_hash, job_hash, int(score), missing_json, created_at))
+
+
+def log_claude_call(endpoint, input_tokens=None, output_tokens=None,
+                    cache_read_tokens=None, cache_creation_tokens=None,
+                    cached_locally=0):
+    """Record one Claude API call for telemetry (Tier 5 Part 4). Pass NULL tokens
+    for a local cache hit (cached_locally=1) or when usage is unavailable. Never
+    raises into callers — telemetry must not break a feature."""
+    created_at = datetime.now().isoformat()
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            ph = "%s" if USE_POSTGRES else "?"
+            cur.execute(
+                f"INSERT INTO claude_api_calls (endpoint, input_tokens, output_tokens, "
+                f"cache_read_tokens, cache_creation_tokens, cached_locally, created_at) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+                (endpoint, input_tokens, output_tokens, cache_read_tokens,
+                 cache_creation_tokens, int(cached_locally or 0), created_at))
+    except Exception:
+        pass
+
+
+def claude_usage_summary(days=30):
+    """Per-endpoint Claude usage over the last `days`. Returns
+    {days, per_endpoint: [{endpoint, calls, cached_hits, input_tokens_sum,
+    output_tokens_sum}], total: {...}}. `calls` counts every logged row;
+    `cached_hits` is the local-cache subset (so real calls = calls - cached_hits)."""
+    since = (datetime.now() - timedelta(days=int(days))).isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT endpoint, COUNT(*) AS calls, "
+            f"SUM(CASE WHEN cached_locally = 1 THEN 1 ELSE 0 END) AS cached_hits, "
+            f"COALESCE(SUM(input_tokens), 0) AS input_tokens_sum, "
+            f"COALESCE(SUM(output_tokens), 0) AS output_tokens_sum "
+            f"FROM claude_api_calls WHERE created_at >= {ph} "
+            f"GROUP BY endpoint ORDER BY calls DESC", (since,))
+        rows = [dict(r) for r in cur.fetchall()]
+    per, total = [], {"calls": 0, "cached_hits": 0,
+                      "input_tokens_sum": 0, "output_tokens_sum": 0}
+    for r in rows:
+        item = {"endpoint": r["endpoint"],
+                "calls": int(r["calls"] or 0),
+                "cached_hits": int(r["cached_hits"] or 0),
+                "input_tokens_sum": int(r["input_tokens_sum"] or 0),
+                "output_tokens_sum": int(r["output_tokens_sum"] or 0)}
+        for k in total:
+            total[k] += item[k]
+        per.append(item)
+    return {"days": int(days), "per_endpoint": per, "total": total}
 
 
 def add_scout_pipeline_job(job_title, company, job_url=None, location=None,
