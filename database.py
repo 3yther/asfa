@@ -3936,6 +3936,15 @@ def _ensure_fragrance_tables():
             time_of_day TEXT,
             occasion TEXT
         )""",
+        # Tier 3 Part 2: 👍/👎 history for a worn pairing. A history table (not a
+        # column) because taste drifts — the score reads only the last N ratings,
+        # so an old 👎 can be outgrown. CHECK keeps rating to ±1.
+        """CREATE TABLE IF NOT EXISTS fragrance_pairing_ratings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pairing_id INTEGER NOT NULL,
+            rating INTEGER NOT NULL CHECK (rating IN (1,-1)),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
     ]
     with get_db() as conn:
         cur = conn.cursor()
@@ -4137,7 +4146,13 @@ def get_fragrance_pairing(fragrance_id: int):
             r = cur.fetchone()
             if r:
                 layering = dict(r)
+        # last-5 rating net (Tier 3 Part 2), computed on the same cursor.
+        cur.execute(
+            f"SELECT rating FROM fragrance_pairing_ratings WHERE pairing_id = {ph} "
+            f"ORDER BY id DESC LIMIT 5", (pairing["id"],))
+        net = max(-3, min(3, sum(int(r["rating"]) for r in cur.fetchall())))
         return {
+            "id": pairing["id"],
             "shower_gel": product(pairing.get("shower_gel_id")),
             "body_scrub": product(pairing.get("body_scrub_id")),
             "body_lotion": product(pairing.get("body_lotion_id")),
@@ -4146,6 +4161,7 @@ def get_fragrance_pairing(fragrance_id: int):
             "layering_fragrance": layering,
             "layering_notes": pairing.get("layering_notes"),
             "reason": pairing.get("recommendation_reason"),
+            "rating_net": net,
         }
 
 
@@ -4257,6 +4273,63 @@ def get_fragrance_stats() -> dict:
             for f in frags
         ],
     }
+
+
+# ── Scent combo ratings (Tier 3 Part 2) ──────────────────────────────────────
+# A 👍/👎 on a worn pairing. Score = clamp(sum of last 5 ratings, -3, +3), so
+# taste can drift and old votes age out. The scorer adds net*0.5 (max ±1.5) — a
+# nudge that stays below one full season/occasion weight, never an override.
+
+def rate_pairing(pairing_id: int, rating: int) -> bool:
+    """Record a 👍(+1)/👎(-1) for a pairing. Returns False if the pairing is
+    unknown or the rating is out of range (defence in depth over the CHECK)."""
+    if rating not in (1, -1):
+        return False
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT id FROM fragrance_pairings WHERE id = {ph}", (pairing_id,))
+        if not cur.fetchone():
+            return False
+        cur.execute(
+            f"INSERT INTO fragrance_pairing_ratings (pairing_id, rating) "
+            f"VALUES ({ph}, {ph})", (pairing_id, rating))
+    return True
+
+
+def get_pairing_net(pairing_id: int) -> int:
+    """clamp(sum of last 5 ratings, -3, +3) for one pairing (0 if none)."""
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT rating FROM fragrance_pairing_ratings WHERE pairing_id = {ph} "
+            f"ORDER BY id DESC LIMIT 5", (pairing_id,))
+        return max(-3, min(3, sum(int(r["rating"]) for r in cur.fetchall())))
+
+
+def get_pairing_nets_by_fragrance() -> dict:
+    """{fragrance_id: net} across the whole shelf, so the recommendation scorer
+    can fetch every pairing's nudge in one call instead of per-bottle queries.
+    Only the last 5 ratings per pairing count (windowed in Python — a handful of
+    pairings, so this is cheap)."""
+    _ensure_fragrance_tables()
+    nets = {}
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, fragrance_id FROM fragrance_pairings")
+        pairings = [dict(r) for r in cur.fetchall()]
+        ph = "%s" if USE_POSTGRES else "?"
+        for p in pairings:
+            cur.execute(
+                f"SELECT rating FROM fragrance_pairing_ratings WHERE pairing_id = {ph} "
+                f"ORDER BY id DESC LIMIT 5", (p["id"],))
+            net = max(-3, min(3, sum(int(r["rating"]) for r in cur.fetchall())))
+            if net:
+                nets[p["fragrance_id"]] = net
+    return nets
 
 
 # ── Body composition + progress photos (Part 5) ──────────────────────────────

@@ -923,11 +923,15 @@ def _csv_set(value) -> set:
     return {v.strip().lower() for v in str(value or "").split(",") if v.strip()}
 
 
-def _score_fragrance(frag: dict, bucket: str, season: str, temp_c, occasion) -> tuple:
+def _score_fragrance(frag: dict, bucket: str, season: str, temp_c, occasion,
+                     pairing_net=0) -> tuple:
     """Score one bottle against the current context. Returns (score, specificity,
     factors): factors are the human fragments the reason string is built from;
     specificity counts EXACT season/time matches (vs catch-all "all") and only
-    breaks ties — a bottle made for this exact season/hour beats an all-rounder."""
+    breaks ties — a bottle made for this exact season/hour beats an all-rounder.
+    `pairing_net` is the clamped last-5 👍/👎 net for this bottle's pairing (Tier 3
+    Part 2); it nudges by net*0.5 (max ±1.5), below one full season/occasion weight
+    so learned taste tilts ties without overriding context."""
     score, specificity, factors = 0.0, 0, []
     times = _csv_set(frag.get("time_of_day"))
     if bucket in times or "all" in times:
@@ -958,6 +962,10 @@ def _score_fragrance(frag: dict, bucket: str, season: str, temp_c, occasion) -> 
         score -= 5  # already worn today — rotate
     elif days >= 7 and rot >= 1:
         factors.append(f"you haven't worn it in {days} days")
+    if pairing_net:
+        score += pairing_net * 0.5
+        if pairing_net > 0:
+            factors.append("you've rated its routine highly")
     return score, specificity, factors
 
 
@@ -977,7 +985,9 @@ def _fragrance_recommendation(occasion=None, hour=None, temp_c=None, condition=N
     frags = fragrances if fragrances is not None else db.get_fragrances()
     if not frags:
         return None
-    scored = [(f, *(_score_fragrance(f, bucket, season, temp_c, occasion))) for f in frags]
+    nets = db.get_pairing_nets_by_fragrance()
+    scored = [(f, *(_score_fragrance(f, bucket, season, temp_c, occasion,
+                                     pairing_net=nets.get(f["id"], 0)))) for f in frags]
     # Best score wins; ties go to the least-worn bottle (fair rotation), then
     # to the most context-specific match (exact season/time beats "all").
     scored.sort(key=lambda t: (-t[1], t[0].get("wear_count") or 0, -t[2]))
@@ -1063,6 +1073,19 @@ def api_fragrance_undo_wear(fragrance_id):
     if not updated:
         return jsonify({"error": "no wear to undo"}), 404
     return jsonify(updated)
+
+
+@app.route("/api/fragrances/pairings/<int:pairing_id>/rate", methods=["POST"])
+def api_fragrance_rate_pairing(pairing_id):
+    """Rate a worn pairing 👍(+1)/👎(-1) (Tier 3 Part 2). CSRF-gated like every
+    write. Returns the updated clamped net so the UI can reflect it."""
+    d = request.get_json(force=True) or {}
+    rating = d.get("rating")
+    if rating not in (1, -1):
+        return jsonify({"error": "rating must be 1 or -1"}), 400
+    if not db.rate_pairing(pairing_id, rating):
+        return jsonify({"error": "unknown pairing"}), 404
+    return jsonify({"ok": True, "net": db.get_pairing_net(pairing_id)})
 
 
 # Accepted upload formats, validated by CONTENT not filename: magic-byte sniff

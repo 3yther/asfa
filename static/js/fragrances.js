@@ -40,6 +40,37 @@ function toast(msg, ms = 2200) {
   setTimeout(() => t.remove(), ms);
 }
 
+/* Tier 3 Part 2: rate a worn pairing 👍/👎. Recommendations learn from the
+   last few ratings (net nudge, never an override). */
+async function ratePairing(pairingId, rating) {
+  const res = await apiPost(`${API}/pairings/${pairingId}/rate`, { rating });
+  return res && res.net;  // updated clamped net (-3..+3)
+}
+
+/* Optional 👍/👎 prompt after a wear that used a pairing (auto-dismisses). */
+function ratingPrompt(pairingId, name) {
+  if (!pairingId) return;
+  const t = el("div", "frag-toast frag-rate-toast");
+  t.innerHTML =
+    `<span class="frt-q">Rate today's ${esc(name)} routine?</span>
+     <div class="frag-rate-btns">
+       <button class="frag-rate-btn" data-r="1" aria-label="thumbs up">👍</button>
+       <button class="frag-rate-btn" data-r="-1" aria-label="thumbs down">👎</button>
+     </div>`;
+  document.body.appendChild(t);
+  let done = false;
+  const dismiss = setTimeout(() => { if (!done) t.remove(); }, 6000);
+  t.querySelectorAll(".frag-rate-btn").forEach(b => b.addEventListener("click", async () => {
+    done = true; clearTimeout(dismiss);
+    t.querySelectorAll(".frag-rate-btn").forEach(x => x.disabled = true);
+    try {
+      await ratePairing(pairingId, Number(b.dataset.r));
+      t.querySelector(".frt-q").textContent = b.dataset.r === "1" ? "Noted 👍" : "Noted 👎";
+    } catch (e) { t.querySelector(".frt-q").textContent = "Couldn't save rating"; }
+    setTimeout(() => t.remove(), 1200);
+  }));
+}
+
 const ROUTINE_STEPS = [
   ["shower_gel",  "🚿", "Wash"],
   ["body_scrub",  "🧽", "Scrub"],
@@ -130,7 +161,9 @@ function renderHero(rec) {
         <button class="btn btn-primary hero-wear" id="hero-wear-btn">✓ Wear this</button>
       </div>
     </div>`;
-  $("#hero-wear-btn").addEventListener("click", () => wearFragrance(f.id, $("#hero-wear-btn")));
+  $("#hero-wear-btn").addEventListener("click", () =>
+    wearFragrance(f.id, $("#hero-wear-btn"), rec.context && rec.context.occasion,
+                  rec.routine && rec.routine.id));
 }
 
 function initPills() {
@@ -145,8 +178,9 @@ function initPills() {
   });
 }
 
-/* Optimistic one-tap wear logging (undo covers mis-taps — no dialogs). */
-async function wearFragrance(id, btn, occasion) {
+/* Optimistic one-tap wear logging (undo covers mis-taps — no dialogs).
+   pairingId (when the wear used a curated routine) triggers an optional 👍/👎. */
+async function wearFragrance(id, btn, occasion, pairingId) {
   if (btn) btn.disabled = true;
   try {
     const updated = await apiPost(`${API}/${id}/wear`, {
@@ -155,6 +189,7 @@ async function wearFragrance(id, btn, occasion) {
     });
     confettiLite();
     toast(`💨 ${updated.name} logged — smell great out there`);
+    if (pairingId) ratingPrompt(pairingId, updated.name);
     await refreshShelf();
     loadStats();
   } catch (e) {
@@ -299,6 +334,13 @@ async function openDetail(id) {
       <div class="routine-head mono">RECOMMENDED ROUTINE</div>
       ${routineChecklist(f.pairing)}
       ${f.pairing && f.pairing.reason ? `<p class="fd-reason muted-sub">${esc(f.pairing.reason)}</p>` : ""}
+      ${f.pairing && f.pairing.id ? `
+      <div class="fd-rate">
+        <span>Rate this combo:</span>
+        <button class="frag-rate-btn${f.pairing.rating_net > 0 ? " frb-active" : ""}" data-r="1" aria-label="thumbs up">👍</button>
+        <button class="frag-rate-btn${f.pairing.rating_net < 0 ? " frb-active" : ""}" data-r="-1" aria-label="thumbs down">👎</button>
+        <span class="fd-rate-net" id="fd-rate-net">${f.pairing.rating_net > 0 ? "+" : ""}${f.pairing.rating_net || 0}</span>
+      </div>` : ""}
       <button class="btn btn-primary" id="fd-wear-btn">✓ Wear with this routine</button>
     </div>
     <div class="fd-cal">
@@ -312,10 +354,25 @@ async function openDetail(id) {
       <span>#${f.rotation_rank || "—"} of ${f.collection_size} in rotation</span>
     </div>`;
   $("#fd-wear-btn").addEventListener("click", async () => {
-    await wearFragrance(f.id, $("#fd-wear-btn"));
+    await wearFragrance(f.id, $("#fd-wear-btn"), undefined, f.pairing && f.pairing.id);
     openDetail(f.id);
   });
   $("#fd-undo-btn").addEventListener("click", () => undoWear(f.id));
+  // Inline 👍/👎 in the drawer (Tier 3 Part 2) — update the net in place.
+  if (f.pairing && f.pairing.id) {
+    body.querySelectorAll(".fd-rate .frag-rate-btn").forEach(b =>
+      b.addEventListener("click", async () => {
+        try {
+          const net = await ratePairing(f.pairing.id, Number(b.dataset.r));
+          const netEl = $("#fd-rate-net");
+          if (netEl) netEl.textContent = (net > 0 ? "+" : "") + (net || 0);
+          body.querySelectorAll(".fd-rate .frag-rate-btn").forEach(x => x.classList.remove("frb-active"));
+          if (net > 0) body.querySelector('.fd-rate .frag-rate-btn[data-r="1"]').classList.add("frb-active");
+          else if (net < 0) body.querySelector('.fd-rate .frag-rate-btn[data-r="-1"]').classList.add("frb-active");
+          toast(b.dataset.r === "1" ? "👍 noted" : "👎 noted");
+        } catch (e) { toast("Couldn't save rating"); }
+      }));
+  }
 }
 
 function initDetailClose() {
