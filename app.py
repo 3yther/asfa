@@ -70,7 +70,7 @@ from flask_limiter.util import get_remote_address
 from services import ai
 from services import telegram_bot
 from services.bots import get_bots_health, get_bots_status, get_trading_activity
-from services.briefing import build_briefing
+from services.briefing import AI_BRIEFING_SUMMARY_KEY, build_briefing
 from services.gcal import add_event, get_todays_events, get_tomorrow_events
 from services.gmail import (get_email_by_id, get_flow, get_unread_emails,
                             is_authenticated, save_credentials)
@@ -338,6 +338,20 @@ def api_briefing():
     force = request.args.get("refresh") == "1"
     b = build_briefing(force=force)
     return jsonify(b)
+
+
+@app.route("/api/settings/ai-briefing", methods=["GET", "POST"])
+def api_settings_ai_briefing():
+    """Read/flip the opt-in AI briefing summary toggle (Tier 5 Part 2). Stored in
+    kv_store; default OFF so no Claude credits are spent on the briefing until the
+    user enables it. POST body: {enabled: bool}. Auth-gated + CSRF like every POST."""
+    if request.method == "POST":
+        d = request.get_json(silent=True) or {}
+        enabled = bool(d.get("enabled"))
+        db.kv_set(AI_BRIEFING_SUMMARY_KEY, "1" if enabled else "0")
+        return jsonify({"ai_briefing_summary_enabled": enabled})
+    enabled = (db.kv_get(AI_BRIEFING_SUMMARY_KEY) or "0") == "1"
+    return jsonify({"ai_briefing_summary_enabled": enabled})
 
 
 # ── AI chat / voice — with natural-language command handling ──────────────────
