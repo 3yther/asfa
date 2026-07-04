@@ -43,6 +43,29 @@ function wireControls() {
   LockIn.wire();
   wireObsidian();
   wireBodyComp();
+  wireSpendForm();
+}
+
+// ── Spend logging (Financial Report card) ─────────────────────────────────────────
+// The #spend-form submit was previously unbound (an orphaned logSpend() read the
+// wrong element ids and was never wired), so submitting silently did nothing.
+// Bind it to the existing /api/money POST, matching the bodycomp form pattern.
+function wireSpendForm() {
+  const form = document.getElementById("spend-form");
+  if (!form) return;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const amount = parseFloat(document.getElementById("sp-amount")?.value || "");
+    if (isNaN(amount) || amount <= 0) { toast("ENTER AN AMOUNT"); return; }
+    const category = document.getElementById("sp-category")?.value || "other";
+    const note = document.getElementById("sp-note")?.value || "";
+    try {
+      await apiPost("/api/money", { amount, category, note });
+      toast(`£${amount.toFixed(2)} LOGGED`);
+      form.reset();
+      fetchMoney();
+    } catch (err) { toast("LOG FAILED"); }
+  });
 }
 
 // ── Obsidian sync (manual) ───────────────────────────────────────────────────────
@@ -1680,24 +1703,6 @@ async function logSleep() {
   await apiPost("/api/habits/sleep", { hours: h });
   toast(`${h}H SLEEP LOGGED`);
   fetchHabits();
-}
-
-async function logWeight() {
-  const kg = parseFloat(document.getElementById("weight-kg")?.value || 0);
-  if (!kg) return;
-  await apiPost("/api/gym/weight", { weight_kg: kg });
-  toast(`${kg}KG LOGGED`);
-  fetchGym();
-}
-
-async function logSpend() {
-  const amount   = parseFloat(document.getElementById("spend-amount")?.value || 0);
-  const category = document.getElementById("spend-category")?.value || "other";
-  const note     = document.getElementById("spend-note")?.value || "";
-  if (!amount) return;
-  await apiPost("/api/money", { amount, category, note });
-  toast(`£${amount.toFixed(2)} LOGGED`);
-  fetchMoney();
 }
 
 async function saveReflection() {
