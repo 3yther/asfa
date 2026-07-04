@@ -176,6 +176,7 @@
     <a class="fx-btn scout-btn" href="/scout" title="Open Scout — part-time job hunter">🔎 SCOUT</a>
     <button class="fx-btn" id="think-btn" type="button">◍ THINK</button>
     <button class="fx-btn fx-btn-mag" id="lockin-btn" type="button">▣ LOCK IN</button>
+    <button class="fx-btn" id="layout-reset-btn" type="button" title="Reset dashboard card order & collapse">⟲ LAYOUT</button>
   </div>
 </div>
 
@@ -189,7 +190,9 @@
 </div>
 
 <!-- ── Main bento grid ────────────────────────────────────────────────── -->
-<main class="grid" id="main-grid">
+<!-- data-layout="pending" hides the grid until the persisted card layout is
+     applied by the inline script after </main> — prevents a reshuffle flash. -->
+<main class="grid" id="main-grid" data-layout="pending">
 
   <!-- ROW 1: Morning Briefing — hero full width -->
   <section class="card sci-fi-panel" id="briefing-card" data-card="briefing" data-tabs="home">
@@ -515,6 +518,134 @@
 
 
 </main>
+
+<!-- ── Dashboard layout: per-device card reorder + collapse (Tier 3 Part 3) ──
+     Runs synchronously here (after the grid, before main.js and before first
+     paint) so the persisted order/collapse is applied with no reshuffle flash;
+     the grid stays visibility:hidden via data-layout="pending" until we reveal
+     it at the end. IDs (not DOM order) are persisted, so new cards added later
+     survive: any card missing from the saved order is appended at the end
+     (visible, expanded); any saved id no longer in the DOM is dropped. -->
+<script>
+(function () {
+  var KEY = "asfa_dashboard_layout_v1";
+  var grid = document.getElementById("main-grid");
+  if (!grid) return;
+  var cards = function () { return Array.prototype.slice.call(grid.querySelectorAll(":scope > .card")); };
+
+  // Stable data-card-id per card, derived from its (stable, unique) element id.
+  cards().forEach(function (c) {
+    if (!c.dataset.cardId) c.dataset.cardId = (c.id || "").replace(/-card$/, "") || c.id;
+  });
+  var byId = {};
+  cards().forEach(function (c) { byId[c.dataset.cardId] = c; });
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+  function persist() {
+    var order = cards().map(function (c) { return c.dataset.cardId; });
+    var collapsed = cards().filter(function (c) { return c.classList.contains("card-collapsed"); })
+                           .map(function (c) { return c.dataset.cardId; });
+    try { localStorage.setItem(KEY, JSON.stringify({ order: order, collapsed: collapsed })); } catch (e) {}
+  }
+
+  // Inject reorder/collapse controls into each card header.
+  cards().forEach(function (c) {
+    var head = c.querySelector(".card-head");
+    if (!head || head.querySelector(".card-ctrls")) return;
+    var ctrls = document.createElement("div");
+    ctrls.className = "card-ctrls";
+    ctrls.innerHTML =
+      '<button class="card-ctrl-btn card-ctrl-up" type="button" title="Move up" aria-label="Move card up">↑</button>' +
+      '<button class="card-ctrl-btn card-ctrl-down" type="button" title="Move down" aria-label="Move card down">↓</button>' +
+      '<button class="card-ctrl-btn card-ctrl-collapse" type="button" title="Collapse / expand" aria-label="Collapse or expand card"><span class="chev">▾</span></button>';
+    head.appendChild(ctrls);
+  });
+
+  // Apply saved order: saved ids first (existing only), then any new cards at end.
+  var saved = load();
+  var savedOrder = (saved.order || []).filter(function (id) { return byId[id]; });
+  var seen = {};
+  savedOrder.forEach(function (id) { seen[id] = true; });
+  var extras = cards().map(function (c) { return c.dataset.cardId; })
+                      .filter(function (id) { return !seen[id]; });
+  savedOrder.concat(extras).forEach(function (id) { grid.appendChild(byId[id]); });
+
+  // Apply saved collapsed set.
+  (saved.collapsed || []).forEach(function (id) {
+    if (byId[id]) byId[id].classList.add("card-collapsed");
+  });
+
+  // main.js reads this to skip fetching data for collapsed cards on load.
+  window.__asfaCollapsed = function (cardId) {
+    var c = byId[cardId];
+    return !!(c && c.classList.contains("card-collapsed"));
+  };
+
+  function visibleCards() {
+    return cards().filter(function (c) { return getComputedStyle(c).display !== "none"; });
+  }
+  function updateButtons() {
+    var vis = visibleCards();
+    vis.forEach(function (c, i) {
+      var up = c.querySelector(".card-ctrl-up"), dn = c.querySelector(".card-ctrl-down");
+      if (up) up.disabled = (i === 0);
+      if (dn) dn.disabled = (i === vis.length - 1);
+    });
+    // Cards hidden by the current tab shouldn't advertise disabled arrows.
+    cards().forEach(function (c) {
+      if (getComputedStyle(c).display === "none") {
+        var up = c.querySelector(".card-ctrl-up"), dn = c.querySelector(".card-ctrl-down");
+        if (up) up.disabled = false; if (dn) dn.disabled = false;
+      }
+    });
+  }
+  function move(card, dir) {
+    var vis = visibleCards();
+    var i = vis.indexOf(card), j = i + dir;
+    if (i < 0 || j < 0 || j >= vis.length) return;
+    var target = vis[j];
+    if (dir < 0) grid.insertBefore(card, target);
+    else grid.insertBefore(card, target.nextSibling);
+    persist();
+    updateButtons();
+  }
+  function toggleCollapse(card) {
+    var nowCollapsed = card.classList.toggle("card-collapsed");
+    persist();
+    if (!nowCollapsed) {
+      // Expanded → let main.js fetch this card's data now (skipped on load).
+      document.dispatchEvent(new CustomEvent("asfa:card-expand", { detail: { cardId: card.dataset.cardId } }));
+    }
+  }
+
+  grid.addEventListener("click", function (e) {
+    var btn = e.target.closest(".card-ctrl-btn");
+    if (!btn) return;
+    var card = btn.closest(".card");
+    if (!card) return;
+    e.preventDefault(); e.stopPropagation();
+    if (btn.classList.contains("card-ctrl-up")) move(card, -1);
+    else if (btn.classList.contains("card-ctrl-down")) move(card, 1);
+    else if (btn.classList.contains("card-ctrl-collapse")) toggleCollapse(card);
+  });
+
+  var resetBtn = document.getElementById("layout-reset-btn");
+  if (resetBtn) resetBtn.addEventListener("click", function () {
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    location.reload();
+  });
+
+  // Recompute arrow disabled-states when the mobile tab changes the visible set.
+  var nav = document.querySelector(".bottom-nav");
+  if (nav) nav.addEventListener("click", function () { setTimeout(updateButtons, 0); });
+  updateButtons();
+
+  grid.removeAttribute("data-layout");  // reveal — layout is applied
+})();
+</script>
 
 <!-- ── Bottom nav ─────────────────────────────────────────────────────── -->
 <nav class="bottom-nav">

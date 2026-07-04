@@ -559,31 +559,41 @@ function glowCard(cardId) {
   card.classList.add('card-updated');
 }
 
+// Card-id → data loader, for cards that own a single dedicated fetch. Tier 3
+// Part 3 uses this to (a) skip a collapsed card's fetch on load — saving the
+// rate budget — and (b) fetch it lazily when the user expands it. Keys match the
+// data-card-id set by the layout script (element id minus "-card").
+const CARD_LOADERS = {
+  briefing: fetchBriefing, score: fetchScore, bots: fetchBots,
+  systems: fetchSystems, validation: fetchValidation,
+  "scout-pipeline": fetchScoutPipeline, calendar: fetchCalendar,
+  inbox: fetchEmails, news: fetchNews, scent: fetchScent,
+  money: fetchMoney, goals: fetchGoals, reflection: fetchReflection,
+  supplements: fetchSupplements, bodycomp: fetchBodyComp,
+};
+
 function loadAll() {
-  fetchBriefing();
-  fetchScore();
-  fetchBots();
+  const collapsed = window.__asfaCollapsed || (() => false);
+  for (const [cardId, fn] of Object.entries(CARD_LOADERS)) {
+    if (!collapsed(cardId)) fn();
+  }
+  // Not gated: multi-card habits (water+sleep), gym (separate page seam), the
+  // local market clock, and global/non-card widgets.
   fetchHabits();
-  fetchCalendar();
-  fetchEmails();
-  fetchNews();
-  fetchMoney();
   fetchGym();
-  fetchScent();
-  fetchReflection();
-  fetchGoals();
-  fetchSupplements();
   initChat();
   fetchNotifications();
   initSpotify();
   fetchFocusLine();
   fetchFocusToday();
-  fetchSystems();
-  fetchValidation();
-  fetchScoutPipeline();
-  fetchBodyComp();
   initMarketClock();
 }
+
+// Expanding a collapsed card (re)loads its data, since it was skipped on load.
+document.addEventListener("asfa:card-expand", (e) => {
+  const fn = CARD_LOADERS[e.detail && e.detail.cardId];
+  if (fn) fn();
+});
 
 // ── Body composition (Renpho manual entry) ──────────────────────────────────────
 let bodyCompChart = null;

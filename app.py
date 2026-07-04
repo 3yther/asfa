@@ -923,11 +923,15 @@ def _csv_set(value) -> set:
     return {v.strip().lower() for v in str(value or "").split(",") if v.strip()}
 
 
-def _score_fragrance(frag: dict, bucket: str, season: str, temp_c, occasion) -> tuple:
+def _score_fragrance(frag: dict, bucket: str, season: str, temp_c, occasion,
+                     pairing_net=0) -> tuple:
     """Score one bottle against the current context. Returns (score, specificity,
     factors): factors are the human fragments the reason string is built from;
     specificity counts EXACT season/time matches (vs catch-all "all") and only
-    breaks ties — a bottle made for this exact season/hour beats an all-rounder."""
+    breaks ties — a bottle made for this exact season/hour beats an all-rounder.
+    `pairing_net` is the clamped last-5 👍/👎 net for this bottle's pairing (Tier 3
+    Part 2); it nudges by net*0.5 (max ±1.5), below one full season/occasion weight
+    so learned taste tilts ties without overriding context."""
     score, specificity, factors = 0.0, 0, []
     times = _csv_set(frag.get("time_of_day"))
     if bucket in times or "all" in times:
@@ -958,6 +962,10 @@ def _score_fragrance(frag: dict, bucket: str, season: str, temp_c, occasion) -> 
         score -= 5  # already worn today — rotate
     elif days >= 7 and rot >= 1:
         factors.append(f"you haven't worn it in {days} days")
+    if pairing_net:
+        score += pairing_net * 0.5
+        if pairing_net > 0:
+            factors.append("you've rated its routine highly")
     return score, specificity, factors
 
 
@@ -977,7 +985,9 @@ def _fragrance_recommendation(occasion=None, hour=None, temp_c=None, condition=N
     frags = fragrances if fragrances is not None else db.get_fragrances()
     if not frags:
         return None
-    scored = [(f, *(_score_fragrance(f, bucket, season, temp_c, occasion))) for f in frags]
+    nets = db.get_pairing_nets_by_fragrance()
+    scored = [(f, *(_score_fragrance(f, bucket, season, temp_c, occasion,
+                                     pairing_net=nets.get(f["id"], 0)))) for f in frags]
     # Best score wins; ties go to the least-worn bottle (fair rotation), then
     # to the most context-specific match (exact season/time beats "all").
     scored.sort(key=lambda t: (-t[1], t[0].get("wear_count") or 0, -t[2]))
@@ -1006,9 +1016,36 @@ def _fragrance_recommendation(occasion=None, hour=None, temp_c=None, condition=N
     }
 
 
-@app.route("/api/fragrances")
+@app.route("/api/fragrances", methods=["GET", "POST"])
 def api_fragrances():
+    if request.method == "POST":
+        # Tier 3 Part 6 — add a bottle (CSRF-gated). Prefill comes from the FragDB
+        # reference lookup, but the user can edit every field before saving.
+        d = request.get_json(force=True) or {}
+        name = (d.get("name") or "").strip()
+        brand = (d.get("brand") or "").strip()
+        if not name or not brand:
+            return jsonify({"error": "name and brand required"}), 400
+        frag = db.create_fragrance(
+            name, brand, notes=(d.get("notes") or None),
+            concentration=(d.get("concentration") or None),
+            vibe=(d.get("vibe") or None), best_seasons=(d.get("best_seasons") or None),
+            time_of_day=(d.get("time_of_day") or None),
+            occasions=(d.get("occasions") or None),
+            longevity_hrs=d.get("longevity_hrs"))
+        if not frag:
+            return jsonify({"error": "could not create fragrance"}), 400
+        return jsonify(frag), 201
     return jsonify(db.get_fragrances())
+
+
+@app.route("/api/fragrances/reference/search")
+def api_fragrance_reference_search():
+    """FragDB name autocomplete (Tier 3 Part 6): ?q= → matching reference bottles
+    with notes/accords to prefill the add-fragrance form."""
+    q = request.args.get("q", "")
+    limit = request.args.get("limit", 8, type=int)
+    return jsonify(db.search_fragrance_reference(q, min(max(limit, 1), 20)))
 
 
 @app.route("/api/fragrances/stats")
@@ -1063,6 +1100,19 @@ def api_fragrance_undo_wear(fragrance_id):
     if not updated:
         return jsonify({"error": "no wear to undo"}), 404
     return jsonify(updated)
+
+
+@app.route("/api/fragrances/pairings/<int:pairing_id>/rate", methods=["POST"])
+def api_fragrance_rate_pairing(pairing_id):
+    """Rate a worn pairing 👍(+1)/👎(-1) (Tier 3 Part 2). CSRF-gated like every
+    write. Returns the updated clamped net so the UI can reflect it."""
+    d = request.get_json(force=True) or {}
+    rating = d.get("rating")
+    if rating not in (1, -1):
+        return jsonify({"error": "rating must be 1 or -1"}), 400
+    if not db.rate_pairing(pairing_id, rating):
+        return jsonify({"error": "unknown pairing"}), 404
+    return jsonify({"ok": True, "net": db.get_pairing_net(pairing_id)})
 
 
 # Accepted upload formats, validated by CONTENT not filename: magic-byte sniff
@@ -1707,6 +1757,34 @@ def api_notifications_read():
 
 # ── Mission Control — gamified AI-agent ecosystem ──────────────────────────────
 
+# Tier 3 Part 4 — live agent movement. The Phaser roster (13 persona agents) and
+# the audit-log job agents are two separate namespaces; only these four personas
+# have a genuinely role-aligned background job that writes to the audit log, so
+# only they get live, audit-driven movement. No invented correspondences — every
+# other persona keeps its existing status-based movement. (See FLAGGED note.)
+_MC_AUDIT_BRIDGE = {
+    "quant": "quant_bot",    # trading — quant_bot polls bot trades
+    "sentinel": "sentinel",  # security / monitoring (same id in both namespaces)
+    "oracle": "scout",       # research / scanning / job hunting
+    "warden": "health",      # uptime / endpoint monitoring
+}
+_MC_ACTIVITY_WINDOW_MIN = 10  # an audit entry newer than this ⇒ agent is "working"
+
+
+def _mc_activity() -> dict:
+    """Per-persona live-work state derived from recent audit activity, keyed by
+    ROSTER id so the map can consume it directly. Only bridged personas appear;
+    the client maps the returned `action` to a room."""
+    recent = db.get_recent_audit_activity(_MC_ACTIVITY_WINDOW_MIN)
+    out = {}
+    for roster_id, audit_id in _MC_AUDIT_BRIDGE.items():
+        info = recent.get(audit_id)
+        if info:
+            out[roster_id] = {"working": True, "action": info["action"],
+                              "minutes_ago": info["minutes_ago"], "audit_agent": audit_id}
+    return out
+
+
 def _mc_live_data() -> dict:
     """Real ASFA data surfaced on the Mission Control dashboard. Every source is
     best-effort; the last good trading P&L is cached so the panel still shows a
@@ -1875,6 +1953,7 @@ def api_agents():
         "agents": agents,
         "live": live,
         "alerts": _mc_alerts(agents, live),
+        "activity": _mc_activity(),   # Tier 3 Part 4 — live audit-driven movement
     })
 
 
@@ -1963,6 +2042,30 @@ def api_agent_diary(agent_id):
         "summary": r.get("summary"),
         "stats": stats,
         "created_at": r.get("created_at"),
+    })
+
+
+@app.route("/api/agents/<agent_id>/detail")
+def api_agent_detail(agent_id):
+    """Live click-panel data for a Mission Control agent (Tier 3 Part 4): current
+    energy, its last diary line, and the last 5 audit rows. Resolves through the
+    audit bridge so a persona surfaces its background job's real telemetry."""
+    audit_id = _MC_AUDIT_BRIDGE.get(agent_id, agent_id)
+    energy = db.get_energy(audit_id) or db.get_energy(agent_id)
+    diary = (db.get_agent_reflections(audit_id, period="daily", limit=1)
+             or db.get_agent_reflections(agent_id, period="daily", limit=1))
+    diary_line = diary[0].get("summary") if diary else None
+    audit = [
+        {"action": r.get("action"), "outcome": r.get("outcome"),
+         "created_at": r.get("created_at"), "details": r.get("details")}
+        for r in db.get_audit_log(audit_id, limit=5)
+    ]
+    return jsonify({
+        "agent_id": agent_id,
+        "audit_agent": audit_id,
+        "energy": (energy.get("energy") if energy else None),
+        "diary_line": diary_line,
+        "audit": audit,
     })
 
 
@@ -2233,6 +2336,26 @@ def api_audit():
     agent_id = request.args.get("agent_id")
     limit = request.args.get("limit", 50, type=int)
     return jsonify(db.get_audit_log(agent_id, limit))
+
+
+@app.route("/api/system/digest/send-now", methods=["POST"])
+@limiter.limit("10 per hour")
+def api_system_digest_send_now():
+    """Manually build + send the weekly Telegram digest now (Tier 3 Part 5).
+    CSRF-gated write, strict rate tier. force=True bypasses the 24h idempotence
+    guard so it's usable for testing."""
+    from services.digest import send_weekly_digest
+    result = send_weekly_digest(force=True)
+    return jsonify(result), (200 if result.get("ok") else 503)
+
+
+@app.route("/api/system/audit/verify")
+@limiter.limit("10 per hour")
+def api_system_audit_verify():
+    """Verify the tamper-evident audit hash chain (Tier 3 Part 1). Read-only and
+    occasional, so it carries an explicit strict limit on top of the default
+    tiers. Returns {valid, total_entries, first_broken_id}."""
+    return jsonify(db.verify_audit_chain())
 
 
 @app.route("/api/error-budgets")

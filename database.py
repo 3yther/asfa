@@ -1,7 +1,9 @@
+import hashlib
 import json
 import os
 import random
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, date, timedelta
 
@@ -1633,6 +1635,12 @@ def _ensure_agent_data_tables():
             if USE_POSTGRES:
                 stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
             cur.execute(stmt)
+        # Tier 3 Part 1: tamper-evident hash chain over the audit log. Added as
+        # idempotent ALTERs (not baked into CREATE) so existing rows on a live
+        # Postgres/SQLite pick them up without a table rebuild. Both start NULL
+        # and are filled by _backfill_audit_chain() oldest→newest on first boot.
+        _add_column(cur, "agent_audit_log", "prev_hash", "TEXT")
+        _add_column(cur, "agent_audit_log", "entry_hash", "TEXT")
     _AGENT_DATA_READY = True
 
 
@@ -1776,20 +1784,174 @@ def seed_relationships():
         upsert_relationship(*r)
 
 
-# ── Audit trail ────────────────────────────────────────────────────────────────
+# ── Audit trail (tamper-evident hash chain, Tier 3 Part 1) ──────────────────────
+# Each row stores entry_hash = sha256(prev_hash|timestamp|agent|action|details),
+# where prev_hash is the previous row's entry_hash (or "ASFA_GENESIS" for the very
+# first row). Any silent edit/delete of an intervening row makes a later row's
+# stored hash stop matching a recomputation, so verify_audit_chain() detects it.
+#
+# CONCURRENCY: the read-previous + insert must be atomic or two racing writes can
+# both chain off the same prev_hash and fork the chain. We serialise every write
+# with a process-level lock (single gunicorn worker / single dev process, so this
+# is sufficient for both backends) AND, on Postgres, additionally take an EXCLUSIVE
+# table lock inside the transaction — plain SELECTs (verify) use ACCESS SHARE and
+# are not blocked by it, so verification still runs concurrently.
+
+_AUDIT_GENESIS = "ASFA_GENESIS"
+_AUDIT_WRITE_LOCK = threading.Lock()
+
+
+def _audit_ts_str(created_at) -> str:
+    """Canonical string form of a row's created_at for hashing. Used identically
+    in the write, backfill, and verify paths so recomputation is unambiguous.
+    SQLite returns the stored TEXT verbatim; Postgres returns a datetime — both
+    normalise to 'YYYY-MM-DD HH:MM:SS' (second precision, no microseconds/tz)."""
+    if created_at is None:
+        return ""
+    if isinstance(created_at, datetime):
+        return created_at.strftime("%Y-%m-%d %H:%M:%S")
+    return str(created_at)
+
+
+def _compute_audit_hash(prev_hash, ts, agent_id, action, details) -> str:
+    """The exact, deterministic entry hash. `details` is the already-serialised
+    JSON string (or None → hashed as empty), matching the stored column value."""
+    raw = f"{prev_hash}|{ts}|{agent_id}|{action}|{details if details is not None else ''}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
 
 def log_audit(agent_id, action, outcome, reason=None, details=None, duration_ms=None):
-    """Log an agent action to the audit trail."""
+    """Log an agent action to the audit trail, extending the tamper-evident hash
+    chain. Serialised across threads so concurrent writes can't fork the chain."""
+    _ensure_agent_data_tables()
+    details_json = _json_or_none(details)
+    # Second-precision timestamp we control, so the value we hash is exactly what
+    # the DB stores and returns on read-back (round-trips cleanly on both engines).
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _AUDIT_WRITE_LOCK:
+        with get_db() as conn:
+            cur = conn.cursor()
+            ph = "%s" if USE_POSTGRES else "?"
+            if USE_POSTGRES:
+                cur.execute("LOCK TABLE agent_audit_log IN EXCLUSIVE MODE")
+            cur.execute(
+                "SELECT entry_hash FROM agent_audit_log ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+            prev_hash = (row["entry_hash"] if row and row["entry_hash"]
+                         else _AUDIT_GENESIS)
+            entry_hash = _compute_audit_hash(prev_hash, ts, agent_id, action,
+                                             details_json)
+            cur.execute(
+                f"INSERT INTO agent_audit_log "
+                f"(agent_id, action, reason, outcome, details, duration_ms, "
+                f"created_at, prev_hash, entry_hash) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+                (agent_id, action, reason, outcome, details_json,
+                 int(duration_ms) if duration_ms is not None else None,
+                 ts, prev_hash, entry_hash))
+
+
+def _backfill_audit_chain(batch_size: int = 500) -> int:
+    """Fill prev_hash/entry_hash for rows that don't have them yet, oldest→newest,
+    in batches. Only touches rows where entry_hash IS NULL — already-chained rows
+    are immutable, so this is a no-op after the first run and (crucially) never
+    recomputes over tampering, which would hide it. Returns rows hashed."""
+    _ensure_agent_data_tables()
+    hashed = 0
+    with _AUDIT_WRITE_LOCK:
+        with get_db() as conn:
+            cur = conn.cursor()
+            ph = "%s" if USE_POSTGRES else "?"
+            if USE_POSTGRES:
+                cur.execute("LOCK TABLE agent_audit_log IN EXCLUSIVE MODE")
+            prev_hash = _AUDIT_GENESIS
+            last_id = -1
+            while True:
+                cur.execute(
+                    f"SELECT id, created_at, agent_id, action, details, entry_hash "
+                    f"FROM agent_audit_log WHERE id > {ph} ORDER BY id ASC LIMIT {ph}",
+                    (last_id, batch_size))
+                rows = [dict(r) for r in cur.fetchall()]
+                if not rows:
+                    break
+                for r in rows:
+                    last_id = r["id"]
+                    if r["entry_hash"]:
+                        # Already part of the established chain — trust and extend.
+                        prev_hash = r["entry_hash"]
+                        continue
+                    ts = _audit_ts_str(r["created_at"])
+                    entry_hash = _compute_audit_hash(
+                        prev_hash, ts, r["agent_id"], r["action"], r["details"])
+                    cur.execute(
+                        f"UPDATE agent_audit_log SET prev_hash = {ph}, "
+                        f"entry_hash = {ph} WHERE id = {ph}",
+                        (prev_hash, entry_hash, r["id"]))
+                    prev_hash = entry_hash
+                    hashed += 1
+    return hashed
+
+
+def verify_audit_chain(batch_size: int = 500) -> dict:
+    """Walk the audit log oldest→newest recomputing each entry hash; the chain is
+    valid iff every stored entry_hash matches. Streamed in batches so a large
+    table doesn't load into memory at once.
+    Returns {valid, total_entries, first_broken_id}."""
     _ensure_agent_data_tables()
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
+        cur.execute("SELECT COUNT(*) AS n FROM agent_audit_log")
+        total = int(cur.fetchone()["n"])
+        prev_hash = _AUDIT_GENESIS
+        last_id = -1
+        while True:
+            cur.execute(
+                f"SELECT id, created_at, agent_id, action, details, entry_hash "
+                f"FROM agent_audit_log WHERE id > {ph} ORDER BY id ASC LIMIT {ph}",
+                (last_id, batch_size))
+            rows = [dict(r) for r in cur.fetchall()]
+            if not rows:
+                break
+            for r in rows:
+                last_id = r["id"]
+                ts = _audit_ts_str(r["created_at"])
+                expected = _compute_audit_hash(
+                    prev_hash, ts, r["agent_id"], r["action"], r["details"])
+                if expected != (r["entry_hash"] or ""):
+                    return {"valid": False, "total_entries": total,
+                            "first_broken_id": r["id"]}
+                prev_hash = r["entry_hash"]
+    return {"valid": True, "total_entries": total, "first_broken_id": None}
+
+
+def get_recent_audit_activity(minutes: int = 10) -> dict:
+    """Latest audit action per agent, kept only if it landed within the last
+    `minutes`. Drives Mission Control's live "who's working right now" view
+    (Tier 3 Part 4). One query: MAX(id) per agent (id is monotonic with insertion
+    time). Returns {agent_id: {action, created_at, minutes_ago}}."""
+    _ensure_agent_data_tables()
+    out = {}
+    now = datetime.now()
+    with get_db() as conn:
+        cur = conn.cursor()
         cur.execute(
-            f"INSERT INTO agent_audit_log "
-            f"(agent_id, action, reason, outcome, details, duration_ms) "
-            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph})",
-            (agent_id, action, reason, outcome, _json_or_none(details),
-             int(duration_ms) if duration_ms is not None else None))
+            "SELECT a.agent_id, a.action, a.created_at FROM agent_audit_log a "
+            "JOIN (SELECT agent_id, MAX(id) AS mid FROM agent_audit_log GROUP BY agent_id) b "
+            "ON a.id = b.mid")
+        for r in cur.fetchall():
+            r = dict(r)
+            ts = _audit_ts_str(r["created_at"])
+            try:
+                when = datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError):
+                continue
+            mins = (now - when).total_seconds() / 60.0
+            if 0 <= mins <= minutes:
+                out[r["agent_id"]] = {
+                    "action": r["action"], "created_at": ts,
+                    "minutes_ago": round(mins, 1)}
+    return out
 
 
 def get_audit_log(agent_id=None, limit=50):
@@ -2215,6 +2377,10 @@ def init_agent_data():
     for aid in AGENT_IDS:
         init_error_budget(aid)
         init_energy(aid)
+    # Tier 3 Part 1: hash-chain any pre-existing audit rows exactly once. No-op on
+    # every subsequent boot (only fills NULL entry_hash rows), so it never papers
+    # over tampering introduced after the initial backfill.
+    _backfill_audit_chain()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3799,6 +3965,15 @@ def _ensure_fragrance_tables():
             time_of_day TEXT,
             occasion TEXT
         )""",
+        # Tier 3 Part 2: 👍/👎 history for a worn pairing. A history table (not a
+        # column) because taste drifts — the score reads only the last N ratings,
+        # so an old 👎 can be outgrown. CHECK keeps rating to ±1.
+        """CREATE TABLE IF NOT EXISTS fragrance_pairing_ratings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pairing_id INTEGER NOT NULL,
+            rating INTEGER NOT NULL CHECK (rating IN (1,-1)),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
     ]
     with get_db() as conn:
         cur = conn.cursor()
@@ -4000,7 +4175,13 @@ def get_fragrance_pairing(fragrance_id: int):
             r = cur.fetchone()
             if r:
                 layering = dict(r)
+        # last-5 rating net (Tier 3 Part 2), computed on the same cursor.
+        cur.execute(
+            f"SELECT rating FROM fragrance_pairing_ratings WHERE pairing_id = {ph} "
+            f"ORDER BY id DESC LIMIT 5", (pairing["id"],))
+        net = max(-3, min(3, sum(int(r["rating"]) for r in cur.fetchall())))
         return {
+            "id": pairing["id"],
             "shower_gel": product(pairing.get("shower_gel_id")),
             "body_scrub": product(pairing.get("body_scrub_id")),
             "body_lotion": product(pairing.get("body_lotion_id")),
@@ -4009,6 +4190,7 @@ def get_fragrance_pairing(fragrance_id: int):
             "layering_fragrance": layering,
             "layering_notes": pairing.get("layering_notes"),
             "reason": pairing.get("recommendation_reason"),
+            "rating_net": net,
         }
 
 
@@ -4120,6 +4302,63 @@ def get_fragrance_stats() -> dict:
             for f in frags
         ],
     }
+
+
+# ── Scent combo ratings (Tier 3 Part 2) ──────────────────────────────────────
+# A 👍/👎 on a worn pairing. Score = clamp(sum of last 5 ratings, -3, +3), so
+# taste can drift and old votes age out. The scorer adds net*0.5 (max ±1.5) — a
+# nudge that stays below one full season/occasion weight, never an override.
+
+def rate_pairing(pairing_id: int, rating: int) -> bool:
+    """Record a 👍(+1)/👎(-1) for a pairing. Returns False if the pairing is
+    unknown or the rating is out of range (defence in depth over the CHECK)."""
+    if rating not in (1, -1):
+        return False
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT id FROM fragrance_pairings WHERE id = {ph}", (pairing_id,))
+        if not cur.fetchone():
+            return False
+        cur.execute(
+            f"INSERT INTO fragrance_pairing_ratings (pairing_id, rating) "
+            f"VALUES ({ph}, {ph})", (pairing_id, rating))
+    return True
+
+
+def get_pairing_net(pairing_id: int) -> int:
+    """clamp(sum of last 5 ratings, -3, +3) for one pairing (0 if none)."""
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT rating FROM fragrance_pairing_ratings WHERE pairing_id = {ph} "
+            f"ORDER BY id DESC LIMIT 5", (pairing_id,))
+        return max(-3, min(3, sum(int(r["rating"]) for r in cur.fetchall())))
+
+
+def get_pairing_nets_by_fragrance() -> dict:
+    """{fragrance_id: net} across the whole shelf, so the recommendation scorer
+    can fetch every pairing's nudge in one call instead of per-bottle queries.
+    Only the last 5 ratings per pairing count (windowed in Python — a handful of
+    pairings, so this is cheap)."""
+    _ensure_fragrance_tables()
+    nets = {}
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, fragrance_id FROM fragrance_pairings")
+        pairings = [dict(r) for r in cur.fetchall()]
+        ph = "%s" if USE_POSTGRES else "?"
+        for p in pairings:
+            cur.execute(
+                f"SELECT rating FROM fragrance_pairing_ratings WHERE pairing_id = {ph} "
+                f"ORDER BY id DESC LIMIT 5", (p["id"],))
+            net = max(-3, min(3, sum(int(r["rating"]) for r in cur.fetchall())))
+            if net:
+                nets[p["fragrance_id"]] = net
+    return nets
 
 
 # ── Body composition + progress photos (Part 5) ──────────────────────────────
@@ -4276,3 +4515,211 @@ def get_gym_photos() -> list:
         cur = conn.cursor()
         cur.execute("SELECT * FROM gym_photos ORDER BY date DESC, id DESC")
         return [dict(r) for r in cur.fetchall()]
+
+
+# ── Weekly-digest summaries (Tier 3 Part 5) ──────────────────────────────────
+# Per-module one-week rollups for the Telegram digest. All ranges are half-open
+# [start, end_excl) on ISO date strings so a timestamp column (e.g. scout's
+# date_stage_changed) on the last day isn't excluded by a string `<=` compare.
+
+def get_gym_week_summary(start_date, end_excl) -> dict:
+    """{sessions, volume_kg, prs, avg_rpe} for gym sessions in [start, end_excl)."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT COUNT(*) AS n, COALESCE(SUM(total_volume_kg),0) AS vol "
+            f"FROM gym_sessions WHERE date >= {ph} AND date < {ph}",
+            (start_date, end_excl))
+        row = dict(cur.fetchone())
+        cur.execute(
+            f"SELECT COUNT(*) AS prs FROM gym_sets st "
+            f"JOIN gym_sessions s ON s.id = st.session_id "
+            f"WHERE s.date >= {ph} AND s.date < {ph} AND st.is_pr = 1",
+            (start_date, end_excl))
+        prs = int(dict(cur.fetchone())["prs"] or 0)
+        cur.execute(
+            f"SELECT AVG(st.rpe) AS avg_rpe FROM gym_sets st "
+            f"JOIN gym_sessions s ON s.id = st.session_id "
+            f"WHERE s.date >= {ph} AND s.date < {ph} AND st.rpe IS NOT NULL",
+            (start_date, end_excl))
+        avg_rpe = dict(cur.fetchone())["avg_rpe"]
+    return {"sessions": int(row["n"] or 0), "volume_kg": round(float(row["vol"] or 0), 1),
+            "prs": prs, "avg_rpe": round(float(avg_rpe), 1) if avg_rpe is not None else None}
+
+
+def get_scout_week_summary(start_date, end_excl) -> dict:
+    """{new_saved, new_applied, stage_changes, followups_due} for the week."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+
+        def cnt(col):
+            cur.execute(
+                f"SELECT COUNT(*) AS n FROM scout_pipeline "
+                f"WHERE {col} >= {ph} AND {col} < {ph}", (start_date, end_excl))
+            return int(dict(cur.fetchone())["n"])
+
+        summary = {"new_saved": cnt("date_saved"), "new_applied": cnt("date_applied"),
+                   "stage_changes": cnt("date_stage_changed")}
+    summary["followups_due"] = len(get_scout_pipeline_reminders(7))
+    return summary
+
+
+def get_scent_week_summary(start_date, end_excl) -> dict:
+    """{wears, top} — wear count and the most-worn bottle name for the week."""
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT COUNT(*) AS n FROM fragrance_wears WHERE date >= {ph} AND date < {ph}",
+            (start_date, end_excl))
+        wears = int(dict(cur.fetchone())["n"])
+        cur.execute(
+            f"SELECT f.name AS name, COUNT(*) AS n FROM fragrance_wears w "
+            f"JOIN fragrances f ON f.id = w.fragrance_id "
+            f"WHERE w.date >= {ph} AND w.date < {ph} "
+            f"GROUP BY w.fragrance_id, f.name ORDER BY n DESC LIMIT 1",
+            (start_date, end_excl))
+        r = cur.fetchone()
+    return {"wears": wears, "top": (dict(r)["name"] if r else None)}
+
+
+def count_security_lockouts(start_iso) -> int:
+    """Lockout events (Sentinel security_alert episodics) since start_iso. Read
+    from episodic memory because auth_failures is pruned hourly and can't carry a
+    weekly count."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT COUNT(*) AS n FROM agent_memory_episodic "
+            f"WHERE event_type = 'security_alert' AND created_at >= {ph}", (start_iso,))
+        return int(dict(cur.fetchone())["n"])
+
+
+# ── FragDB reference lookup (Tier 3 Part 6) ──────────────────────────────────
+# A large read-only reference table (~59k Parfumo rows) for name autocomplete +
+# notes/accords prefill when adding a fragrance. Populated by
+# scripts/import_fragdb.py from a gitignored CSV — never committed. Kept separate
+# from the curated `fragrances` shelf, which this never touches.
+
+_FRAGREF_READY = False
+
+
+def _ensure_fragrance_reference():
+    global _FRAGREF_READY
+    if _FRAGREF_READY:
+        return
+    with get_db() as conn:
+        cur = conn.cursor()
+        stmt = """CREATE TABLE IF NOT EXISTS fragrance_reference (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            brand TEXT,
+            concentration TEXT,
+            accords TEXT,
+            notes TEXT,
+            url TEXT
+        )"""
+        if USE_POSTGRES:
+            stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        cur.execute(stmt)
+        # Prefix search runs on the name; a plain index serves LIKE 'q%'.
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_fragref_name ON fragrance_reference(name)")
+    _FRAGREF_READY = True
+
+
+def import_fragrance_reference(records, replace=True, batch=1000) -> int:
+    """Bulk-load reference rows. `records` is an iterable of dicts with keys
+    name/brand/concentration/accords/notes/url. Idempotent when replace=True
+    (clears the table first). Returns rows inserted."""
+    _ensure_fragrance_reference()
+    cols = ("name", "brand", "concentration", "accords", "notes", "url")
+    inserted = 0
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if replace:
+            cur.execute("DELETE FROM fragrance_reference")
+        sql = (f"INSERT INTO fragrance_reference ({','.join(cols)}) "
+               f"VALUES ({','.join([ph]*len(cols))})")
+        buf = []
+        for rec in records:
+            if not rec.get("name"):
+                continue
+            buf.append(tuple(rec.get(c) for c in cols))
+            if len(buf) >= batch:
+                cur.executemany(sql, buf); inserted += len(buf); buf = []
+        if buf:
+            cur.executemany(sql, buf); inserted += len(buf)
+    return inserted
+
+
+def search_fragrance_reference(query: str, limit: int = 8) -> list:
+    """Prefix (then substring) name search for add-fragrance autocomplete. Returns
+    [] for a blank/too-short query so we never scan the whole table."""
+    q = (query or "").strip()
+    if len(q) < 2:
+        return []
+    _ensure_fragrance_reference()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        # Prefer prefix matches (index-friendly), fall back to substring, dedup by
+        # name+brand, cap at `limit`. Two passes keep the common case fast.
+        cur.execute(
+            f"SELECT name, brand, concentration, accords, notes FROM fragrance_reference "
+            f"WHERE name LIKE {ph} ORDER BY name LIMIT {ph}", (q + "%", limit))
+        rows = [dict(r) for r in cur.fetchall()]
+        if len(rows) < limit:
+            seen = {(r["name"], r["brand"]) for r in rows}
+            cur.execute(
+                f"SELECT name, brand, concentration, accords, notes FROM fragrance_reference "
+                f"WHERE name LIKE {ph} AND name NOT LIKE {ph} ORDER BY name LIMIT {ph}",
+                ("%" + q + "%", q + "%", limit - len(rows)))
+            for r in cur.fetchall():
+                r = dict(r)
+                if (r["name"], r["brand"]) not in seen:
+                    rows.append(r)
+    return rows
+
+
+def fragrance_reference_count() -> int:
+    _ensure_fragrance_reference()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS n FROM fragrance_reference")
+        return int(dict(cur.fetchone())["n"])
+
+
+def create_fragrance(name, brand, notes=None, concentration=None, vibe=None,
+                     best_seasons=None, time_of_day=None, occasions=None,
+                     longevity_hrs=None) -> dict:
+    """Add a new bottle to the curated shelf (Tier 3 Part 6 add flow). Only ever
+    INSERTs — never touches the seeded 7. Returns the new fragrance dict."""
+    _ensure_fragrance_tables()
+    name = (name or "").strip()
+    brand = (brand or "").strip()
+    if not name or not brand:
+        return None
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cols = ("name, brand, notes, concentration, vibe, best_seasons, "
+                "time_of_day, occasions, longevity_hrs")
+        cur.execute(
+            f"INSERT INTO fragrances ({cols}) VALUES ({','.join([ph]*9)})",
+            (name, brand, notes, concentration, vibe, best_seasons,
+             time_of_day, occasions,
+             int(longevity_hrs) if longevity_hrs not in (None, "") else None))
+        new_id = cur.lastrowid if not USE_POSTGRES else None
+        if USE_POSTGRES:
+            cur.execute("SELECT MAX(id) AS id FROM fragrances WHERE name = %s AND brand = %s",
+                        (name, brand))
+            new_id = dict(cur.fetchone())["id"]
+    return get_fragrance(new_id)

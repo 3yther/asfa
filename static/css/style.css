@@ -451,6 +451,32 @@ body {
   color: var(--primary);
   text-shadow: 0 0 12px rgba(0,217,255,.22);
 }
+
+/* ── Card reorder + collapse controls (Tier 3 Part 3) ───────────────────── */
+/* Hide the grid until the persisted layout is applied, so there's no reshuffle
+   flash on load (data-layout is removed by the inline pre-paint script). */
+#main-grid[data-layout="pending"] { visibility: hidden; }
+.card-ctrls {
+  display: inline-flex; align-items: center; gap: 3px;
+  margin-left: auto; flex-shrink: 0;
+}
+.card-ctrl-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 30px; min-height: 30px; padding: 2px 6px;
+  background: rgba(0,217,255,.06); border: 1px solid rgba(140,170,200,.18);
+  border-radius: 6px; color: var(--muted); cursor: pointer;
+  font-size: .8rem; line-height: 1; transition: background .15s, color .15s, transform .1s;
+}
+.card-ctrl-btn:hover:not(:disabled) { background: rgba(0,217,255,.16); color: var(--primary); }
+.card-ctrl-btn:active { transform: scale(.92); }
+.card-ctrl-btn:disabled { opacity: .3; cursor: default; }
+.card-ctrl-collapse .chev { transition: transform .18s ease; display: inline-block; }
+.card.card-collapsed .card-ctrl-collapse .chev { transform: rotate(-90deg); }
+/* Collapsed: keep only the header row; drop the header's bottom margin/border. */
+.card.card-collapsed > :not(.card-head):not(.corner-bl):not(.corner-br) { display: none !important; }
+.card.card-collapsed .card-head { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+.card.card-collapsed { min-height: 0; }
+#layout-reset-btn { opacity: .8; }
 /* Phase B — H3: widget / sub-section headers */
 .card h3, .widget-header {
   font-family: 'Inter', sans-serif;

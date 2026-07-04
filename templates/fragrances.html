@@ -51,7 +51,10 @@
 
   <!-- ── The shelf ───────────────────────────────────────────────────── -->
   <section class="frag-shelf-wrap sci-fi-panel">
-    <h2 class="shelf-title" data-decode>The Collection</h2>
+    <div class="shelf-head">
+      <h2 class="shelf-title" data-decode>The Collection</h2>
+      <button class="btn btn-ghost" id="frag-add-btn" type="button">＋ Add bottle</button>
+    </div>
     <div class="frag-shelf" id="frag-shelf">
       <div class="skeleton-card sci-fi-panel"></div>
       <div class="skeleton-card sci-fi-panel"></div>
@@ -65,6 +68,42 @@
   <aside class="frag-detail sci-fi-panel" id="frag-detail" role="dialog" aria-modal="true">
     <button class="frag-detail-close" id="frag-detail-close" aria-label="Close">✕</button>
     <div id="frag-detail-body"><!-- filled by JS --></div>
+  </aside>
+</div>
+
+<!-- ── Add-fragrance modal (Tier 3 Part 6) — FragDB name autocomplete + prefill ── -->
+<div id="frag-add-overlay" class="frag-detail-overlay" hidden>
+  <aside class="frag-detail sci-fi-panel" id="frag-add" role="dialog" aria-modal="true" aria-label="Add fragrance">
+    <button class="frag-detail-close" id="frag-add-close" aria-label="Close">✕</button>
+    <div class="fa-body">
+      <h3 class="fa-title mono">ADD A BOTTLE</h3>
+      <p class="muted-sub">Type a name to search the reference DB, or just fill it in yourself. You can edit everything before saving.</p>
+      <form id="frag-add-form" autocomplete="off">
+        <label class="fa-label">Name
+          <div class="fa-ac-wrap">
+            <input type="text" id="fa-name" required placeholder="e.g. Bleu de Chanel">
+            <div class="fa-ac" id="fa-ac" hidden></div>
+          </div>
+        </label>
+        <div class="fa-row">
+          <label class="fa-label">Brand <input type="text" id="fa-brand" required placeholder="Chanel"></label>
+          <label class="fa-label">Concentration <input type="text" id="fa-conc" placeholder="EDP"></label>
+        </div>
+        <label class="fa-label">Notes
+          <textarea id="fa-notes" rows="3" placeholder="Top: …; Heart: …; Base: …"></textarea></label>
+        <div class="fa-row">
+          <label class="fa-label">Vibe <input type="text" id="fa-vibe" placeholder="fresh,woody"></label>
+          <label class="fa-label">Best seasons <input type="text" id="fa-seasons" placeholder="all"></label>
+        </div>
+        <div class="fa-row">
+          <label class="fa-label">Time of day <input type="text" id="fa-time" placeholder="day,evening"></label>
+          <label class="fa-label">Occasions <input type="text" id="fa-occ" placeholder="office,date"></label>
+        </div>
+        <div class="fa-actions">
+          <button type="submit" class="btn btn-primary" id="fa-save">Save bottle</button>
+        </div>
+      </form>
+    </div>
   </aside>
 </div>
 
