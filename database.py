@@ -4515,3 +4515,88 @@ def get_gym_photos() -> list:
         cur = conn.cursor()
         cur.execute("SELECT * FROM gym_photos ORDER BY date DESC, id DESC")
         return [dict(r) for r in cur.fetchall()]
+
+
+# ── Weekly-digest summaries (Tier 3 Part 5) ──────────────────────────────────
+# Per-module one-week rollups for the Telegram digest. All ranges are half-open
+# [start, end_excl) on ISO date strings so a timestamp column (e.g. scout's
+# date_stage_changed) on the last day isn't excluded by a string `<=` compare.
+
+def get_gym_week_summary(start_date, end_excl) -> dict:
+    """{sessions, volume_kg, prs, avg_rpe} for gym sessions in [start, end_excl)."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT COUNT(*) AS n, COALESCE(SUM(total_volume_kg),0) AS vol "
+            f"FROM gym_sessions WHERE date >= {ph} AND date < {ph}",
+            (start_date, end_excl))
+        row = dict(cur.fetchone())
+        cur.execute(
+            f"SELECT COUNT(*) AS prs FROM gym_sets st "
+            f"JOIN gym_sessions s ON s.id = st.session_id "
+            f"WHERE s.date >= {ph} AND s.date < {ph} AND st.is_pr = 1",
+            (start_date, end_excl))
+        prs = int(dict(cur.fetchone())["prs"] or 0)
+        cur.execute(
+            f"SELECT AVG(st.rpe) AS avg_rpe FROM gym_sets st "
+            f"JOIN gym_sessions s ON s.id = st.session_id "
+            f"WHERE s.date >= {ph} AND s.date < {ph} AND st.rpe IS NOT NULL",
+            (start_date, end_excl))
+        avg_rpe = dict(cur.fetchone())["avg_rpe"]
+    return {"sessions": int(row["n"] or 0), "volume_kg": round(float(row["vol"] or 0), 1),
+            "prs": prs, "avg_rpe": round(float(avg_rpe), 1) if avg_rpe is not None else None}
+
+
+def get_scout_week_summary(start_date, end_excl) -> dict:
+    """{new_saved, new_applied, stage_changes, followups_due} for the week."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+
+        def cnt(col):
+            cur.execute(
+                f"SELECT COUNT(*) AS n FROM scout_pipeline "
+                f"WHERE {col} >= {ph} AND {col} < {ph}", (start_date, end_excl))
+            return int(dict(cur.fetchone())["n"])
+
+        summary = {"new_saved": cnt("date_saved"), "new_applied": cnt("date_applied"),
+                   "stage_changes": cnt("date_stage_changed")}
+    summary["followups_due"] = len(get_scout_pipeline_reminders(7))
+    return summary
+
+
+def get_scent_week_summary(start_date, end_excl) -> dict:
+    """{wears, top} — wear count and the most-worn bottle name for the week."""
+    _ensure_fragrance_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT COUNT(*) AS n FROM fragrance_wears WHERE date >= {ph} AND date < {ph}",
+            (start_date, end_excl))
+        wears = int(dict(cur.fetchone())["n"])
+        cur.execute(
+            f"SELECT f.name AS name, COUNT(*) AS n FROM fragrance_wears w "
+            f"JOIN fragrances f ON f.id = w.fragrance_id "
+            f"WHERE w.date >= {ph} AND w.date < {ph} "
+            f"GROUP BY w.fragrance_id, f.name ORDER BY n DESC LIMIT 1",
+            (start_date, end_excl))
+        r = cur.fetchone()
+    return {"wears": wears, "top": (dict(r)["name"] if r else None)}
+
+
+def count_security_lockouts(start_iso) -> int:
+    """Lockout events (Sentinel security_alert episodics) since start_iso. Read
+    from episodic memory because auth_failures is pruned hourly and can't carry a
+    weekly count."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT COUNT(*) AS n FROM agent_memory_episodic "
+            f"WHERE event_type = 'security_alert' AND created_at >= {ph}", (start_iso,))
+        return int(dict(cur.fetchone())["n"])

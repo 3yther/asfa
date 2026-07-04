@@ -313,6 +313,18 @@ def weekly_review():
         logger.error(f"weekly review failed: {e}")
 
 
+@audited("summary", "weekly_digest")
+def weekly_digest():
+    """Tier 3 Part 5 — Sunday-evening cross-module Telegram digest. Idempotent
+    (skips if one already went out in the last 24h)."""
+    from services.digest import send_weekly_digest
+    try:
+        res = send_weekly_digest(force=False)
+        logger.info("weekly digest: %s", res)
+    except Exception as e:
+        logger.error(f"weekly digest failed: {e}")
+
+
 # ── Startup ────────────────────────────────────────────────────────────────────
 
 def start_scheduler():
@@ -337,6 +349,10 @@ def start_scheduler():
     sched.add_job(water_check, "interval", minutes=30)
     sched.add_job(poll_bot_trades, "interval", minutes=5)
     sched.add_job(weekly_review, "cron", day_of_week="sun", hour=18, minute=0)
+    # Tier 3 Part 5 — weekly Telegram digest, Sunday 18:00 Europe/London. Explicit
+    # tz: Railway runs UTC, and a bare 18:00 would drift an hour under BST.
+    sched.add_job(weekly_digest, "cron", day_of_week="sun", hour=18, minute=0,
+                  timezone="Europe/London", id="weekly_digest", replace_existing=True)
     # Daily production-DB backup at 03:00 Europe/London (quiet hours).
     sched.add_job(db_backup, "cron", hour=3, minute=0,
                   timezone="Europe/London", id="db_backup")

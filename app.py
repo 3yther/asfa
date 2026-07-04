@@ -2311,6 +2311,17 @@ def api_audit():
     return jsonify(db.get_audit_log(agent_id, limit))
 
 
+@app.route("/api/system/digest/send-now", methods=["POST"])
+@limiter.limit("10 per hour")
+def api_system_digest_send_now():
+    """Manually build + send the weekly Telegram digest now (Tier 3 Part 5).
+    CSRF-gated write, strict rate tier. force=True bypasses the 24h idempotence
+    guard so it's usable for testing."""
+    from services.digest import send_weekly_digest
+    result = send_weekly_digest(force=True)
+    return jsonify(result), (200 if result.get("ok") else 503)
+
+
 @app.route("/api/system/audit/verify")
 @limiter.limit("10 per hour")
 def api_system_audit_verify():
