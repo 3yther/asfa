@@ -1730,6 +1730,34 @@ def api_notifications_read():
 
 # ── Mission Control — gamified AI-agent ecosystem ──────────────────────────────
 
+# Tier 3 Part 4 — live agent movement. The Phaser roster (13 persona agents) and
+# the audit-log job agents are two separate namespaces; only these four personas
+# have a genuinely role-aligned background job that writes to the audit log, so
+# only they get live, audit-driven movement. No invented correspondences — every
+# other persona keeps its existing status-based movement. (See FLAGGED note.)
+_MC_AUDIT_BRIDGE = {
+    "quant": "quant_bot",    # trading — quant_bot polls bot trades
+    "sentinel": "sentinel",  # security / monitoring (same id in both namespaces)
+    "oracle": "scout",       # research / scanning / job hunting
+    "warden": "health",      # uptime / endpoint monitoring
+}
+_MC_ACTIVITY_WINDOW_MIN = 10  # an audit entry newer than this ⇒ agent is "working"
+
+
+def _mc_activity() -> dict:
+    """Per-persona live-work state derived from recent audit activity, keyed by
+    ROSTER id so the map can consume it directly. Only bridged personas appear;
+    the client maps the returned `action` to a room."""
+    recent = db.get_recent_audit_activity(_MC_ACTIVITY_WINDOW_MIN)
+    out = {}
+    for roster_id, audit_id in _MC_AUDIT_BRIDGE.items():
+        info = recent.get(audit_id)
+        if info:
+            out[roster_id] = {"working": True, "action": info["action"],
+                              "minutes_ago": info["minutes_ago"], "audit_agent": audit_id}
+    return out
+
+
 def _mc_live_data() -> dict:
     """Real ASFA data surfaced on the Mission Control dashboard. Every source is
     best-effort; the last good trading P&L is cached so the panel still shows a
@@ -1898,6 +1926,7 @@ def api_agents():
         "agents": agents,
         "live": live,
         "alerts": _mc_alerts(agents, live),
+        "activity": _mc_activity(),   # Tier 3 Part 4 — live audit-driven movement
     })
 
 
@@ -1986,6 +2015,30 @@ def api_agent_diary(agent_id):
         "summary": r.get("summary"),
         "stats": stats,
         "created_at": r.get("created_at"),
+    })
+
+
+@app.route("/api/agents/<agent_id>/detail")
+def api_agent_detail(agent_id):
+    """Live click-panel data for a Mission Control agent (Tier 3 Part 4): current
+    energy, its last diary line, and the last 5 audit rows. Resolves through the
+    audit bridge so a persona surfaces its background job's real telemetry."""
+    audit_id = _MC_AUDIT_BRIDGE.get(agent_id, agent_id)
+    energy = db.get_energy(audit_id) or db.get_energy(agent_id)
+    diary = (db.get_agent_reflections(audit_id, period="daily", limit=1)
+             or db.get_agent_reflections(agent_id, period="daily", limit=1))
+    diary_line = diary[0].get("summary") if diary else None
+    audit = [
+        {"action": r.get("action"), "outcome": r.get("outcome"),
+         "created_at": r.get("created_at"), "details": r.get("details")}
+        for r in db.get_audit_log(audit_id, limit=5)
+    ]
+    return jsonify({
+        "agent_id": agent_id,
+        "audit_agent": audit_id,
+        "energy": (energy.get("energy") if energy else None),
+        "diary_line": diary_line,
+        "audit": audit,
     })
 
 

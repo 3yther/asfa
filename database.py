@@ -1925,6 +1925,35 @@ def verify_audit_chain(batch_size: int = 500) -> dict:
     return {"valid": True, "total_entries": total, "first_broken_id": None}
 
 
+def get_recent_audit_activity(minutes: int = 10) -> dict:
+    """Latest audit action per agent, kept only if it landed within the last
+    `minutes`. Drives Mission Control's live "who's working right now" view
+    (Tier 3 Part 4). One query: MAX(id) per agent (id is monotonic with insertion
+    time). Returns {agent_id: {action, created_at, minutes_ago}}."""
+    _ensure_agent_data_tables()
+    out = {}
+    now = datetime.now()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT a.agent_id, a.action, a.created_at FROM agent_audit_log a "
+            "JOIN (SELECT agent_id, MAX(id) AS mid FROM agent_audit_log GROUP BY agent_id) b "
+            "ON a.id = b.mid")
+        for r in cur.fetchall():
+            r = dict(r)
+            ts = _audit_ts_str(r["created_at"])
+            try:
+                when = datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError):
+                continue
+            mins = (now - when).total_seconds() / 60.0
+            if 0 <= mins <= minutes:
+                out[r["agent_id"]] = {
+                    "action": r["action"], "created_at": ts,
+                    "minutes_ago": round(mins, 1)}
+    return out
+
+
 def get_audit_log(agent_id=None, limit=50):
     """Get audit log entries, optionally filtered by agent (newest first)."""
     _ensure_agent_data_tables()

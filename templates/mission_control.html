@@ -177,6 +177,17 @@
   .m-sub{font-size:.54rem;letter-spacing:2px;color:var(--green);text-transform:uppercase;margin:14px 0 6px;}
   .m-log{font-size:.56rem;line-height:1.7;max-height:140px;overflow-y:auto;background:#031007;padding:8px;}
   .m-log .ln .t{color:var(--cyan);}
+  /* Tier 3 Part 4 — live telemetry (energy / diary / audit) in the click panel */
+  .m-telemetry{background:#031007;padding:8px;font-size:.56rem;}
+  .m-tel-row{display:flex;align-items:center;gap:6px;margin-bottom:6px;}
+  .m-tel-k{color:var(--green);letter-spacing:1px;flex:0 0 44px;}
+  .m-tel-bar{flex:1;height:6px;background:#39ff1414;overflow:hidden;border-radius:2px;}
+  .m-tel-bar i{display:block;height:100%;width:0;background:var(--green);box-shadow:0 0 8px var(--green);transition:width .5s ease;}
+  .m-tel-v{flex:0 0 auto;color:#9ccf9c;}
+  .m-tel-diary{color:#8fb98f;line-height:1.6;margin:4px 0 8px;max-height:60px;overflow-y:auto;font-style:italic;}
+  .m-tel-audit .aln{color:#9ccf9c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .m-tel-audit .aln .t{color:var(--cyan);}
+  .m-tel-audit .aln.fail{color:var(--red);}
   .m-controls{display:flex;flex-direction:column;gap:10px;margin-top:14px;}
   .m-ctl-row{display:flex;gap:8px;align-items:center;}
   .m-ctl-row label{font-size:.52rem;color:var(--muted);letter-spacing:1px;width:64px;text-transform:uppercase;}
@@ -283,6 +294,14 @@
       <div class="m-stat"><div class="sv mono" id="m-won">0</div><div class="sk">Battles Won</div></div>
       <div class="m-stat"><div class="sv mono" id="m-lost">0</div><div class="sk">Battles Lost</div></div>
     </div>
+    <div class="m-sub">Live Telemetry</div>
+    <div class="m-telemetry" id="m-telemetry">
+      <div class="m-tel-row"><span class="m-tel-k">Energy</span>
+        <span class="m-tel-bar"><i id="m-energy-fill"></i></span>
+        <span class="m-tel-v mono" id="m-energy-val">—</span></div>
+      <div class="m-tel-diary" id="m-diary">—</div>
+      <div class="m-tel-audit" id="m-audit"></div>
+    </div>
     <div class="m-sub">Activity Log</div>
     <div class="m-log" id="m-log">…</div>
     <div class="m-controls">
@@ -351,22 +370,54 @@ const TASK_DESCRIPTIONS = {
 /* refreshTaskText() picks a new random task per active agent each poll. */
 function refreshTaskText(){
   MC.agents.forEach(a=>{
-    if(a.status==='active'){ const list=TASK_DESCRIPTIONS[a.id]||['working']; MC.taskText[a.id]=list[Math.floor(Math.random()*list.length)]; }
+    if(isWorking(a)){ const list=TASK_DESCRIPTIONS[a.id]||['working']; MC.taskText[a.id]=list[Math.floor(Math.random()*list.length)]; }
     else if(a.status==='locked') MC.taskText[a.id]='offline';
     else MC.taskText[a.id]='resting';
   });
 }
 function taskFor(a){ return MC.taskText[a.id] || (a.status==='locked'?'offline':a.status!=='active'?'resting':(TASK_DESCRIPTIONS[a.id]||['working'])[0]); }
-/* The room an agent is currently in, given its status. */
+/* The room an agent is currently in. Live audit activity (Tier 3 Part 4) wins:
+   a working agent walks to its action's mapped room; else active→its home room,
+   otherwise back to Quarters. */
 function currentRoomId(a){
   if(a.status==='locked' || !AGENT_ROOM[a.id]) return null;
+  const ar = auditRoomFor(a);
+  if(ar) return ar;
   return a.status==='active' ? AGENT_ROOM[a.id] : 'quarters';
 }
 function roomColor(id){ return ROOMS[id] ? ROOMS[id].color : COL.green; }
 function agentColor(a){ const rid=AGENT_ROOM[a.id]; return rid ? roomColor(rid) : (a.status==='locked'?0x333355:COL.green); }
 
+/* ── Tier 3 Part 4: live audit-driven movement ──────────────────────────── */
+/* Explicit action-category → room map, derived from the real audit_log action
+   strings. Anything unmapped falls through to 'nexus' (the Ops hub) so an agent
+   always has a defined destination. */
+const ACTION_ROOM = {
+  // trading / P&L
+  'poll_bot_trades':'war', 'scan_signals':'war', 'execute_skill:scan_signals':'war',
+  // monitoring / uptime / incident
+  'heartbeat_check':'incident', 'proactive_check':'incident', 'check_endpoint':'incident',
+  'execute_skill:check_endpoint':'incident', 'security_alert':'incident',
+  // research / scanning / job hunting
+  'daily_scan':'research', 'scan_jobs':'research', 'execute_skill:scan_jobs':'research',
+  'execute_skill:apply_for_role':'research', 'execute_skill:filter_results':'research',
+  // comms / briefing / summaries
+  'morning_briefing':'comms', 'daily_summary':'comms', 'execute_skill:generate_briefing':'comms',
+  // archives / persistence
+  'obsidian_sync':'archives', 'db_backup':'archives',
+};
+/* The room an agent's *live* audit activity puts it in, or null if not currently
+   working from the audit log. */
+function auditRoomFor(a){
+  const act = MC.activity && MC.activity[a.id];
+  if(!act || !act.working) return null;
+  return ACTION_ROOM[act.action] || 'nexus';   // default: Ops hub
+}
+/* Working = manually active OR live audit activity (glow + deployed either way). */
+function isWorking(a){ return a.status==='active' || !!auditRoomFor(a); }
+
 const WALK_SPEED = 70;
-const MC = { agents:[], live:null, alerts:[], missions:[], chars:{}, rooms:{}, taskText:{}, scene:null, failCount:0, ready:false };
+const MC = { agents:[], live:null, alerts:[], missions:[], chars:{}, rooms:{}, taskText:{}, activity:{}, scene:null, failCount:0, ready:false };
 
 /* DB-origin strings (agent names/roles, mission text, log messages posted via
    the API) get interpolated into innerHTML below — escape them all. */
@@ -377,6 +428,7 @@ const J = { 'Content-Type':'application/json' };
 const API = {
   agents:         ()       => fetch('/api/agents',{credentials:'include'}).then(r=>r.json()),
   log:            (id)     => fetch('/api/agents/'+encodeURIComponent(id)+'/log',{credentials:'include'}).then(r=>r.json()),
+  detail:         (id)     => fetch('/api/agents/'+encodeURIComponent(id)+'/detail',{credentials:'include'}).then(r=>r.json()),
   awardXp:        (id,amt) => fetch('/api/agents/'+encodeURIComponent(id)+'/xp',{method:'POST',credentials:'include',headers:J,body:JSON.stringify({amount:amt})}).then(r=>r.json()),
   setStatus:      (id,st)  => fetch('/api/agents/'+encodeURIComponent(id)+'/status',{method:'POST',credentials:'include',headers:J,body:JSON.stringify({status:st})}).then(r=>r.json()),
   missions:       ()       => fetch('/api/missions/today',{credentials:'include'}).then(r=>r.json()),
@@ -451,7 +503,14 @@ class FacilityScene extends Phaser.Scene {
     this.events.once('shutdown', ()=>this.scale.off('resize', this._onResize));
 
     this.refresh(true);
-    this.time.addEvent({delay:30000, loop:true, callback:()=>this.refresh(false)});
+    // Tier 3 Part 4 — poll every 12s for live audit-driven movement (one request
+    // per tick: /api/agents carries roster + activity). Paused while the tab is
+    // hidden so a backgrounded tab never burns the rate budget.
+    this._pollEvent = this.time.addEvent({delay:12000, loop:true, callback:()=>this.refresh(false)});
+    this._onVis = ()=>{ if(this._pollEvent){ this._pollEvent.paused = document.hidden; }
+      if(!document.hidden){ this.refresh(false); } };
+    document.addEventListener('visibilitychange', this._onVis);
+    this.events.once('shutdown', ()=>document.removeEventListener('visibilitychange', this._onVis));
     this.time.addEvent({delay:3500, loop:true, callback:()=>this.emitZzz()});
     ROOM_IDS.filter(id=>id!=='nexus').forEach((id,i)=>this.time.delayedCall(i*600, ()=>this.spawnPulse(id)));
   }
@@ -895,6 +954,7 @@ class FacilityScene extends Phaser.Scene {
     const wasOffline=MC.failCount>0; MC.failCount=0; setOffline(false);
     const prev=Object.fromEntries(MC.agents.map(a=>[a.id,a]));
     MC.agents=data.agents; MC.live=data.live; MC.alerts=data.alerts||[];
+    MC.activity=data.activity||{};   // Tier 3 Part 4 — live audit-driven movement
     MC.ready=true; refreshTaskText();
 
     const nx=data.agents.find(a=>a.id==='nexus'); if(nx&&this.nexusLevelTxt) this.nexusLevelTxt.setText('LV '+nx.level);
@@ -902,7 +962,7 @@ class FacilityScene extends Phaser.Scene {
     // room active states + counts
     const target=this.assignSpots();
     const roomActive={}; const roomCnt={};
-    data.agents.forEach(a=>{ const rid=currentRoomId(a); if(!rid) return; roomCnt[rid]=(roomCnt[rid]||0)+1; if(a.status==='active') roomActive[rid]=true; });
+    data.agents.forEach(a=>{ const rid=currentRoomId(a); if(!rid) return; roomCnt[rid]=(roomCnt[rid]||0)+1; if(isWorking(a)) roomActive[rid]=true; });
     Object.values(MC.rooms).forEach(room=>{
       if(room.id!=='nexus') this.styleRoom(room, !!roomActive[room.id]);
       if(room.id==='quarters'){ this.updateQuartersBadge(room, roomCnt.quarters||0); }
@@ -1064,6 +1124,22 @@ function openModal(id){
   $('m-log').textContent='Loading…';
   API.log(id).then(rows=>{ $('m-log').innerHTML=(rows&&rows.length)?rows.slice(0,8).map(r=>{ const t=(r.timestamp||'').slice(11,16); const xp=r.xp_earned?` <span style="color:#ffd60a">+${Number(r.xp_earned)||0}</span>`:'';
     return `<div class="ln"><span class="t">[${esc(t)}]</span> ${esc(r.message||'')}${xp}</div>`; }).join(''):'<div class="ln" style="color:#5a7a5a">No log entries yet.</div>'; }).catch(()=>{ $('m-log').textContent='Log unavailable.'; });
+  loadTelemetry(id);
+}
+
+/* Tier 3 Part 4 — energy + last diary line + last 5 audit rows for the panel. */
+function loadTelemetry(id){
+  const fill=$('m-energy-fill'), val=$('m-energy-val'), diary=$('m-diary'), audit=$('m-audit');
+  if(fill) fill.style.width='0'; if(val) val.textContent='…'; if(diary) diary.textContent='…'; if(audit) audit.innerHTML='';
+  API.detail(id).then(d=>{
+    if(modalAgentId!==id) return;   // panel moved on
+    const e = (d && d.energy!=null) ? Math.max(0,Math.min(100,d.energy)) : null;
+    if(fill) fill.style.width=(e==null?0:e)+'%';
+    if(val) val.textContent=(e==null?'n/a':Math.round(e));
+    if(diary){ const line=(d&&d.diary_line)?String(d.diary_line).split('\n').filter(l=>l.trim()&&!l.trim().startsWith('#'))[0]:''; diary.textContent=line||'No diary entry yet.'; }
+    if(audit){ const rows=(d&&d.audit)||[]; audit.innerHTML=rows.length?rows.map(r=>{ const t=String(r.created_at||'').slice(11,16); const bad=r.outcome&&r.outcome!=='success';
+      return `<div class="aln${bad?' fail':''}"><span class="t">[${esc(t)}]</span> ${esc(r.action||'')} · ${esc(r.outcome||'')}</div>`; }).join(''):'<div class="aln" style="color:#5a7a5a">No audit activity.</div>'; }
+  }).catch(()=>{ if(val) val.textContent='n/a'; if(diary) diary.textContent='Telemetry unavailable.'; });
 }
 function closeModal(){ $('modal').classList.remove('show'); modalAgentId=null; }
 $('modal-close').onclick=closeModal;
