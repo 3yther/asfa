@@ -34,28 +34,32 @@ const $  = (s, r = document) => r.querySelector(s);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
+/* Inline monochrome camera icon (currentColor) — replaces the camera emoji on
+   the per-bottle upload button so the shelf reads clean. */
+const IC_CAMERA = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3"/></svg>';
+
 function toast(msg, ms = 2200) {
   const t = el("div", "frag-toast", esc(msg));
   document.body.appendChild(t);
   setTimeout(() => t.remove(), ms);
 }
 
-/* Tier 3 Part 2: rate a worn pairing 👍/👎. Recommendations learn from the
+/* Tier 3 Part 2: rate a worn pairing up/down. Recommendations learn from the
    last few ratings (net nudge, never an override). */
 async function ratePairing(pairingId, rating) {
   const res = await apiPost(`${API}/pairings/${pairingId}/rate`, { rating });
   return res && res.net;  // updated clamped net (-3..+3)
 }
 
-/* Optional 👍/👎 prompt after a wear that used a pairing (auto-dismisses). */
+/* Optional up/down prompt after a wear that used a pairing (auto-dismisses). */
 function ratingPrompt(pairingId, name) {
   if (!pairingId) return;
   const t = el("div", "frag-toast frag-rate-toast");
   t.innerHTML =
     `<span class="frt-q">Rate today's ${esc(name)} routine?</span>
      <div class="frag-rate-btns">
-       <button class="frag-rate-btn" data-r="1" aria-label="thumbs up">👍</button>
-       <button class="frag-rate-btn" data-r="-1" aria-label="thumbs down">👎</button>
+       <button class="frag-rate-btn" data-r="1" aria-label="rate up">+</button>
+       <button class="frag-rate-btn" data-r="-1" aria-label="rate down">−</button>
      </div>`;
   document.body.appendChild(t);
   let done = false;
@@ -65,18 +69,18 @@ function ratingPrompt(pairingId, name) {
     t.querySelectorAll(".frag-rate-btn").forEach(x => x.disabled = true);
     try {
       await ratePairing(pairingId, Number(b.dataset.r));
-      t.querySelector(".frt-q").textContent = b.dataset.r === "1" ? "Noted 👍" : "Noted 👎";
+      t.querySelector(".frt-q").textContent = b.dataset.r === "1" ? "Rated up" : "Rated down";
     } catch (e) { t.querySelector(".frt-q").textContent = "Couldn't save rating"; }
     setTimeout(() => t.remove(), 1200);
   }));
 }
 
 const ROUTINE_STEPS = [
-  ["shower_gel",  "🚿", "Wash"],
-  ["body_scrub",  "🧽", "Scrub"],
-  ["body_lotion", "🧴", "Lotion"],
-  ["body_oil",    "💧", "Oil"],
-  ["deodorant",   "🛡", "Deo"],
+  ["shower_gel",  "Wash"],
+  ["body_scrub",  "Scrub"],
+  ["body_lotion", "Lotion"],
+  ["body_oil",    "Oil"],
+  ["deodorant",   "Deo"],
 ];
 
 const timeBucket = () => {
@@ -116,17 +120,18 @@ function contextLine(ctx) {
 
 function routineChecklist(routine, compact) {
   const steps = [];
-  for (const [key, icon, label] of ROUTINE_STEPS) {
+  for (const [key, label] of ROUTINE_STEPS) {
     const p = routine && routine[key];
     if (!p) continue;
-    steps.push(`<div class="routine-step"><span class="rs-icon">${icon}</span>
+    steps.push(`<div class="routine-step">
       <span class="rs-text"><b>${esc(p.brand)}</b> ${esc(p.name)}</span>
       <span class="rs-label mono">${label}</span></div>`);
   }
   if (routine && routine.layering_fragrance) {
-    steps.push(`<div class="routine-step rs-layer"><span class="rs-icon">↻</span>
+    steps.push(`<div class="routine-step rs-layer">
       <span class="rs-text"><b>Layer:</b> ${esc(routine.layering_fragrance.name)}
-      ${routine.layering_notes ? `<small class="muted-sub"> — ${esc(routine.layering_notes)}</small>` : ""}</span></div>`);
+      ${routine.layering_notes ? `<small class="muted-sub"> — ${esc(routine.layering_notes)}</small>` : ""}</span>
+      <span class="rs-label mono">Layer</span></div>`);
   }
   return steps.join("") || `<div class="muted-sub">No routine on file.</div>`;
 }
@@ -148,13 +153,13 @@ function renderHero(rec) {
     <div class="hero-grid">
       <div class="hero-bottle">${bottleArt(f, "hero-img")}</div>
       <div class="hero-main">
-        <div class="hero-name">${f.is_signature ? "⭐ " : ""}${esc(f.name)}</div>
+        <div class="hero-name">${f.is_signature ? "★ " : ""}${esc(f.name)}</div>
         <div class="hero-brand mono">${esc(f.brand)} · ${esc(f.concentration || "")}</div>
         <p class="hero-reason">${esc(rec.reason)}</p>
         <div class="hero-routine">
           <div class="routine-head mono">FULL ROUTINE</div>
           ${routineChecklist(rec.routine)}
-          <div class="routine-step rs-final"><span class="rs-icon">💨</span>
+          <div class="routine-step rs-final">
             <span class="rs-text"><b>${esc(f.name)}</b></span>
             <span class="rs-label mono">Spray</span></div>
         </div>
@@ -188,7 +193,7 @@ async function wearFragrance(id, btn, occasion, pairingId) {
       occasion: occasion || OCCASION || undefined,
     });
     confettiLite();
-    toast(`💨 ${updated.name} logged — smell great out there`);
+    toast(`${updated.name} logged — smell great out there`);
     if (pairingId) ratingPrompt(pairingId, updated.name);
     await refreshShelf();
     loadStats();
@@ -228,7 +233,7 @@ function renderShelf() {
         <div class="bottle-reflection"></div>
       </div>
       <div class="bottle-meta">
-        <div class="bottle-name">${f.is_signature ? '<span class="sig-star" title="Signature">⭐</span> ' : ""}${esc(f.name)}</div>
+        <div class="bottle-name">${f.is_signature ? '<span class="sig-star" title="Signature">★</span> ' : ""}${esc(f.name)}</div>
         <div class="bottle-brand mono">${esc(f.brand)}</div>
         <div class="bottle-chips">
           <span class="chip chip-conc">${esc(f.concentration || "?")}</span>
@@ -236,7 +241,7 @@ function renderShelf() {
           <span class="chip ${neglected ? "chip-neglect" : "chip-worn"}">${esc(wornAgo(f.days_since_worn))}</span>
         </div>
       </div>
-      <button class="bottle-cam" title="Upload bottle photo" aria-label="Upload photo of ${esc(f.name)}">📷</button>
+      <button class="bottle-cam" title="Upload bottle photo" aria-label="Upload photo of ${esc(f.name)}">${IC_CAMERA}</button>
       <div class="bottle-upload-progress" hidden><div class="bup-bar"></div></div>`);
     card.addEventListener("click", (e) => {
       if (e.target.closest(".bottle-cam")) { pickImage(f.id, card); return; }
@@ -255,7 +260,7 @@ async function loadStats() {
     const negl = s.neglected.length
       ? esc(s.neglected.map(n => n.days_since_worn == null
           ? `${n.name} (never)` : `${n.name} (${n.days_since_worn}d)`).slice(0, 2).join(", "))
-      : "none 🎉";
+      : "none";
     const maxShare = Math.max(...s.rotation.map(r => r.share), 0);
     const bars = s.rotation.map(r => {
       const h = maxShare ? Math.max(8, Math.round((r.share / maxShare) * 100)) : 8;
@@ -312,7 +317,7 @@ async function openDetail(id) {
     <div class="fd-top">
       <div class="fd-img-wrap">${bottleArt(f, "fd-img")}</div>
       <div class="fd-id">
-        <div class="fd-name">${f.is_signature ? "⭐ " : ""}${esc(f.name)}</div>
+        <div class="fd-name">${f.is_signature ? "★ " : ""}${esc(f.name)}</div>
         <div class="fd-brand mono">${esc(f.brand)}</div>
         <div class="bottle-chips">
           <span class="chip chip-conc">${esc(f.concentration || "?")}</span>
@@ -337,8 +342,8 @@ async function openDetail(id) {
       ${f.pairing && f.pairing.id ? `
       <div class="fd-rate">
         <span>Rate this combo:</span>
-        <button class="frag-rate-btn${f.pairing.rating_net > 0 ? " frb-active" : ""}" data-r="1" aria-label="thumbs up">👍</button>
-        <button class="frag-rate-btn${f.pairing.rating_net < 0 ? " frb-active" : ""}" data-r="-1" aria-label="thumbs down">👎</button>
+        <button class="frag-rate-btn${f.pairing.rating_net > 0 ? " frb-active" : ""}" data-r="1" aria-label="rate up">+</button>
+        <button class="frag-rate-btn${f.pairing.rating_net < 0 ? " frb-active" : ""}" data-r="-1" aria-label="rate down">−</button>
         <span class="fd-rate-net" id="fd-rate-net">${f.pairing.rating_net > 0 ? "+" : ""}${f.pairing.rating_net || 0}</span>
       </div>` : ""}
       <button class="btn btn-primary" id="fd-wear-btn">✓ Wear with this routine</button>
@@ -369,7 +374,7 @@ async function openDetail(id) {
           body.querySelectorAll(".fd-rate .frag-rate-btn").forEach(x => x.classList.remove("frb-active"));
           if (net > 0) body.querySelector('.fd-rate .frag-rate-btn[data-r="1"]').classList.add("frb-active");
           else if (net < 0) body.querySelector('.fd-rate .frag-rate-btn[data-r="-1"]').classList.add("frb-active");
-          toast(b.dataset.r === "1" ? "👍 noted" : "👎 noted");
+          toast(b.dataset.r === "1" ? "Rated up" : "Rated down");
         } catch (e) { toast("Couldn't save rating"); }
       }));
   }
@@ -431,7 +436,7 @@ input && input.addEventListener("change", async () => {
     if (frag) frag.image_url = imageUrl;
     renderShelf();
     loadHero();
-    toast("📷 Photo saved");
+    toast("Photo saved");
   } catch (e) {
     toast(`Upload failed: ${e.message}`);
   } finally {
@@ -517,7 +522,7 @@ function initAddFragrance() {
     const btn = $("#fa-save"); btn.disabled = true;
     try {
       const frag = await apiPost(API, body);
-      toast(`✅ ${frag.name} added`);
+      toast(`Added ${frag.name}`);
       form.reset(); close();
       await refreshShelf(); loadStats();
     } catch (err) { toast("Could not add bottle"); }

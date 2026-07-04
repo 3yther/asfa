@@ -123,7 +123,8 @@ limiter = init_rate_limiter(app)
 # only authorises the *server* to reach those accounts — it does not gate users.
 APP_PASSWORD = os.environ.get("APP_PASSWORD")
 # Endpoints reachable without a session. Everything else requires login.
-_PUBLIC_ENDPOINTS = {"login", "static", "mission_control_health", "api_system_health"}
+_PUBLIC_ENDPOINTS = {"login", "static", "mission_control_health", "api_system_health",
+                     "api_csp_report"}
 
 
 @app.before_request
@@ -2528,6 +2529,12 @@ def scout_daily_scan():
 # YouTube embeds in the gym video modal. This policy allows all of those, but
 # until it's verified against every screen in a real browser it observes
 # rather than enforces (violations show in DevTools, nothing breaks).
+#
+# Tier 4 Part 4: a report-uri now points at /api/csp-report so violations are
+# captured server-side (see api_csp_report). The header stays Report-Only until
+# real reports confirm nothing of ours is blocked — flipping to enforcement
+# blind, without ever seeing a report, is a real risk given ASFA's inline-script
+# and third-party-CDN surface. Revisit the flip once data has accumulated.
 _CSP_REPORT_ONLY = (
     "default-src 'self'; "
     "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
@@ -2537,8 +2544,33 @@ _CSP_REPORT_ONLY = (
     "connect-src 'self'; "
     "frame-src https://www.youtube.com; "
     "object-src 'none'; "
-    "base-uri 'self'"
+    "base-uri 'self'; "
+    "report-uri /api/csp-report"
 )
+
+
+@app.route("/api/csp-report", methods=["POST"])
+@limiter.limit("60 per minute")
+def api_csp_report():
+    """Sink for CSP violation reports. Browsers POST these unauthenticated with
+    content-type application/csp-report, so this route is exempt from the auth
+    gate and CSRF (registered in _PUBLIC_ENDPOINTS). Reports accumulate in
+    csp_reports so a future flip to enforcement can be made against evidence.
+    Always returns 204 — a report sink must never surface errors to the browser."""
+    data = request.get_json(force=True, silent=True) or {}
+    report = data.get("csp-report") or data.get("csp_report") or data
+    if isinstance(report, dict):
+        try:
+            db.log_csp_report(
+                directive=(report.get("effective-directive")
+                           or report.get("violated-directive") or "")[:200],
+                blocked_uri=(report.get("blocked-uri") or "")[:500],
+                document_uri=(report.get("document-uri") or "")[:500],
+                raw=json.dumps(report)[:4000],
+            )
+        except Exception as e:
+            logger.error("csp report log failed: %s", e)
+    return ("", 204)
 
 
 @app.after_request

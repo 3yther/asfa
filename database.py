@@ -182,6 +182,14 @@ def init_db():
                 key TEXT PRIMARY KEY,
                 value TEXT
             )""",
+            """CREATE TABLE IF NOT EXISTS csp_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                directive TEXT,
+                blocked_uri TEXT,
+                document_uri TEXT,
+                raw TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )""",
         ]
         # Postgres uses SERIAL not AUTOINCREMENT
         for stmt in stmts:
@@ -331,6 +339,29 @@ def get_spending(days: int = 7):
             cur.execute(
                 "SELECT * FROM spending WHERE date >= date('now', ?) ORDER BY date DESC",
                 (f"-{days} days",))
+        return [dict(r) for r in cur.fetchall()]
+
+
+# ── CSP violation reports ───────────────────────────────────────────────────────
+# Sink for Content-Security-Policy-Report-Only violations (Tier 4 Part 4). The
+# policy is still observe-only; these rows accumulate real violation data so a
+# flip to enforcement can be made against evidence rather than blind.
+
+def log_csp_report(directive, blocked_uri, document_uri, raw):
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"INSERT INTO csp_reports (directive, blocked_uri, document_uri, raw) "
+            f"VALUES ({ph},{ph},{ph},{ph})",
+            (directive, blocked_uri, document_uri, raw))
+
+
+def get_csp_reports(limit: int = 100) -> list:
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM csp_reports ORDER BY id DESC LIMIT {ph}", (limit,))
         return [dict(r) for r in cur.fetchall()]
 
 

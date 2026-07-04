@@ -38,3 +38,22 @@ set the token in that entry's `env`:
 }
 ```
 Then restart Claude Desktop. Leaving `ASFA_MCP_TOKEN` empty keeps writes off.
+
+## `import_renpho.py` — Renpho CSV import → `body_composition`
+
+One-off bulk loader for the Renpho app's "Export data" CSV (Renpho has no public
+API), so scans don't have to be retyped through the manual-entry form. Dedups on
+`date_scanned` (one row per day, existing dates skipped, never overwritten) and
+reuses `db.upsert_body_composition` for the insert.
+
+```bash
+python scripts/import_renpho.py <export.csv>          # DRY RUN on a throwaway copy
+python scripts/import_renpho.py <export.csv> --live   # write to the real local asfa.db
+```
+
+Default is a dry run against a temp copy of `asfa.db` — a first run can't mutate
+real data. It prints rows read / inserted / skipped / failed-to-parse.
+
+**Column mapping is UNVERIFIED** against a real export (built from Renpho's
+commonly-documented headers). On first use, check your file's header row against
+`COLUMN_MAP` at the top of the script and adjust the candidate lists there.
