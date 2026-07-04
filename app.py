@@ -6,10 +6,12 @@ import hmac
 import io
 import json
 import logging
+import math
 import os
 import re
 import secrets
 import sys
+import time
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
@@ -884,6 +886,9 @@ def api_gym_deload_check():
     return jsonify(db.get_deload_check())
 
 
+_TRAINER_COOLDOWN_SECONDS = 10
+
+
 @app.route("/api/gym/trainer", methods=["POST"])
 def api_gym_trainer():
     """AI fitness-trainer chat. Reuses the shared Anthropic client in
@@ -894,6 +899,22 @@ def api_gym_trainer():
     message = (d.get("message") or "").strip()
     if not message:
         return jsonify({"error": "message is required"}), 400
+
+    # Tier 5 Part 3: soft per-session cooldown on top of the existing 20/hr,5/min
+    # limits — at most one Claude-backed trainer call every 10s. Cheap defence for
+    # Claude spend that degrades gracefully (429 + retry_in) instead of erroring.
+    now = time.time()
+    last = session.get("last_trainer_call_at", 0)
+    elapsed = now - last
+    if elapsed < _TRAINER_COOLDOWN_SECONDS:
+        retry_in = max(1, math.ceil(_TRAINER_COOLDOWN_SECONDS - elapsed))
+        return jsonify({
+            "cooling_down": True,
+            "retry_in": retry_in,
+            "error": f"Trainer is cooling down — try again in {retry_in}s",
+        }), 429
+    session["last_trainer_call_at"] = now
+
     context = d.get("context") or {}
     reply = ai.gym_coach_reply(message, context)
     return jsonify({"reply": reply})
@@ -2308,6 +2329,32 @@ def api_scout_analyze_cv(pid):
             "nice_to_have": [],
             "match_analysis_at": analyzed_at,
         })
+
+    # Tier 5 Part 3: soft per-job daily cap. The hash cache already dedupes an
+    # unchanged (CV, job) pair; this catches the edge case where the description
+    # is edited slightly (new hash → miss) and re-run repeatedly. At most one real
+    # Claude analysis per job per 24h — otherwise return the last stored result.
+    last_at = job.get("match_analysis_at")
+    if last_at and job.get("cv_match_score") is not None:
+        try:
+            recent = datetime.now() - datetime.fromisoformat(last_at) < timedelta(hours=24)
+        except (ValueError, TypeError):
+            recent = False
+        if recent:
+            try:
+                last_missing = json.loads(job.get("missing_keywords") or "[]")
+            except (ValueError, TypeError):
+                last_missing = []
+            return jsonify({
+                "ok": True,
+                "throttled": True,
+                "id": pid,
+                "cv_match_score": job.get("cv_match_score"),
+                "missing_keywords": last_missing,
+                "required": [],
+                "nice_to_have": [],
+                "match_analysis_at": last_at,
+            })
 
     result = ai.analyze_cv_match(cv_text, job_description)
     if not result.get("ok"):

@@ -1723,8 +1723,22 @@ async function submitTrainer(e) {
   trainerAppend("you", message);
   const thinking = trainerAppend("coach", "…");
   try {
-    const res = await apiPost(`${API}/trainer`, { message, context: buildTrainerContext(message) });
-    thinking.textContent = res.reply || "No reply.";
+    // Raw fetch (not apiPost) so we can read the 429 cooldown body. The global
+    // _csrf patch still adds the CSRF header to this fetch.
+    const r = await fetch(`${API}/trainer`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, context: buildTrainerContext(message) }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 429 && data.cooling_down) {
+      thinking.remove();
+      toast(`Trainer is cooling down — try again in ${data.retry_in}s`);
+    } else if (!r.ok) {
+      thinking.textContent = "Trainer unavailable right now.";
+    } else {
+      thinking.textContent = data.reply || "No reply.";
+    }
   } catch (err) {
     thinking.textContent = "Trainer unavailable right now.";
   }
