@@ -320,6 +320,33 @@
 .fd-rate { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: .75rem; color: var(--muted); }
 .fd-rate .fd-rate-net { margin-left: auto; font-family: monospace; }
 
+/* ── Add-fragrance modal + FragDB autocomplete (Tier 3 Part 6) ──────────── */
+.shelf-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.fa-body { padding: 4px 2px; }
+.fa-title { color: var(--accent, #00d9ff); letter-spacing: 2px; margin-bottom: 4px; }
+.fa-label { display: block; font-size: .72rem; color: var(--muted); margin-top: 10px; }
+.fa-label input, .fa-label textarea {
+  display: block; width: 100%; margin-top: 4px; padding: 8px 10px;
+  background: rgba(0,217,255,.05); border: 1px solid rgba(0,217,255,.25);
+  border-radius: var(--radius); color: var(--text); font-size: .85rem; font-family: inherit;
+}
+.fa-label input:focus, .fa-label textarea:focus { outline: none; border-color: var(--accent, #00d9ff); }
+.fa-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fa-actions { margin-top: 16px; }
+.fa-ac-wrap { position: relative; }
+.fa-ac {
+  position: absolute; left: 0; right: 0; top: 100%; z-index: 20;
+  max-height: 240px; overflow-y: auto; margin-top: 2px;
+  background: rgba(6,11,18,.98); border: 1px solid rgba(0,217,255,.4);
+  border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,.5);
+}
+.fa-ac-item { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid rgba(0,217,255,.08); }
+.fa-ac-item:last-child { border-bottom: none; }
+.fa-ac-item:hover, .fa-ac-item.active { background: rgba(0,217,255,.14); }
+.fa-ac-name { font-size: .82rem; color: var(--text); }
+.fa-ac-brand { font-size: .68rem; color: var(--muted); }
+@media (max-width: 480px) { .fa-row { grid-template-columns: 1fr; } }
+
 .frag-confetti {
   position: fixed; bottom: 30%; z-index: 95;
   width: 7px; height: 7px; border-radius: 1px;

@@ -457,9 +457,78 @@ function confettiLite() {
 }
 
 /* ── boot ─────────────────────────────────────────────────────────────── */
+/* ── 6. Add fragrance — FragDB name autocomplete + prefill (Tier 3 Part 6) ── */
+function initAddFragrance() {
+  const overlay = $("#frag-add-overlay"), openBtn = $("#frag-add-btn");
+  if (!overlay || !openBtn) return;
+  const form = $("#frag-add-form"), ac = $("#fa-ac"), nameEl = $("#fa-name");
+  let items = [], idx = -1, timer = null;
+
+  const hideAc = () => { ac.hidden = true; ac.innerHTML = ""; items = []; idx = -1; };
+  const open = () => { overlay.hidden = false; document.body.classList.add("frag-noscroll"); nameEl.focus(); };
+  const close = () => { overlay.hidden = true; document.body.classList.remove("frag-noscroll"); hideAc(); };
+  openBtn.addEventListener("click", open);
+  $("#frag-add-close").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !overlay.hidden) close(); });
+
+  function render(list) {
+    items = list; idx = -1;
+    if (!list.length) { hideAc(); return; }
+    ac.innerHTML = list.map((it, i) =>
+      `<div class="fa-ac-item" data-i="${i}"><div class="fa-ac-name">${esc(it.name)}</div>
+       <div class="fa-ac-brand">${esc(it.brand || "")}${it.concentration ? " · " + esc(it.concentration) : ""}</div></div>`).join("");
+    ac.hidden = false;
+  }
+  function highlight() { ac.querySelectorAll(".fa-ac-item").forEach((e, i) => e.classList.toggle("active", i === idx)); }
+  function pick(i) {
+    const it = items[i]; if (!it) return;
+    nameEl.value = it.name || "";
+    $("#fa-brand").value = it.brand || "";
+    $("#fa-conc").value = it.concentration || "";
+    $("#fa-notes").value = it.notes || "";
+    if (it.accords && !$("#fa-vibe").value) $("#fa-vibe").value = String(it.accords).toLowerCase();
+    hideAc();
+  }
+  ac.addEventListener("click", (e) => { const it = e.target.closest(".fa-ac-item"); if (it) pick(Number(it.dataset.i)); });
+  nameEl.addEventListener("input", () => {
+    const q = nameEl.value.trim();
+    clearTimeout(timer);
+    if (q.length < 2) { hideAc(); return; }
+    timer = setTimeout(async () => {
+      try { render(await apiGet(`${API}/reference/search?q=${encodeURIComponent(q)}`)); }
+      catch (e) { hideAc(); }
+    }, 180);
+  });
+  nameEl.addEventListener("keydown", (e) => {
+    if (ac.hidden) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); idx = Math.min(idx + 1, items.length - 1); highlight(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); idx = Math.max(idx - 1, 0); highlight(); }
+    else if (e.key === "Enter" && idx >= 0) { e.preventDefault(); pick(idx); }
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const val = (id) => $(id).value.trim();
+    const body = { name: nameEl.value.trim(), brand: val("#fa-brand"), concentration: val("#fa-conc"),
+      notes: val("#fa-notes"), vibe: val("#fa-vibe"), best_seasons: val("#fa-seasons"),
+      time_of_day: val("#fa-time"), occasions: val("#fa-occ") };
+    if (!body.name || !body.brand) { toast("Name and brand required"); return; }
+    const btn = $("#fa-save"); btn.disabled = true;
+    try {
+      const frag = await apiPost(API, body);
+      toast(`✅ ${frag.name} added`);
+      form.reset(); close();
+      await refreshShelf(); loadStats();
+    } catch (err) { toast("Could not add bottle"); }
+    finally { btn.disabled = false; }
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   initPills();
   initDetailClose();
+  initAddFragrance();
   refreshShelf().catch(() => toast("Could not load collection"));
   loadHero();
   loadStats();

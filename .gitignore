@@ -18,3 +18,7 @@ repomix-output.xml
 cookies.txt
 static/uploads/fragrances/
 static/uploads/gym-photos/
+# FragDB reference dataset (Tier 3 Part 6) — downloaded locally, never committed
+scripts/data/
+*.db-wal
+*.db-shm

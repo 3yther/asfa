@@ -1016,9 +1016,36 @@ def _fragrance_recommendation(occasion=None, hour=None, temp_c=None, condition=N
     }
 
 
-@app.route("/api/fragrances")
+@app.route("/api/fragrances", methods=["GET", "POST"])
 def api_fragrances():
+    if request.method == "POST":
+        # Tier 3 Part 6 — add a bottle (CSRF-gated). Prefill comes from the FragDB
+        # reference lookup, but the user can edit every field before saving.
+        d = request.get_json(force=True) or {}
+        name = (d.get("name") or "").strip()
+        brand = (d.get("brand") or "").strip()
+        if not name or not brand:
+            return jsonify({"error": "name and brand required"}), 400
+        frag = db.create_fragrance(
+            name, brand, notes=(d.get("notes") or None),
+            concentration=(d.get("concentration") or None),
+            vibe=(d.get("vibe") or None), best_seasons=(d.get("best_seasons") or None),
+            time_of_day=(d.get("time_of_day") or None),
+            occasions=(d.get("occasions") or None),
+            longevity_hrs=d.get("longevity_hrs"))
+        if not frag:
+            return jsonify({"error": "could not create fragrance"}), 400
+        return jsonify(frag), 201
     return jsonify(db.get_fragrances())
+
+
+@app.route("/api/fragrances/reference/search")
+def api_fragrance_reference_search():
+    """FragDB name autocomplete (Tier 3 Part 6): ?q= → matching reference bottles
+    with notes/accords to prefill the add-fragrance form."""
+    q = request.args.get("q", "")
+    limit = request.args.get("limit", 8, type=int)
+    return jsonify(db.search_fragrance_reference(q, min(max(limit, 1), 20)))
 
 
 @app.route("/api/fragrances/stats")

@@ -4600,3 +4600,126 @@ def count_security_lockouts(start_iso) -> int:
             f"SELECT COUNT(*) AS n FROM agent_memory_episodic "
             f"WHERE event_type = 'security_alert' AND created_at >= {ph}", (start_iso,))
         return int(dict(cur.fetchone())["n"])
+
+
+# ── FragDB reference lookup (Tier 3 Part 6) ──────────────────────────────────
+# A large read-only reference table (~59k Parfumo rows) for name autocomplete +
+# notes/accords prefill when adding a fragrance. Populated by
+# scripts/import_fragdb.py from a gitignored CSV — never committed. Kept separate
+# from the curated `fragrances` shelf, which this never touches.
+
+_FRAGREF_READY = False
+
+
+def _ensure_fragrance_reference():
+    global _FRAGREF_READY
+    if _FRAGREF_READY:
+        return
+    with get_db() as conn:
+        cur = conn.cursor()
+        stmt = """CREATE TABLE IF NOT EXISTS fragrance_reference (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            brand TEXT,
+            concentration TEXT,
+            accords TEXT,
+            notes TEXT,
+            url TEXT
+        )"""
+        if USE_POSTGRES:
+            stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        cur.execute(stmt)
+        # Prefix search runs on the name; a plain index serves LIKE 'q%'.
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_fragref_name ON fragrance_reference(name)")
+    _FRAGREF_READY = True
+
+
+def import_fragrance_reference(records, replace=True, batch=1000) -> int:
+    """Bulk-load reference rows. `records` is an iterable of dicts with keys
+    name/brand/concentration/accords/notes/url. Idempotent when replace=True
+    (clears the table first). Returns rows inserted."""
+    _ensure_fragrance_reference()
+    cols = ("name", "brand", "concentration", "accords", "notes", "url")
+    inserted = 0
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if replace:
+            cur.execute("DELETE FROM fragrance_reference")
+        sql = (f"INSERT INTO fragrance_reference ({','.join(cols)}) "
+               f"VALUES ({','.join([ph]*len(cols))})")
+        buf = []
+        for rec in records:
+            if not rec.get("name"):
+                continue
+            buf.append(tuple(rec.get(c) for c in cols))
+            if len(buf) >= batch:
+                cur.executemany(sql, buf); inserted += len(buf); buf = []
+        if buf:
+            cur.executemany(sql, buf); inserted += len(buf)
+    return inserted
+
+
+def search_fragrance_reference(query: str, limit: int = 8) -> list:
+    """Prefix (then substring) name search for add-fragrance autocomplete. Returns
+    [] for a blank/too-short query so we never scan the whole table."""
+    q = (query or "").strip()
+    if len(q) < 2:
+        return []
+    _ensure_fragrance_reference()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        # Prefer prefix matches (index-friendly), fall back to substring, dedup by
+        # name+brand, cap at `limit`. Two passes keep the common case fast.
+        cur.execute(
+            f"SELECT name, brand, concentration, accords, notes FROM fragrance_reference "
+            f"WHERE name LIKE {ph} ORDER BY name LIMIT {ph}", (q + "%", limit))
+        rows = [dict(r) for r in cur.fetchall()]
+        if len(rows) < limit:
+            seen = {(r["name"], r["brand"]) for r in rows}
+            cur.execute(
+                f"SELECT name, brand, concentration, accords, notes FROM fragrance_reference "
+                f"WHERE name LIKE {ph} AND name NOT LIKE {ph} ORDER BY name LIMIT {ph}",
+                ("%" + q + "%", q + "%", limit - len(rows)))
+            for r in cur.fetchall():
+                r = dict(r)
+                if (r["name"], r["brand"]) not in seen:
+                    rows.append(r)
+    return rows
+
+
+def fragrance_reference_count() -> int:
+    _ensure_fragrance_reference()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS n FROM fragrance_reference")
+        return int(dict(cur.fetchone())["n"])
+
+
+def create_fragrance(name, brand, notes=None, concentration=None, vibe=None,
+                     best_seasons=None, time_of_day=None, occasions=None,
+                     longevity_hrs=None) -> dict:
+    """Add a new bottle to the curated shelf (Tier 3 Part 6 add flow). Only ever
+    INSERTs — never touches the seeded 7. Returns the new fragrance dict."""
+    _ensure_fragrance_tables()
+    name = (name or "").strip()
+    brand = (brand or "").strip()
+    if not name or not brand:
+        return None
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cols = ("name, brand, notes, concentration, vibe, best_seasons, "
+                "time_of_day, occasions, longevity_hrs")
+        cur.execute(
+            f"INSERT INTO fragrances ({cols}) VALUES ({','.join([ph]*9)})",
+            (name, brand, notes, concentration, vibe, best_seasons,
+             time_of_day, occasions,
+             int(longevity_hrs) if longevity_hrs not in (None, "") else None))
+        new_id = cur.lastrowid if not USE_POSTGRES else None
+        if USE_POSTGRES:
+            cur.execute("SELECT MAX(id) AS id FROM fragrances WHERE name = %s AND brand = %s",
+                        (name, brand))
+            new_id = dict(cur.fetchone())["id"]
+    return get_fragrance(new_id)
