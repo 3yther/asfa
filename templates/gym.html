@@ -25,16 +25,16 @@
   <header class="gym-head">
     <h1 class="screen-title" data-decode>Iron Log</h1>
     <p class="screen-sub">Train • Rank up • Overload</p>
-    <button class="gym-settings-btn" id="gym-settings-btn" title="Settings" aria-label="Gym settings">⚙️</button>
+    <button class="gym-settings-btn" id="gym-settings-btn" title="Settings" aria-label="Gym settings"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><circle cx="9" cy="7" r="2.4" fill="var(--panel-2)"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="15" cy="17" r="2.4" fill="var(--panel-2)"/></svg></button>
   </header>
 
   <!-- ── Sub-tab bar ─────────────────────────────────────────────────── -->
   <nav class="gym-subtabs" role="tablist" aria-label="Gym sections">
-    <button class="gym-subtab active" data-subtab="dashboard" role="tab">📊 Dashboard</button>
-    <button class="gym-subtab" data-subtab="workout" role="tab">🏋️ Workout</button>
-    <button class="gym-subtab" data-subtab="history" role="tab">📅 History</button>
-    <button class="gym-subtab" data-subtab="exercises" role="tab">📖 Exercises</button>
-    <button class="gym-subtab" data-subtab="progress" role="tab">📈 Progress</button>
+    <button class="gym-subtab active" data-subtab="dashboard" role="tab">Dashboard</button>
+    <button class="gym-subtab" data-subtab="workout" role="tab">Workout</button>
+    <button class="gym-subtab" data-subtab="history" role="tab">History</button>
+    <button class="gym-subtab" data-subtab="exercises" role="tab">Exercises</button>
+    <button class="gym-subtab" data-subtab="progress" role="tab">Progress</button>
   </nav>
 
   <!-- ══ TAB 1 — DASHBOARD ═════════════════════════════════════════════ -->
@@ -42,14 +42,14 @@
 
     <!-- Deload banner -->
     <div id="deload-banner" class="deload-banner sci-fi-panel" hidden>
-      <div class="deload-text">📉 You've trained hard for 4+ weeks. Consider a deload — cut volume ~40% and intensity to ~60% this week to recover and grow.</div>
+      <div class="deload-text">You've trained hard for 4+ weeks. Consider a deload — cut volume ~40% and intensity to ~60% this week to recover and grow.</div>
       <button class="deload-dismiss" id="deload-dismiss" aria-label="Dismiss">✕</button>
     </div>
 
     <!-- Rest day prompt (shown when nothing logged today) -->
     <div id="rest-day-prompt" class="rest-day-prompt sci-fi-panel" hidden>
       <span>No workout logged today.</span>
-      <button class="btn btn-ghost" id="mark-rest-day">🌙 Mark as Rest Day</button>
+      <button class="btn btn-ghost" id="mark-rest-day">Mark as Rest Day</button>
     </div>
 
     <!-- Stats row -->
@@ -135,7 +135,7 @@
       <div class="export-row">
         <label class="export-field">From <input type="date" id="export-start"></label>
         <label class="export-field">To <input type="date" id="export-end"></label>
-        <button class="btn btn-ghost" id="export-gym-csv">⬇ Download CSV</button>
+        <button class="btn btn-ghost" id="export-gym-csv">↓ Download CSV</button>
       </div>
       <div class="muted-sub">Leave dates blank to export everything.</div>
     </div>
@@ -209,7 +209,7 @@
   <!-- ══ TAB 4 — EXERCISES ═════════════════════════════════════════════ -->
   <section class="gym-panel" data-panel="exercises">
     <div class="ex-controls">
-      <input type="search" id="ex-search" class="ex-search" placeholder="🔎 Search exercises…" autocomplete="off">
+      <input type="search" id="ex-search" class="ex-search" placeholder="Search exercises…" autocomplete="off">
       <div class="ex-filters" id="ex-filters"></div>
     </div>
     <div id="ex-grid" class="ex-grid">
@@ -272,7 +272,7 @@
 <!-- ── AI Trainer panel (bottom-LEFT, clears the bottom-right rest timer) ── -->
 <div id="trainer-panel" class="trainer-panel" hidden>
   <div class="trainer-head" id="trainer-head">
-    <span class="trainer-title">💬 ASK TRAINER</span>
+    <span class="trainer-title">ASK TRAINER</span>
     <button class="trainer-toggle" id="trainer-collapse" aria-label="Collapse">▾</button>
   </div>
   <div class="trainer-body" id="trainer-body">
@@ -318,7 +318,7 @@
   <div class="modal sci-fi-panel">
     <button class="modal-close" data-close-modal="addex-modal">✕</button>
     <h3>Add exercise to session</h3>
-    <input type="search" id="addex-search" class="ex-search" placeholder="🔎 Search exercises…" autocomplete="off">
+    <input type="search" id="addex-search" class="ex-search" placeholder="Search exercises…" autocomplete="off">
     <div class="ex-filters" id="addex-filters"></div>
     <div id="addex-list" class="addex-list"></div>
   </div>
@@ -328,11 +328,11 @@
 <div id="settings-modal" class="modal-overlay" hidden>
   <div class="modal sci-fi-panel">
     <button class="modal-close" data-close-modal="settings-modal">✕</button>
-    <h3>⚙️ Settings</h3>
+    <h3>Settings</h3>
     <label class="settings-row">
       <span>
         <b>AI Trainer enabled</b>
-        <small class="muted-sub">Show the 💬 ASK TRAINER panel and allow coaching replies.</small>
+        <small class="muted-sub">Show the ASK TRAINER panel and allow coaching replies.</small>
       </span>
       <input type="checkbox" id="setting-ai-trainer" class="settings-switch">
     </label>

@@ -281,7 +281,7 @@
 /* Optional RPE (6–10) input — narrower + dimmer than reps to read as optional */
 .rpe-in { font-size: .82rem; }
 .rpe-in::placeholder { font-size: .62rem; letter-spacing: .04em; }
-/* ⚡ quick-log (fill+confirm) + ↻ fill-only, overlaid over the reps column
+/* ↯ quick-log (fill+confirm) + ↻ fill-only, overlaid over the reps column
    (left of the RPE field + manual ✓, which sit to their right) */
 .set-mini { position: absolute; right: 102px; top: 50%; transform: translateY(-50%); display: flex; gap: 3px; }
 .set-mini .set-fill { width: 30px; height: 30px; min-height: 30px; }
@@ -582,7 +582,6 @@ body.rest-active .exercise-list { padding-bottom: 210px; }
 /* consistency + month rest-day dots */
 .cc-dot.rest { background: rgba(160,170,190,.16); box-shadow: none; display: flex; align-items: center; justify-content: center; font-size: 7px; }
 .mc-day.rest { color: #aab; border-color: rgba(160,170,190,.35); background: rgba(160,170,190,.1); }
-.mc-day.rest::after { content: "🌙"; display: block; font-size: .6rem; line-height: 1; }
 
 /* ── Settings modal ───────────────────────────────────────────────────── */
 .settings-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px 0; }

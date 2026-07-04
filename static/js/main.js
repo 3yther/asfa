@@ -1076,7 +1076,7 @@ async function fetchScent() {
     body.innerHTML = `
       <div class="scent-line">
         <div>
-          <div class="scent-name">${f.is_signature ? "⭐ " : ""}💨 ${esc(f.name)}</div>
+          <div class="scent-name">${f.is_signature ? "★ " : ""}${esc(f.name)}</div>
           <div class="scent-context mono">${esc(ctxBits)}</div>
           ${steps ? `<div class="scent-steps">${steps} → ${esc(f.name)}</div>` : ""}
         </div>
@@ -1089,7 +1089,7 @@ async function fetchScent() {
         const h = new Date().getHours();
         const bucket = h >= 5 && h < 11 ? "morning" : h < 17 ? "day" : h < 22 ? "evening" : "night";
         await apiPost(`/api/fragrances/${f.id}/wear`, { time_of_day: bucket });
-        toast(`💨 ${f.name} logged`);
+        toast(`${f.name} logged`);
         fetchScent(); // re-fetch: today's pick is now penalised, show the next one
       } catch {
         toast("Could not log wear");

@@ -39,7 +39,7 @@ const round1 = (n) => Math.round((+n || 0) * 10) / 10;
 
 const RANK_ORDER  = ["Bronze", "Silver", "Gold", "Platinum", "Diamond"];
 const RANK_COLORS = { Bronze:"#cd7f32", Silver:"#c0c0c0", Gold:"#ffd700", Platinum:"#e5e4e2", Diamond:"#00d9ff" };
-const RANK_ICON   = { Bronze:"🥉", Silver:"🥈", Gold:"🥇", Platinum:"💎", Diamond:"💠" };
+const RANK_ABBR   = { Bronze:"Bz", Silver:"Sv", Gold:"Gd", Platinum:"Pt", Diamond:"Dia" };
 const UNRANKED    = "#1a1a2e";
 
 // Our muscle groups → body-highlighter MuscleType slugs (a group may map to
@@ -78,6 +78,11 @@ const ROTATION = ["push", "pull", "legs", "upper", "lower"];
 const PLATES = [25, 20, 15, 10, 5, 2.5, 1.25];
 const PLATE_COLORS = { 25:"#e23", 20:"#25c", 15:"#fb0", 10:"#2a5", 5:"#eee", 2.5:"#888", 1.25:"#c9a" };
 const BAR_KG = 20;
+
+/* Inline monochrome icons (currentColor) — replace colourful emoji on the
+   compact icon buttons so the tracker reads clean, not decorated. */
+const IC_FLAME = '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M12 2s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3 1.5-4 .5 1 1 1.5 1.8 1.7C9.5 7.5 12 5 12 2z"/></svg>';
+const IC_PLATE = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M3 9h2v6H3zM6 7h2v10H6zM16 7h2v10h-2zM19 9h2v6h-2zM8 11h8v2H8z"/></svg>';
 
 function corners(elm) { ["corner-bl", "corner-br"].forEach(c => elm.appendChild(el("div", c))); }
 
@@ -194,7 +199,7 @@ function renderRestDayPrompt(sessions, restDays) {
     try {
       await apiPost(`${API}/rest-day`, {});
       prompt.hidden = true;
-      toast("🌙 Rest day logged — streak kept alive");
+      toast("Rest day logged — streak kept alive");
       loadDashboard();
     } catch (e) { toast("Could not mark rest day"); }
   };
@@ -210,8 +215,8 @@ function renderStats(xp, sessions, body) {
   const bw = (body && body[0]) ? body[0].weight_kg : null;
   const rank = xp.overall_rank || "Bronze";
   const cards = [
-    { v: xp.streak_days || 0, l: "Day Streak", sub: "🔥 keep it alive", gold: true },
-    { v: (xp.total_xp || 0).toLocaleString(), l: "Total XP", sub: `${RANK_ICON[rank]||""} ${rank}` },
+    { v: xp.streak_days || 0, l: "Day Streak", sub: "keep it alive", gold: true },
+    { v: (xp.total_xp || 0).toLocaleString(), l: "Total XP", sub: rank },
     { v: bw != null ? fmtKg(bw) + "kg" : "—", l: "Bodyweight", sub: bw != null ? "latest" : "log in Progress" },
     { v: startOfWeekCount(sessions), l: "This Week", sub: "sessions" },
   ];
@@ -253,7 +258,7 @@ function renderRankList(ranks, prs) {
     const liftTxt = r.best ? `${esc(r.best.exercise_name)} ${fmtKg(r.best.weight_kg)}kg` : "—";
     const row = el("div", "rank-list-row");
     row.innerHTML = `<div class="rl-top"><span class="rl-name">${esc(r.group)}</span>
-      <span class="rl-rank" style="color:${color}">${RANK_ICON[r.rank]||""} ${r.ranked ? r.rank : "Unranked"}</span></div>
+      <span class="rl-rank" style="color:${color}">${r.ranked ? r.rank : "Unranked"}</span></div>
       <div class="rl-bar"><span style="width:${r.ranked?pct:6}%;background:${color}"></span></div>
       <div class="muted-sub" style="margin-top:3px">${liftTxt}</div>`;
     wrap.appendChild(row);
@@ -291,7 +296,7 @@ function renderQuickStart(sessions) {
     const up = r.day_type === nextType;
     const b = el("button", "qs-btn" + (up ? " up-next" : ""));
     b.innerHTML = `<span>${esc(r.name)}<br><span class="qs-meta">${esc(r.description||"")}</span></span>
-      ${up ? '<span class="qs-badge">⭐ UP NEXT</span>' : '<span class="qs-meta">Start ▶</span>'}`;
+      ${up ? '<span class="qs-badge">UP NEXT</span>' : '<span class="qs-meta">Start ▶</span>'}`;
     b.addEventListener("click", () => { switchTab("workout"); startRoutine(r.id); });
     wrap.appendChild(b);
   });
@@ -304,7 +309,7 @@ async function renderNextTargets(sessions) {
   const nextType = suggestNextDayType(sessions || []);
   const routine = ROUTINES.find(r => r.day_type === nextType) || ROUTINES[0];
   if (!routine) { wrap.innerHTML = `<div class="empty-note">No routines yet.</div>`; return; }
-  if (label) label.textContent = `⭐ ${routine.name}`;
+  if (label) label.textContent = routine.name;
   try {
     const recs = await apiGet(`${API}/routines/${routine.id}/recommendations`);
     wrap.innerHTML = "";
@@ -313,7 +318,7 @@ async function renderNextTargets(sessions) {
       const row = el("div", "nt-row");
       const chip = rec.found
         ? `<span class="nt-chip ${(REC_META[rec.verdict] || {}).cls || ""}">${esc(ntChipText(rec))}</span>`
-        : `<span class="nt-chip nt-new">🆕 first time — set baseline</span>`;
+        : `<span class="nt-chip nt-new">first time — set baseline</span>`;
       row.innerHTML = `<span class="nt-name">${esc(rec.exercise_name)}</span>${chip}`;
       wrap.appendChild(row);
     });
@@ -322,10 +327,10 @@ async function renderNextTargets(sessions) {
 function ntChipText(rec) {
   const w = fmtKg(rec.recommended_weight), lw = fmtKg(rec.last_top_weight);
   switch (rec.verdict) {
-    case "progress":  return `📈 ${w}kg × ${rec.recommended_reps}`;
-    case "beat_reps": return rec.last_top_weight > 0 ? `🎯 same ${lw}kg, +reps` : `🎯 bodyweight, +reps`;
-    case "hold":      return `⏸ hold ${lw}kg`;
-    case "deload":    return `📉 drop to ${w}kg`;
+    case "progress":  return `${w}kg × ${rec.recommended_reps}`;
+    case "beat_reps": return rec.last_top_weight > 0 ? `same ${lw}kg, +reps` : `bodyweight, +reps`;
+    case "hold":      return `hold ${lw}kg`;
+    case "deload":    return `drop to ${w}kg`;
     default:          return "";
   }
 }
@@ -348,7 +353,7 @@ function renderCalendar(cal, sessions) {
       const status = cal[key];
       if (key > todayStr) dot.classList.add("future");
       if (status === "workout" || byDate[key]) dot.classList.add("worked");
-      else if (status === "rest") { dot.classList.add("rest"); dot.textContent = "🌙"; }
+      else if (status === "rest") { dot.classList.add("rest"); }
       if (key === todayStr) dot.classList.add("today");
       dot.title = `${key}${byDate[key] ? " · " + byDate[key] : (status === "workout" ? " · Workout" : (status === "rest" ? " · Rest day" : ""))}`;
       col.appendChild(dot);
@@ -421,7 +426,7 @@ function attachBodygraphTooltips(holders, rankMap, best) {
         const b = best[group];
         const liftTxt = b ? `${b.exercise_name} — ${fmtKg(b.weight_kg)}kg × ${b.reps}` : "no lift yet";
         const color = rank ? RANK_COLORS[rank] : "#8aa";
-        tooltip.innerHTML = `<div class="tt-rank" style="color:${color}">${esc(group)} · ${rank ? (RANK_ICON[rank]+" "+rank) : "Unranked"}</div>
+        tooltip.innerHTML = `<div class="tt-rank" style="color:${color}">${esc(group)} · ${rank ? rank : "Unranked"}</div>
           <div class="tt-lift">${esc(liftTxt)} · tap to see exercises</div>`;
         tooltip.hidden = false;
         const pad = 14; let x = e.clientX + pad, y = e.clientY + pad;
@@ -482,7 +487,7 @@ function renderRoutinePicker() {
         const target = targets[r.id] || estimateRoutineMinutes(full);
         const up = r.day_type === nextType;
         const card = el("div", "routine-card sci-fi-panel" + (up ? " up-next" : ""));
-        card.innerHTML = `${up ? '<span class="rc-badge">⭐ UP NEXT</span>' : ""}
+        card.innerHTML = `${up ? '<span class="rc-badge">UP NEXT</span>' : ""}
           <div class="rc-name">${esc(r.name)}</div>
           <div class="rc-desc">${esc(r.description || "")}</div>
           <div class="rc-meta"><span><b>${exCount}</b> exercises</span>
@@ -665,7 +670,7 @@ function buildExerciseCard(ex) {
     <div class="ec-head">
       <div class="ec-title">
         <div class="ec-name">${esc(ex.name)}
-          ${cardio ? "" : '<button class="ec-icon-btn warmup-btn" title="Warmup calculator">🔥</button>'}
+          ${cardio ? "" : `<button class="ec-icon-btn warmup-btn" title="Warmup calculator">${IC_FLAME}</button>`}
         </div>
         <div class="ec-muscle">${esc(ex.muscle_group)} · ${esc(ex.equipment||(cardio?"cardio":""))}</div>
       </div>
@@ -743,11 +748,11 @@ function refreshExtras(ex, card) {
   // rank + PR line (cardio has no rank/PR — show a cardio tag instead)
   const rl = card.querySelector(".ec-rankline");
   if (cardio) {
-    rl.innerHTML = `<span class="rank-badge rank-cardio">🏃 Cardio · +50 XP</span>`;
+    rl.innerHTML = `<span class="rank-badge rank-cardio">Cardio · +50 XP</span>`;
   } else if (ex._pr && ex._pr.weight_kg != null) {
     const lib = EX_BY_ID[ex.exerciseId] || {};
     const rank = computeRank(lib, ex._pr.weight_kg);
-    rl.innerHTML = `<span class="rank-badge rank-${rank.toLowerCase()}">${RANK_ICON[rank]} ${rank}</span>
+    rl.innerHTML = `<span class="rank-badge rank-${rank.toLowerCase()}">${rank}</span>
       <span class="muted-sub" style="margin-left:6px">PR ${fmtKg(ex._pr.weight_kg)}kg × ${ex._pr.reps}</span>`;
   } else { rl.innerHTML = `<span class="rank-badge rank-unranked">Unranked</span>`; }
   // last time
@@ -799,12 +804,12 @@ const REC_META = {
 function recChipText(rec) {
   const w = fmtKg(rec.recommended_weight), lw = fmtKg(rec.last_top_weight);
   switch (rec.verdict) {
-    case "progress":  return `📈 Add ${fmtKg(rec.increment)}kg → try ${w}kg × ${rec.recommended_reps}`;
+    case "progress":  return `Add ${fmtKg(rec.increment)}kg → try ${w}kg × ${rec.recommended_reps}`;
     case "beat_reps": return rec.last_top_weight > 0
-      ? `🎯 Same ${lw}kg — beat last time, aim ${rec.recommended_reps}+ reps`
-      : `🎯 Bodyweight — beat last time, aim ${rec.recommended_reps}+ reps`;
-    case "hold":      return `⏸ Hold ${lw}kg — consolidate this weight`;
-    case "deload":    return `📉 Drop to ${w}kg — rebuild form, you missed the range`;
+      ? `Same ${lw}kg — beat last time, aim ${rec.recommended_reps}+ reps`
+      : `Bodyweight — beat last time, aim ${rec.recommended_reps}+ reps`;
+    case "hold":      return `Hold ${lw}kg — consolidate this weight`;
+    case "deload":    return `Drop to ${w}kg — rebuild form, you missed the range`;
     default:          return "";
   }
 }
@@ -842,7 +847,7 @@ function applyRecommendation(ex, card) {
 /* Tap-to-confirm: fill this row from the double-progression recommendation
    (preferred) or the ghost/last-time values, then log it in the same tap via
    the normal submit path. Only offered on weight rows that have a ghost — cardio
-   and first-time (no ghost/rec) exercises never show the ⚡ button. */
+   and first-time (no ghost/rec) exercises never show the ↯ button. */
 function quickLogSet(ex, idx, row, card) {
   if (isCardioEx(ex)) return;                         // weight-based only
   if (row.classList.contains("done")) return;
@@ -884,24 +889,24 @@ function renderSetRows(ex, card) {
       <select class="set-type-sel" ${logged ? "disabled" : ""}>${typeOpts}</select>
       <div class="num-wrap">
         <input class="num-input w-in" inputmode="decimal" ${wGhost} value="${logged ? fmtKg(logged.weight) : ""}" ${logged ? "disabled" : ""}>
-        ${barbell ? '<button class="plate-btn" title="Plate calculator" tabindex="-1">🏋️</button>' : ""}
+        ${barbell ? `<button class="plate-btn" title="Plate calculator" tabindex="-1">${IC_PLATE}</button>` : ""}
       </div>
       <input class="num-input r-in" inputmode="numeric" ${rGhost} value="${logged ? logged.reps : ""}" ${logged ? "disabled" : ""}>
       <input class="num-input rpe-in" inputmode="numeric" min="6" max="10" placeholder="RPE"
              title="RPE — 6 = easy · 10 = max effort · blank if unsure"
              value="${logged && logged.rpe != null ? logged.rpe : ""}" ${logged ? "disabled" : ""}>
-      <button class="set-check" title="${logged ? "Delete set" : "Complete set"}">${logged ? "🗑" : "✓"}</button>`;
+      <button class="set-check" title="${logged ? "Delete set" : "Complete set"}">${logged ? "✕" : "✓"}</button>`;
     const check = row.querySelector(".set-check");
     if (logged) {
       check.addEventListener("click", () => deleteLoggedSet(ex, i, card));
     } else {
       check.addEventListener("click", () => completeSet(ex, i, row, card));
       if (ghost) {
-        // ⚡ tap-to-confirm (fill from rec/ghost + log in one tap) alongside the
+        // ↯ tap-to-confirm (fill from rec/ghost + log in one tap) alongside the
         // ↻ fill-only button, grouped just left of the manual ✓. Ghost-gated, so
         // first-time exercises (no ghost) show neither and keep baseline messaging.
         const mini = el("div", "set-mini");
-        const quick = el("button", "set-quicklog", "⚡");
+        const quick = el("button", "set-quicklog", "↯");
         quick.title = (ex.recommendation && ex.recommendation.found)
           ? "Log this set with the recommended weight × reps"
           : "Log this set with last time's weight × reps";
@@ -940,7 +945,7 @@ function renderCardioRows(ex, card) {
       <div class="set-num">${i + 1}</div>
       <div class="cardio-dur"><input class="num-input dur-min" inputmode="numeric" ${durGhost} value="${durVal}" ${logged ? "disabled" : ""}><span class="dur-unit">min</span></div>
       <input class="num-input int-in" type="text" ${intGhost} value="${esc(intVal)}" ${logged ? "disabled" : ""}>
-      <button class="set-check" title="${logged ? "Delete" : "Log cardio"}">${logged ? "🗑" : "✓"}</button>`;
+      <button class="set-check" title="${logged ? "Delete" : "Log cardio"}">${logged ? "✕" : "✓"}</button>`;
     const check = row.querySelector(".set-check");
     if (logged) {
       check.addEventListener("click", () => deleteLoggedSet(ex, i, card));
@@ -1078,7 +1083,7 @@ function notify(title, body) {
 /* ── PR celebration + confetti ── */
 function firePR(ex, weight, reps, orm) {
   chime();
-  const t = el("div", "pr-toast", `🏆 NEW PR — ${fmtKg(weight)}kg × ${reps} <span class="muted-sub">(est. 1RM ${fmtKg(orm)}kg)</span>`);
+  const t = el("div", "pr-toast", `NEW PR — ${fmtKg(weight)}kg × ${reps} <span class="muted-sub">(est. 1RM ${fmtKg(orm)}kg)</span>`);
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 3000);
   const card = $(`.exercise-card[data-ex="${ex.exerciseId}"]`); if (card) { card.classList.add("pulse-pr"); setTimeout(() => card.classList.remove("pulse-pr"), 1000); }
@@ -1138,7 +1143,7 @@ function openWarmup(anchor, ex) {
   if (!base) base = 20;
   const steps = [["Bar", BAR_KG, 10], ["40%", round1(base * 0.4), 8], ["60%", round1(base * 0.6), 5], ["80%", round1(base * 0.8), 3]];
   const pop = el("div", "popover");
-  pop.innerHTML = `<h4>🔥 Warmup for ${fmtKg(base)}kg</h4>` +
+  pop.innerHTML = `<h4>Warmup for ${fmtKg(base)}kg</h4>` +
     steps.map(s => `<div class="pop-row"><span>${s[0]}</span><b>${fmtKg(s[1])}kg × ${s[2]}</b></div>`).join("") +
     `<button class="btn btn-primary" style="width:100%;margin-top:10px" id="add-warmup">Add as warmup sets</button>`;
   placePopover(anchor, pop);
@@ -1172,11 +1177,11 @@ function openPlate(anchor, weight) {
   closePopover();
   const pop = el("div", "popover");
   if (!weight || weight <= BAR_KG) {
-    pop.innerHTML = `<h4>🏋️ Plates</h4><div class="plate-bar-note">Enter a weight above the ${BAR_KG}kg bar.</div>`;
+    pop.innerHTML = `<h4>Plates</h4><div class="plate-bar-note">Enter a weight above the ${BAR_KG}kg bar.</div>`;
   } else {
     const plates = platesFor(weight);
     if (!plates.length) {
-      pop.innerHTML = `<h4>🏋️ ${fmtKg(weight)}kg</h4><div class="plate-bar-note">Just the ${BAR_KG}kg bar.</div>`;
+      pop.innerHTML = `<h4>${fmtKg(weight)}kg</h4><div class="plate-bar-note">Just the ${BAR_KG}kg bar.</div>`;
     } else {
       const maxP = Math.max(...plates);
       const visual = plates.map(p => {
@@ -1186,7 +1191,7 @@ function openPlate(anchor, weight) {
       const counts = {}; plates.forEach(p => counts[p] = (counts[p] || 0) + 1);
       const txt = Object.keys(counts).map(Number).sort((a, b) => b - a)
         .map(p => counts[p] > 1 ? `${counts[p]}×${p}` : `${p}`).join(" + ");
-      pop.innerHTML = `<h4>🏋️ ${fmtKg(weight)}kg</h4>
+      pop.innerHTML = `<h4>${fmtKg(weight)}kg</h4>
         <div class="plate-bar-note">${BAR_KG}kg bar</div>
         <div class="plate-visual">${visual}</div>
         <div class="plate-per-side">per side: ${txt}</div>`;
@@ -1263,8 +1268,8 @@ function showSummary(res) {
   const muscleRows = Object.keys(muscleVol).sort((a, b) => muscleVol[b] - muscleVol[a])
     .map(m => `<div class="xp-line"><span style="text-transform:capitalize">${esc(m)}</span><b>${Math.round(muscleVol[m]).toLocaleString()} kg</b></div>`).join("");
   body.innerHTML = `
-    <div class="summary-hero"><div class="sh-big">💪 Workout Complete</div>
-      <div class="muted-sub">${esc(S.routineName)} · streak ${res.streak || 0} 🔥</div></div>
+    <div class="summary-hero"><div class="sh-big">Workout Complete</div>
+      <div class="muted-sub">${esc(S.routineName)} · streak ${res.streak || 0}</div></div>
     <div class="summary-stats">
       <div class="ss"><b>${Math.round(vol).toLocaleString()}</b><small>kg vol</small></div>
       <div class="ss"><b>${sets}</b><small>sets</small></div>
@@ -1281,7 +1286,7 @@ function showSummary(res) {
     <div class="modal-section" id="eff-section"><h4>Session efficiency</h4>
       <div id="eff-line" class="eff-line"></div>
     </div>
-    ${prs.length ? `<div class="modal-section"><h4>Personal Records</h4>${prs.map(p => `<div class="pr-hit-row">🏆 ${esc(p.name)} — ${fmtKg(p.weight)}kg × ${p.reps} <span class="muted-sub">(1RM ${fmtKg(p.orm)}kg)</span></div>`).join("")}</div>` : ""}
+    ${prs.length ? `<div class="modal-section"><h4>Personal Records</h4>${prs.map(p => `<div class="pr-hit-row">${esc(p.name)} — ${fmtKg(p.weight)}kg × ${p.reps} <span class="muted-sub">(1RM ${fmtKg(p.orm)}kg)</span></div>`).join("")}</div>` : ""}
     <div class="modal-section"><h4>XP Earned</h4>
       <div class="xp-breakdown">
         <div class="xp-line"><span>Sets (${sets} × 10)</span><b>+${xpSets}</b></div>
@@ -1313,7 +1318,7 @@ function showSummary(res) {
     } else {
       cmp = `<span class="muted-sub">no prior average for this routine</span>`;
     }
-    $("#eff-line").innerHTML = `<span class="eff-val">📊 ${eff} kg/min</span> ${cmp}`;
+    $("#eff-line").innerHTML = `<span class="eff-val">${eff} kg/min</span> ${cmp}`;
   }
   renderEff();
   let effTimer = null;
@@ -1372,11 +1377,11 @@ function renderSessionDetail(full) {
     const cardio = rows.some(s => s.exercise_type === "cardio" || s.muscle_group === "cardio");
     const sets = cardio
       ? rows.map(s => `${s.reps} min${s.notes ? " (" + esc(s.notes) + ")" : ""}`).join(", ")
-      : rows.map(s => `${fmtKg(s.weight_kg)}kg×${s.reps}${s.is_pr ? " 🏆" : ""}`).join(", ");
+      : rows.map(s => `${fmtKg(s.weight_kg)}kg×${s.reps}${s.is_pr ? " (PR)" : ""}`).join(", ");
     return `<div class="hist-ex-block"><div class="heb-name">${esc(name)}</div><div class="heb-set">${cardio ? sets : esc(sets)}</div></div>`;
   }).join("");
   if (!html) html = `<div class="muted-sub">No sets recorded.</div>`;
-  if (full.notes) html += `<div class="hist-notes">📝 ${esc(full.notes)}</div>`;
+  if (full.notes) html += `<div class="hist-notes">${esc(full.notes)}</div>`;
   return html;
 }
 async function renderHistoryCalendar() {
@@ -1449,8 +1454,8 @@ async function renderExGrid() {
   list.forEach(ex => {
     const pr = prByEx[ex.id];
     const rank = pr ? computeRank(ex, pr.weight_kg) : null;
-    const badge = rank ? `<span class="rank-badge rank-${rank.toLowerCase()}">${RANK_ICON[rank]} ${rank}</span>` : `<span class="rank-badge rank-unranked">Unranked</span>`;
-    const strip = `<div class="rank-strip"><span>🥉${fmtKg(ex.rank_bronze)}</span><span>🥈${fmtKg(ex.rank_silver)}</span><span>🥇${fmtKg(ex.rank_gold)}</span><span>💎${fmtKg(ex.rank_platinum)}</span><span>💠${fmtKg(ex.rank_diamond)}+</span></div>`;
+    const badge = rank ? `<span class="rank-badge rank-${rank.toLowerCase()}">${rank}</span>` : `<span class="rank-badge rank-unranked">Unranked</span>`;
+    const strip = `<div class="rank-strip"><span class="rank-bronze">${RANK_ABBR.Bronze} ${fmtKg(ex.rank_bronze)}</span><span class="rank-silver">${RANK_ABBR.Silver} ${fmtKg(ex.rank_silver)}</span><span class="rank-gold">${RANK_ABBR.Gold} ${fmtKg(ex.rank_gold)}</span><span class="rank-platinum">${RANK_ABBR.Platinum} ${fmtKg(ex.rank_platinum)}</span><span class="rank-diamond">${RANK_ABBR.Diamond} ${fmtKg(ex.rank_diamond)}+</span></div>`;
     const card = el("div", "ex-card sci-fi-panel");
     card.innerHTML = `<div class="exc-name">${esc(ex.name)}</div>
       <div class="exc-meta">${esc(ex.muscle_group)} · ${esc(ex.exercise_type||"")} · ${esc(ex.equipment||"")}</div>
@@ -1521,12 +1526,12 @@ async function renderXpBar() {
   let idx = 0; for (let i = 0; i < tiers.length; i++) if (total >= tiers[i][1]) idx = i;
   const next = tiers[idx + 1];
   if (!next) {
-    wrap.innerHTML = `<div class="xp-label"><span>${RANK_ICON[rank]} ${rank} — max rank!</span><b>${total.toLocaleString()} XP</b></div>
+    wrap.innerHTML = `<div class="xp-label"><span>${rank} — max rank!</span><b>${total.toLocaleString()} XP</b></div>
       <div class="xp-bar-track"><div class="xp-bar-fill" style="width:100%"></div></div>`;
     return;
   }
   const base = tiers[idx][1]; const span = next[1] - base; const pct = Math.min(100, Math.round((total - base) / span * 100));
-  wrap.innerHTML = `<div class="xp-label"><span>${RANK_ICON[rank]} ${rank}</span><b>${total.toLocaleString()} / ${next[1].toLocaleString()} XP → ${next[0]} ${RANK_ICON[next[0]]}</b></div>
+  wrap.innerHTML = `<div class="xp-label"><span>${rank}</span><b>${total.toLocaleString()} / ${next[1].toLocaleString()} XP → ${next[0]}</b></div>
     <div class="xp-bar-track"><div class="xp-bar-fill" style="width:${pct}%"></div></div>`;
 }
 function movingAverage(vals, win) {
@@ -1571,7 +1576,7 @@ async function renderRankingsOverview() {
     const lift = best[g] ? `${esc(best[g].exercise_name)} ${fmtKg(best[g].weight_kg)}kg` : "no lift yet";
     const row = el("div", "ro-row");
     row.innerHTML = `<div class="ro-top"><span class="ro-name">${esc(g)}</span>
-        <span class="rank-badge rank-${(ranked?rank:"unranked").toLowerCase()}">${ranked ? RANK_ICON[rank]+" "+rank : "Unranked"}</span></div>
+        <span class="rank-badge rank-${(ranked?rank:"unranked").toLowerCase()}">${ranked ? rank : "Unranked"}</span></div>
       <div class="rl-bar"><span style="width:${ranked?pct:6}%;background:${color}"></span></div>
       <div class="ro-lift">${g} — ${ranked ? rank : "Unranked"} via ${lift}</div>`;
     wrap.appendChild(row);
