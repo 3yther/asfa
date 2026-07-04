@@ -190,6 +190,18 @@ def init_db():
                 raw TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             )""",
+            # Tier 5 Part 1: cache CV-keyword-match results keyed by the CV text
+            # hash + job-description hash, so re-analysing an unchanged (CV, job)
+            # pair never spends another Claude call. Editing either side changes
+            # the hash → new row (natural invalidation, no manual clear needed).
+            """CREATE TABLE IF NOT EXISTS cv_match_cache (
+                cv_hash TEXT NOT NULL,
+                job_hash TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                missing_keywords TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (cv_hash, job_hash)
+            )""",
         ]
         # Postgres uses SERIAL not AUTOINCREMENT
         for stmt in stmts:
@@ -1397,6 +1409,46 @@ def save_cv_match(pid, score, missing_keywords, analyzed_at):
             f"match_analysis_at = {ph} WHERE id = {ph}",
             (int(score), missing_json, analyzed_at, pid))
     return get_scout_pipeline_job(pid)
+
+
+def cv_match_cache_get(cv_hash, job_hash):
+    """Return a cached CV-match result for this (cv_hash, job_hash) pair, or None.
+    Result shape: {"score": int, "missing": [..], "created_at": str}."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT score, missing_keywords, created_at FROM cv_match_cache "
+            f"WHERE cv_hash = {ph} AND job_hash = {ph}", (cv_hash, job_hash))
+        r = cur.fetchone()
+        if not r:
+            return None
+        try:
+            missing = json.loads(r["missing_keywords"] or "[]")
+        except (ValueError, TypeError):
+            missing = []
+        return {"score": int(r["score"]), "missing": missing,
+                "created_at": r["created_at"]}
+
+
+def cv_match_cache_set(cv_hash, job_hash, score, missing_keywords):
+    """Upsert a CV-match result into the cache. missing_keywords stored as JSON."""
+    missing_json = json.dumps(missing_keywords or [])
+    created_at = datetime.now().isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO cv_match_cache (cv_hash, job_hash, score, "
+                "missing_keywords, created_at) VALUES (%s,%s,%s,%s,%s) "
+                "ON CONFLICT (cv_hash, job_hash) DO UPDATE SET score = EXCLUDED.score, "
+                "missing_keywords = EXCLUDED.missing_keywords, created_at = EXCLUDED.created_at",
+                (cv_hash, job_hash, int(score), missing_json, created_at))
+        else:
+            cur.execute(
+                "INSERT OR REPLACE INTO cv_match_cache (cv_hash, job_hash, score, "
+                "missing_keywords, created_at) VALUES (?,?,?,?,?)",
+                (cv_hash, job_hash, int(score), missing_json, created_at))
 
 
 def add_scout_pipeline_job(job_title, company, job_url=None, location=None,

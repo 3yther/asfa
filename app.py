@@ -1,6 +1,7 @@
 """ASFA — AI Software For Amir. JARVIS-style life command centre."""
 import base64
 import csv
+import hashlib
 import hmac
 import io
 import json
@@ -2273,14 +2274,37 @@ def api_scout_analyze_cv(pid):
         return jsonify({"error": "Need a description to analyze — paste the job "
                                  "description (no scraped text found for this job)."}), 400
 
+    # Tier 5 Part 1: cache by (cv_hash, job_hash). An unchanged (CV, job) pair
+    # returns the stored result with no Claude call; editing either side changes
+    # the hash → cache miss → fresh analysis.
+    cv_hash = hashlib.sha256(cv_text.encode("utf-8")).hexdigest()
+    job_hash = hashlib.sha256(job_description.encode("utf-8")).hexdigest()
+    cached = db.cv_match_cache_get(cv_hash, job_hash)
+    if cached:
+        analyzed_at = datetime.now().isoformat()
+        # Refresh the pipeline row so the badge/timestamp update just like a live run.
+        db.save_cv_match(pid, cached["score"], cached["missing"], analyzed_at)
+        return jsonify({
+            "ok": True,
+            "cached": True,
+            "id": pid,
+            "cv_match_score": cached["score"],
+            "missing_keywords": cached["missing"],
+            "required": [],
+            "nice_to_have": [],
+            "match_analysis_at": analyzed_at,
+        })
+
     result = ai.analyze_cv_match(cv_text, job_description)
     if not result.get("ok"):
         return jsonify({"error": result.get("error", "analysis failed")}), 502
 
     analyzed_at = datetime.now().isoformat()
-    updated = db.save_cv_match(pid, result["score"], result["missing"], analyzed_at)
+    db.cv_match_cache_set(cv_hash, job_hash, result["score"], result["missing"])
+    db.save_cv_match(pid, result["score"], result["missing"], analyzed_at)
     return jsonify({
         "ok": True,
+        "cached": False,
         "id": pid,
         "cv_match_score": result["score"],
         "missing_keywords": result["missing"],

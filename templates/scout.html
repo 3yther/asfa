@@ -615,7 +615,8 @@
       const { status, data } = await apiSendStatus(`/api/scout/pipeline/${j.id}/analyze-cv`, body);
       if (status === 200 && data.ok) {
         const n = (data.missing_keywords || []).length;
-        toast(`CV MATCH ${data.cv_match_score}% · ${n} GAP${n === 1 ? "" : "S"}`);
+        const tag = data.cached ? " · CACHED" : data.throttled ? " · RECENT" : "";
+        toast(`CV MATCH ${data.cv_match_score}% · ${n} GAP${n === 1 ? "" : "S"}${tag}`);
         loadPipeline();
         return;
       }
