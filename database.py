@@ -190,6 +190,32 @@ def init_db():
                 raw TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             )""",
+            # Tier 5 Part 1: cache CV-keyword-match results keyed by the CV text
+            # hash + job-description hash, so re-analysing an unchanged (CV, job)
+            # pair never spends another Claude call. Editing either side changes
+            # the hash → new row (natural invalidation, no manual clear needed).
+            """CREATE TABLE IF NOT EXISTS cv_match_cache (
+                cv_hash TEXT NOT NULL,
+                job_hash TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                missing_keywords TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (cv_hash, job_hash)
+            )""",
+            # Tier 5 Part 4: per-call Claude API telemetry — one row per real call
+            # (tokens from the response usage) plus one row per local cache hit
+            # (cached_locally=1, NULL tokens) so spend + savings are visible by
+            # endpoint over time.
+            """CREATE TABLE IF NOT EXISTS claude_api_calls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint TEXT NOT NULL,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_creation_tokens INTEGER,
+                cached_locally INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )""",
         ]
         # Postgres uses SERIAL not AUTOINCREMENT
         for stmt in stmts:
@@ -1397,6 +1423,98 @@ def save_cv_match(pid, score, missing_keywords, analyzed_at):
             f"match_analysis_at = {ph} WHERE id = {ph}",
             (int(score), missing_json, analyzed_at, pid))
     return get_scout_pipeline_job(pid)
+
+
+def cv_match_cache_get(cv_hash, job_hash):
+    """Return a cached CV-match result for this (cv_hash, job_hash) pair, or None.
+    Result shape: {"score": int, "missing": [..], "created_at": str}."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT score, missing_keywords, created_at FROM cv_match_cache "
+            f"WHERE cv_hash = {ph} AND job_hash = {ph}", (cv_hash, job_hash))
+        r = cur.fetchone()
+        if not r:
+            return None
+        try:
+            missing = json.loads(r["missing_keywords"] or "[]")
+        except (ValueError, TypeError):
+            missing = []
+        return {"score": int(r["score"]), "missing": missing,
+                "created_at": r["created_at"]}
+
+
+def cv_match_cache_set(cv_hash, job_hash, score, missing_keywords):
+    """Upsert a CV-match result into the cache. missing_keywords stored as JSON."""
+    missing_json = json.dumps(missing_keywords or [])
+    created_at = datetime.now().isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO cv_match_cache (cv_hash, job_hash, score, "
+                "missing_keywords, created_at) VALUES (%s,%s,%s,%s,%s) "
+                "ON CONFLICT (cv_hash, job_hash) DO UPDATE SET score = EXCLUDED.score, "
+                "missing_keywords = EXCLUDED.missing_keywords, created_at = EXCLUDED.created_at",
+                (cv_hash, job_hash, int(score), missing_json, created_at))
+        else:
+            cur.execute(
+                "INSERT OR REPLACE INTO cv_match_cache (cv_hash, job_hash, score, "
+                "missing_keywords, created_at) VALUES (?,?,?,?,?)",
+                (cv_hash, job_hash, int(score), missing_json, created_at))
+
+
+def log_claude_call(endpoint, input_tokens=None, output_tokens=None,
+                    cache_read_tokens=None, cache_creation_tokens=None,
+                    cached_locally=0):
+    """Record one Claude API call for telemetry (Tier 5 Part 4). Pass NULL tokens
+    for a local cache hit (cached_locally=1) or when usage is unavailable. Never
+    raises into callers — telemetry must not break a feature."""
+    created_at = datetime.now().isoformat()
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            ph = "%s" if USE_POSTGRES else "?"
+            cur.execute(
+                f"INSERT INTO claude_api_calls (endpoint, input_tokens, output_tokens, "
+                f"cache_read_tokens, cache_creation_tokens, cached_locally, created_at) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+                (endpoint, input_tokens, output_tokens, cache_read_tokens,
+                 cache_creation_tokens, int(cached_locally or 0), created_at))
+    except Exception:
+        pass
+
+
+def claude_usage_summary(days=30):
+    """Per-endpoint Claude usage over the last `days`. Returns
+    {days, per_endpoint: [{endpoint, calls, cached_hits, input_tokens_sum,
+    output_tokens_sum}], total: {...}}. `calls` counts every logged row;
+    `cached_hits` is the local-cache subset (so real calls = calls - cached_hits)."""
+    since = (datetime.now() - timedelta(days=int(days))).isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT endpoint, COUNT(*) AS calls, "
+            f"SUM(CASE WHEN cached_locally = 1 THEN 1 ELSE 0 END) AS cached_hits, "
+            f"COALESCE(SUM(input_tokens), 0) AS input_tokens_sum, "
+            f"COALESCE(SUM(output_tokens), 0) AS output_tokens_sum "
+            f"FROM claude_api_calls WHERE created_at >= {ph} "
+            f"GROUP BY endpoint ORDER BY calls DESC", (since,))
+        rows = [dict(r) for r in cur.fetchall()]
+    per, total = [], {"calls": 0, "cached_hits": 0,
+                      "input_tokens_sum": 0, "output_tokens_sum": 0}
+    for r in rows:
+        item = {"endpoint": r["endpoint"],
+                "calls": int(r["calls"] or 0),
+                "cached_hits": int(r["cached_hits"] or 0),
+                "input_tokens_sum": int(r["input_tokens_sum"] or 0),
+                "output_tokens_sum": int(r["output_tokens_sum"] or 0)}
+        for k in total:
+            total[k] += item[k]
+        per.append(item)
+    return {"days": int(days), "per_endpoint": per, "total": total}
 
 
 def add_scout_pipeline_job(job_title, company, job_url=None, location=None,

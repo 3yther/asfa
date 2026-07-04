@@ -14,6 +14,9 @@ from services.weather import get_weather
 
 logger = logging.getLogger("asfa.briefing")
 
+# kv_store key gating the opt-in AI briefing summary (Tier 5 Part 2). "1" = on.
+AI_BRIEFING_SUMMARY_KEY = "ai_briefing_summary_enabled"
+
 
 def _safe(label, fn, default):
     try:
@@ -51,9 +54,16 @@ def build_briefing(force: bool = False) -> dict:
                          lambda: [e for e in get_todays_events() if "error" not in e], [])
     events_tomorrow = _safe("calendar_tomorrow",
                             lambda: [e for e in get_tomorrow_events() if "error" not in e], [])
+    # Tier 5 Part 2: the AI enrichment (email one-liners + the narrative summary)
+    # is opt-in and OFF by default to save Claude credits. When disabled we skip
+    # every Claude call in the briefing build and simply omit the AI summary
+    # block — the deterministic sections (patterns, headlines) still render.
+    ai_summary_enabled = (db.kv_get(AI_BRIEFING_SUMMARY_KEY) or "0") == "1"
+
     raw_emails = _safe("gmail", get_unread_emails, [])
     emails = [e for e in raw_emails if "error" not in e]
-    emails = _safe("email_summaries", lambda: ai.summarise_emails(emails), emails)
+    if ai_summary_enabled:
+        emails = _safe("email_summaries", lambda: ai.summarise_emails(emails), emails)
     habits_avg = _safe("habits", _habits_avg, {})
     supplements = _safe("supplements", lambda: {
         "taken": db.count_supplements_today(today), "total": len(db.SUPPLEMENTS)}, {})
@@ -65,23 +75,30 @@ def build_briefing(force: bool = False) -> dict:
     metrics = _safe("metrics", insights.gather_metrics, {})
     detected = _safe("insights", lambda: insights.generate_insights(metrics), [])
 
-    result = ai.generate_briefing({
-        "weather": weather,
-        "events_today": events_today,
-        "events_tomorrow": events_tomorrow,
-        "emails": emails,
-        "habits_avg": habits_avg,
-        "supplements": supplements,
-        "goals": goals,
-        "trading": trading,
-        "insights": detected,
-    })
-    content = result["content"]
-    if detected:
-        content += "\n\n🧠 Patterns:\n" + "\n".join(f"• {i}" for i in detected)
-    if headlines:
-        content += "\n\n📰 Headlines:\n" + "\n".join(
-            f"• {h['title']}" for h in headlines[:4])
+    if ai_summary_enabled:
+        result = ai.generate_briefing({
+            "weather": weather,
+            "events_today": events_today,
+            "events_tomorrow": events_tomorrow,
+            "emails": emails,
+            "habits_avg": habits_avg,
+            "supplements": supplements,
+            "goals": goals,
+            "trading": trading,
+            "insights": detected,
+        })
+        narrative, plain_text = result["content"], result["plain_text"]
+    else:
+        narrative, plain_text = "", ""
 
-    db.save_briefing(today, content, result["plain_text"])
-    return {"date": today, "content": content, "text": result["plain_text"], "cached": False}
+    parts = [narrative] if narrative else []
+    if detected:
+        parts.append("🧠 Patterns:\n" + "\n".join(f"• {i}" for i in detected))
+    if headlines:
+        parts.append("📰 Headlines:\n" + "\n".join(
+            f"• {h['title']}" for h in headlines[:4]))
+    content = "\n\n".join(parts)
+
+    db.save_briefing(today, content, plain_text or content)
+    return {"date": today, "content": content, "text": plain_text or content,
+            "cached": False, "ai_summary_enabled": ai_summary_enabled}

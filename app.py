@@ -1,14 +1,17 @@
 """ASFA — AI Software For Amir. JARVIS-style life command centre."""
 import base64
 import csv
+import hashlib
 import hmac
 import io
 import json
 import logging
+import math
 import os
 import re
 import secrets
 import sys
+import time
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
@@ -69,7 +72,7 @@ from flask_limiter.util import get_remote_address
 from services import ai
 from services import telegram_bot
 from services.bots import get_bots_health, get_bots_status, get_trading_activity
-from services.briefing import build_briefing
+from services.briefing import AI_BRIEFING_SUMMARY_KEY, build_briefing
 from services.gcal import add_event, get_todays_events, get_tomorrow_events
 from services.gmail import (get_email_by_id, get_flow, get_unread_emails,
                             is_authenticated, save_credentials)
@@ -337,6 +340,20 @@ def api_briefing():
     force = request.args.get("refresh") == "1"
     b = build_briefing(force=force)
     return jsonify(b)
+
+
+@app.route("/api/settings/ai-briefing", methods=["GET", "POST"])
+def api_settings_ai_briefing():
+    """Read/flip the opt-in AI briefing summary toggle (Tier 5 Part 2). Stored in
+    kv_store; default OFF so no Claude credits are spent on the briefing until the
+    user enables it. POST body: {enabled: bool}. Auth-gated + CSRF like every POST."""
+    if request.method == "POST":
+        d = request.get_json(silent=True) or {}
+        enabled = bool(d.get("enabled"))
+        db.kv_set(AI_BRIEFING_SUMMARY_KEY, "1" if enabled else "0")
+        return jsonify({"ai_briefing_summary_enabled": enabled})
+    enabled = (db.kv_get(AI_BRIEFING_SUMMARY_KEY) or "0") == "1"
+    return jsonify({"ai_briefing_summary_enabled": enabled})
 
 
 # ── AI chat / voice — with natural-language command handling ──────────────────
@@ -869,6 +886,9 @@ def api_gym_deload_check():
     return jsonify(db.get_deload_check())
 
 
+_TRAINER_COOLDOWN_SECONDS = 10
+
+
 @app.route("/api/gym/trainer", methods=["POST"])
 def api_gym_trainer():
     """AI fitness-trainer chat. Reuses the shared Anthropic client in
@@ -879,6 +899,22 @@ def api_gym_trainer():
     message = (d.get("message") or "").strip()
     if not message:
         return jsonify({"error": "message is required"}), 400
+
+    # Tier 5 Part 3: soft per-session cooldown on top of the existing 20/hr,5/min
+    # limits — at most one Claude-backed trainer call every 10s. Cheap defence for
+    # Claude spend that degrades gracefully (429 + retry_in) instead of erroring.
+    now = time.time()
+    last = session.get("last_trainer_call_at", 0)
+    elapsed = now - last
+    if elapsed < _TRAINER_COOLDOWN_SECONDS:
+        retry_in = max(1, math.ceil(_TRAINER_COOLDOWN_SECONDS - elapsed))
+        return jsonify({
+            "cooling_down": True,
+            "retry_in": retry_in,
+            "error": f"Trainer is cooling down — try again in {retry_in}s",
+        }), 429
+    session["last_trainer_call_at"] = now
+
     context = d.get("context") or {}
     reply = ai.gym_coach_reply(message, context)
     return jsonify({"reply": reply})
@@ -2273,14 +2309,65 @@ def api_scout_analyze_cv(pid):
         return jsonify({"error": "Need a description to analyze — paste the job "
                                  "description (no scraped text found for this job)."}), 400
 
+    # Tier 5 Part 1: cache by (cv_hash, job_hash). An unchanged (CV, job) pair
+    # returns the stored result with no Claude call; editing either side changes
+    # the hash → cache miss → fresh analysis.
+    cv_hash = hashlib.sha256(cv_text.encode("utf-8")).hexdigest()
+    job_hash = hashlib.sha256(job_description.encode("utf-8")).hexdigest()
+    cached = db.cv_match_cache_get(cv_hash, job_hash)
+    if cached:
+        analyzed_at = datetime.now().isoformat()
+        # Refresh the pipeline row so the badge/timestamp update just like a live run.
+        db.save_cv_match(pid, cached["score"], cached["missing"], analyzed_at)
+        # Telemetry (Tier 5 Part 4): record the call we DIDN'T make so savings show.
+        db.log_claude_call("scout.analyze_cv", cached_locally=1)
+        return jsonify({
+            "ok": True,
+            "cached": True,
+            "id": pid,
+            "cv_match_score": cached["score"],
+            "missing_keywords": cached["missing"],
+            "required": [],
+            "nice_to_have": [],
+            "match_analysis_at": analyzed_at,
+        })
+
+    # Tier 5 Part 3: soft per-job daily cap. The hash cache already dedupes an
+    # unchanged (CV, job) pair; this catches the edge case where the description
+    # is edited slightly (new hash → miss) and re-run repeatedly. At most one real
+    # Claude analysis per job per 24h — otherwise return the last stored result.
+    last_at = job.get("match_analysis_at")
+    if last_at and job.get("cv_match_score") is not None:
+        try:
+            recent = datetime.now() - datetime.fromisoformat(last_at) < timedelta(hours=24)
+        except (ValueError, TypeError):
+            recent = False
+        if recent:
+            try:
+                last_missing = json.loads(job.get("missing_keywords") or "[]")
+            except (ValueError, TypeError):
+                last_missing = []
+            return jsonify({
+                "ok": True,
+                "throttled": True,
+                "id": pid,
+                "cv_match_score": job.get("cv_match_score"),
+                "missing_keywords": last_missing,
+                "required": [],
+                "nice_to_have": [],
+                "match_analysis_at": last_at,
+            })
+
     result = ai.analyze_cv_match(cv_text, job_description)
     if not result.get("ok"):
         return jsonify({"error": result.get("error", "analysis failed")}), 502
 
     analyzed_at = datetime.now().isoformat()
-    updated = db.save_cv_match(pid, result["score"], result["missing"], analyzed_at)
+    db.cv_match_cache_set(cv_hash, job_hash, result["score"], result["missing"])
+    db.save_cv_match(pid, result["score"], result["missing"], analyzed_at)
     return jsonify({
         "ok": True,
+        "cached": False,
         "id": pid,
         "cv_match_score": result["score"],
         "missing_keywords": result["missing"],
@@ -2357,6 +2444,20 @@ def api_system_audit_verify():
     occasional, so it carries an explicit strict limit on top of the default
     tiers. Returns {valid, total_entries, first_broken_id}."""
     return jsonify(db.verify_audit_chain())
+
+
+@app.route("/api/system/claude-usage")
+def api_system_claude_usage():
+    """Per-endpoint Claude API usage over the last ?days=N (default 30). Auth-gated
+    read (Tier 5 Part 4). Returns per-endpoint {calls, cached_hits,
+    input_tokens_sum, output_tokens_sum} plus a top-line total, so we can see where
+    credits go and how many calls the local caches saved."""
+    try:
+        days = int(request.args.get("days", 30))
+    except (TypeError, ValueError):
+        days = 30
+    days = max(1, min(365, days))
+    return jsonify(db.claude_usage_summary(days))
 
 
 @app.route("/api/error-budgets")

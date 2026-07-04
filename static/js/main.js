@@ -29,6 +29,7 @@ function wireControls() {
   if (refresh) refresh.addEventListener("click", refreshBriefing);
   const play = document.getElementById("briefing-play");
   if (play) play.addEventListener("click", playBriefing);
+  initAiBriefingToggle();
   const botsRefresh = document.getElementById("bots-refresh");
   if (botsRefresh) botsRefresh.addEventListener("click", fetchBots);
   const bell = document.getElementById("bell-btn");
@@ -1722,6 +1723,34 @@ async function addGoal() {
   if (titleIn) titleIn.value = "";
   toast("OBJECTIVE ADDED");
   fetchGoals();
+}
+
+// ── AI briefing summary toggle (Tier 5 Part 2) ──────────────────────────────────
+// Server-side setting (kv_store), default OFF. Reflects + flips the toggle that
+// gates every Claude call in the briefing build.
+function _paintAiToggle(btn, on) {
+  btn.textContent = on ? "AI ●" : "AI ○";
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  btn.classList.toggle("btn-grad", on);
+  btn.classList.toggle("btn-ghost", !on);
+}
+async function initAiBriefingToggle() {
+  const btn = document.getElementById("briefing-ai-toggle");
+  if (!btn) return;
+  try {
+    const d = await apiGet("/api/settings/ai-briefing");
+    _paintAiToggle(btn, !!d.ai_briefing_summary_enabled);
+  } catch { /* leave default off */ }
+  btn.addEventListener("click", async () => {
+    const next = btn.getAttribute("aria-pressed") !== "true";
+    try {
+      const d = await apiPost("/api/settings/ai-briefing", { enabled: next });
+      _paintAiToggle(btn, !!d.ai_briefing_summary_enabled);
+      toast(d.ai_briefing_summary_enabled
+        ? "AI briefing summary ON — regenerate to see it"
+        : "AI briefing summary OFF");
+    } catch { toast("Could not update setting"); }
+  });
 }
 
 async function refreshBriefing() {
