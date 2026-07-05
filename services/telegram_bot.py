@@ -18,7 +18,9 @@ def is_configured():
 
 
 async def _send_message_async(text: str):
-    if not is_configured()          return
+    async def _send_message_async(text: str):
+    if not is_configured():
+        return
     try:
         from telegram import Bot
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
