@@ -18,8 +18,7 @@ def is_configured():
 
 
 async def _send_message_async(text: str):
-    if not is_configured():
-        return
+    if not is_configured()          return
     try:
         from telegram import Bot
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -84,7 +83,7 @@ def start_bot():
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(app.run_polling(allowed_updates=["message"]))
+            loop.run_until_complete(app.run_polling(allowed_updates=["message"], stop_signals=()))
         except Exception as e:
             logger.error(f"Telegram bot error: {e}")
 
