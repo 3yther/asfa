@@ -18,7 +18,6 @@ def is_configured():
 
 
 async def _send_message_async(text: str):
-    async def _send_message_async(text: str):
     if not is_configured():
         return
     try:
