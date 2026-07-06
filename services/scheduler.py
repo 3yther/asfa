@@ -342,39 +342,50 @@ def start_scheduler():
     if _scheduler is not None:
         return _scheduler
     sched = BackgroundScheduler(timezone="Europe/London", daemon=True)
+    # Daily/weekly cron jobs carry misfire_grace_time=60: a redeploy that lands on
+    # a job's fire time would otherwise silently skip that day's run — the grace
+    # window lets it still fire up to 60s late. Interval jobs (water/poll/heartbeat)
+    # don't need it; they'll come around again shortly.
     # Morning briefing at 09:00 UTC (explicit tz so it's stable year-round).
-    sched.add_job(morning_briefing, "cron", hour=9, minute=0, timezone="UTC")
-    sched.add_job(bedtime_reminder, "cron", day_of_week="mon-fri", hour=22, minute=30)
-    sched.add_job(bedtime_reminder, "cron", day_of_week="sun,sat", hour=0, minute=0)
-    sched.add_job(market_open_reminder, "cron", day_of_week="mon-fri", hour=14, minute=0)
-    sched.add_job(reflection_prompt, "cron", hour=22, minute=0)
+    sched.add_job(morning_briefing, "cron", hour=9, minute=0, timezone="UTC",
+                  misfire_grace_time=60)
+    sched.add_job(bedtime_reminder, "cron", day_of_week="mon-fri", hour=22, minute=30,
+                  misfire_grace_time=60)
+    sched.add_job(bedtime_reminder, "cron", day_of_week="sun,sat", hour=0, minute=0,
+                  misfire_grace_time=60)
+    sched.add_job(market_open_reminder, "cron", day_of_week="mon-fri", hour=14, minute=0,
+                  misfire_grace_time=60)
+    sched.add_job(reflection_prompt, "cron", hour=22, minute=0, misfire_grace_time=60)
     # Autonomous end-of-day summary — auto-sent, no user action required.
-    sched.add_job(daily_summary, "cron", hour=21, minute=0, timezone="UTC")
+    sched.add_job(daily_summary, "cron", hour=21, minute=0, timezone="UTC",
+                  misfire_grace_time=60)
     # Daily Obsidian vault sync at midnight (writes the just-ended day's log).
     sched.add_job(obsidian_sync_job, "cron", hour=0, minute=0,
-                  id="obsidian_midnight_sync")
+                  id="obsidian_midnight_sync", misfire_grace_time=60)
     # Supplement reminders (local time) — morning prompt + evening nudge.
-    sched.add_job(supplement_reminder, "cron", hour=9, minute=0)
-    sched.add_job(supplement_reminder, "cron", hour=20, minute=0)
+    sched.add_job(supplement_reminder, "cron", hour=9, minute=0, misfire_grace_time=60)
+    sched.add_job(supplement_reminder, "cron", hour=20, minute=0, misfire_grace_time=60)
     sched.add_job(water_check, "interval", minutes=30)
     sched.add_job(poll_bot_trades, "interval", minutes=5)
-    sched.add_job(weekly_review, "cron", day_of_week="sun", hour=18, minute=0)
+    sched.add_job(weekly_review, "cron", day_of_week="sun", hour=18, minute=0,
+                  misfire_grace_time=60)
     # Tier 3 Part 5 — weekly Telegram digest, Sunday 18:00 Europe/London. Explicit
     # tz: Railway runs UTC, and a bare 18:00 would drift an hour under BST.
     sched.add_job(weekly_digest, "cron", day_of_week="sun", hour=18, minute=0,
-                  timezone="Europe/London", id="weekly_digest", replace_existing=True)
+                  timezone="Europe/London", id="weekly_digest", replace_existing=True,
+                  misfire_grace_time=60)
     # Daily production-DB backup at 03:00 Europe/London (quiet hours).
     sched.add_job(db_backup, "cron", hour=3, minute=0,
-                  timezone="Europe/London", id="db_backup")
+                  timezone="Europe/London", id="db_backup", misfire_grace_time=60)
     # Daily 7-day retention cap on the public CSP-report sink (03:30, quiet hours).
     sched.add_job(csp_report_cleanup, "cron", hour=3, minute=30,
                   timezone="Europe/London", id="csp_report_cleanup",
-                  replace_existing=True)
+                  replace_existing=True, misfire_grace_time=60)
     # Phase 4: daily reflective diary generation — 02:00 Europe/London.
     # Diaries for core agents only (see DIARY_AGENTS); infra agents still run.
     sched.add_job(generate_all_diaries, trigger="cron", hour=2, minute=0,
                   timezone="Europe/London", id="agent_diaries_daily",
-                  replace_existing=True)
+                  replace_existing=True, misfire_grace_time=60)
     # Phase 4: agent heartbeat / proactive health check every 30 minutes.
     sched.add_job(run_heartbeat, trigger="interval", minutes=30,
                   id="agent_heartbeat", replace_existing=True)
