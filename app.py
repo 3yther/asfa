@@ -57,7 +57,10 @@ if _missing_optional:
         file=sys.stderr,
     )
 
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+if not _IS_PROD:
+    # Allow OAuth over plain HTTP for local dev only. In prod, Railway
+    # terminates TLS, so we keep the default (HTTPS-required) enforcement.
+    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 # Google often returns scopes in a different order / adds `openid`, which makes
 # oauthlib raise "Scope has changed". Relaxing this is the standard fix and is
 # safe — we still only ever request the SCOPES we ask for.
