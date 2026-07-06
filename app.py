@@ -2749,7 +2749,12 @@ def api_csp_report():
 def _security_headers(resp):
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("X-Frame-Options", "DENY")
-    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    # strict-origin-when-cross-origin (the browser default) still hides full
+    # paths cross-origin, but sends the bare origin — which the YouTube embed
+    # player requires to validate the embedding domain. "same-origin" sent no
+    # referrer at all on the cross-origin iframe request, so every embed failed
+    # with player Error 153 regardless of the video ID.
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     resp.headers.setdefault("Content-Security-Policy-Report-Only", _CSP_REPORT_ONLY)
     return resp
 
