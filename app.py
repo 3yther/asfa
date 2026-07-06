@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -1559,16 +1560,36 @@ def api_bots_health():
 
 # ── System monitoring (public health probe) ────────────────────────────────────
 
+# Public health probes fan out to synchronous subsystem checks (monitor probes,
+# Polygon.io, DB pings). Uptime pollers can hammer these several times a second;
+# with only 8 gunicorn threads that starves the pool. Cache the computed result
+# for 5s behind a lock so a burst of probes collapses to one real check.
+_HEALTH_CACHE_TTL = 5.0
+_SYSTEM_HEALTH_CACHE = {"ts": 0.0, "health": None}
+_SYSTEM_HEALTH_LOCK = threading.Lock()
+_MC_HEALTH_CACHE = {"ts": 0.0, "data": None}
+_MC_HEALTH_LOCK = threading.Lock()
+
+
 @app.route("/api/system/health", methods=["GET"])
 def api_system_health():
     """Probe-safe health check. Public (in _PUBLIC_ENDPOINTS) so Railway can
     hit it without a session, so it returns ONLY coarse statuses — no error
     strings, file paths, job names, agent internals, or integration/env
     details (those leaked here before; they now live on the auth-gated /full
-    variant below). Still pushes a Telegram alert if state is critical."""
+    variant below). Still pushes a Telegram alert if state is critical.
+
+    Result cached 5s (see _HEALTH_CACHE_TTL) to protect the thread pool from
+    repeated probes; the alert only fires on a fresh (uncached) computation."""
     from services import monitor
-    health = monitor.get_system_health()
-    monitor.alert_if_critical(health)
+    with _SYSTEM_HEALTH_LOCK:
+        if (time.time() - _SYSTEM_HEALTH_CACHE["ts"] >= _HEALTH_CACHE_TTL
+                or _SYSTEM_HEALTH_CACHE["health"] is None):
+            health = monitor.get_system_health()
+            monitor.alert_if_critical(health)
+            _SYSTEM_HEALTH_CACHE["health"] = health
+            _SYSTEM_HEALTH_CACHE["ts"] = time.time()
+        health = _SYSTEM_HEALTH_CACHE["health"]
     return jsonify({
         "status": health.get("status"),
         "db": (health.get("database") or {}).get("status"),
@@ -1952,6 +1973,31 @@ def mission_control_health():
     security     — CRIT if any critical Sentinel alert in the last 24h, WARN if
                    only warnings, else OK.
     """
+    # Probe results are cached 5s (see _HEALTH_CACHE_TTL) so repeated facility-view
+    # polls don't each fan out to Polygon + DB and starve the thread pool. The
+    # cached data is auth-independent; the per-request payload below still gates
+    # the details block on the session.
+    with _MC_HEALTH_LOCK:
+        if (time.time() - _MC_HEALTH_CACHE["ts"] >= _HEALTH_CACHE_TTL
+                or _MC_HEALTH_CACHE["data"] is None):
+            _MC_HEALTH_CACHE["data"] = _mc_health_probe()
+            _MC_HEALTH_CACHE["ts"] = time.time()
+        data = _MC_HEALTH_CACHE["data"]
+
+    # Public endpoint (unauthenticated health checks): expose only the coarse
+    # per-pillar statuses. The details block (probe internals, alert counts)
+    # is included for logged-in sessions only.
+    payload = {"power": "OK", "connectivity": data["connectivity"],
+               "security": data["security"]}
+    if session.get("authed"):
+        payload["details"] = data["details"]
+    return jsonify(payload)
+
+
+def _mc_health_probe():
+    """Run the Mission Control health probes (DB ping, Polygon connectivity,
+    Sentinel alert scan) and return the auth-independent computed values. Kept
+    separate from the route so the result can be cached (see mission_control_health)."""
     details = {
         "polygon_api": "FAIL",
         "database": "FAIL",
@@ -2002,13 +2048,7 @@ def mission_control_health():
         except Exception as e:
             logger.warning("Sentinel alert check failed: %s", e)
 
-    # Public endpoint (unauthenticated health checks): expose only the coarse
-    # per-pillar statuses. The details block (probe internals, alert counts)
-    # is included for logged-in sessions only.
-    payload = {"power": "OK", "connectivity": connectivity, "security": security}
-    if session.get("authed"):
-        payload["details"] = details
-    return jsonify(payload)
+    return {"connectivity": connectivity, "security": security, "details": details}
 
 
 @app.route("/api/agents")
