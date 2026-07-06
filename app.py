@@ -1295,9 +1295,11 @@ def api_emails():
     if not is_authenticated():
         return jsonify({"connected": False, "emails": [], "suggested_events": []})
     emails = get_unread_emails()
-    emails = ai.summarise_emails(emails)
-    suggestions = ai.detect_events_in_emails(emails)
-    return jsonify({"connected": True, "emails": emails, "suggested_events": suggestions})
+    # Claude enrichment (per-email summaries + calendar-event detection) removed:
+    # it fired 8+ sequential API calls on every load (~$3/wk, >1s latency) for
+    # every request unconditionally. Enrichment is gated behind
+    # ai_briefing_summary_enabled; add it back here if the user opts in.
+    return jsonify({"connected": True, "emails": emails, "suggested_events": []})
 
 
 # ── ASFA: water / hydration intake ────────────────────────────────────────────
