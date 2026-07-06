@@ -301,6 +301,16 @@ def db_backup():
                     res.get("file"), res.get("bytes"), res.get("tables"), res.get("rows"))
 
 
+def csp_report_cleanup():
+    """Daily — cap the CSP-report sink at 7 days. The /api/csp-report endpoint is
+    public and only rate-limited, so the table would otherwise grow unbounded."""
+    try:
+        removed = db.purge_old_csp_reports(days=7)
+        logger.info("csp report cleanup: removed %d rows older than 7 days", removed)
+    except Exception as e:
+        logger.error(f"csp report cleanup failed: {e}")
+
+
 @audited("weekly_review", "weekly_review")
 def weekly_review():
     from services.ai import generate_weekly_review
@@ -356,6 +366,10 @@ def start_scheduler():
     # Daily production-DB backup at 03:00 Europe/London (quiet hours).
     sched.add_job(db_backup, "cron", hour=3, minute=0,
                   timezone="Europe/London", id="db_backup")
+    # Daily 7-day retention cap on the public CSP-report sink (03:30, quiet hours).
+    sched.add_job(csp_report_cleanup, "cron", hour=3, minute=30,
+                  timezone="Europe/London", id="csp_report_cleanup",
+                  replace_existing=True)
     # Phase 4: daily reflective diary generation — 02:00 Europe/London.
     # Diaries for core agents only (see DIARY_AGENTS); infra agents still run.
     sched.add_job(generate_all_diaries, trigger="cron", hour=2, minute=0,

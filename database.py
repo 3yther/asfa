@@ -391,6 +391,25 @@ def get_csp_reports(limit: int = 100) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
+def purge_old_csp_reports(days: int = 7) -> int:
+    """Delete CSP reports older than `days`. The report sink is unauthenticated
+    and rate-limited but still unbounded over time; a daily cap keeps the table
+    from growing without limit. Returns the number of rows removed."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "DELETE FROM csp_reports "
+                "WHERE created_at::timestamptz < NOW() - make_interval(days => %s)",
+                (days,))
+        else:
+            cur.execute(
+                "DELETE FROM csp_reports "
+                "WHERE created_at < datetime('now', ?)",
+                (f"-{days} days",))
+        return cur.rowcount
+
+
 def get_workouts(days: int = 7) -> list:
     """Get workout log entries for the last N days (most recent first)."""
     with get_db() as conn:
