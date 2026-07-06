@@ -357,6 +357,7 @@ def start_scheduler():
     sched.add_job(db_backup, "cron", hour=3, minute=0,
                   timezone="Europe/London", id="db_backup")
     # Phase 4: daily reflective diary generation — 02:00 Europe/London.
+    # Diaries for core agents only (see DIARY_AGENTS); infra agents still run.
     sched.add_job(generate_all_diaries, trigger="cron", hour=2, minute=0,
                   timezone="Europe/London", id="agent_diaries_daily",
                   replace_existing=True)

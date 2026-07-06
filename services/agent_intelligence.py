@@ -17,6 +17,12 @@ import database as db
 MODEL = "claude-sonnet-4-6"
 client = None
 
+# Only these core agents get a nightly reflective diary. The other 9 infra
+# agents (backup, health, obsidian, summary, supplement, hydration, sentinel,
+# weekly_review, reflection) still run their jobs — we just stop spending Claude
+# tokens narrating them, since their status is already visible as audit rows.
+DIARY_AGENTS = ["scout", "briefing", "insights", "quant_bot"]
+
 
 def _get_client():
     global client
@@ -119,8 +125,8 @@ Keep it under 150 words. Professional but with personality. No bullet points —
 
 
 def generate_all_diaries(period: str = "daily") -> dict:
-    """Generate diary entries for all 13 agents."""
+    """Generate diary entries for the core agents only (see DIARY_AGENTS)."""
     results = {}
-    for agent_id in db.AGENT_IDS:
+    for agent_id in DIARY_AGENTS:
         results[agent_id] = generate_diary_entry(agent_id, period)
     return results
