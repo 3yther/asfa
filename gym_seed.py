@@ -68,7 +68,7 @@ EXERCISES = [
         "secondary_muscles": [],
         "equipment": "cable",
         "exercise_type": "isolation",
-        "youtube_url": "https://www.youtube.com/watch?v=0KnFCTSOx8k",
+        "youtube_url": "https://www.youtube.com/watch?v=f_OGBg2KxgY",
         "instructions": "1. Set cable to lowest position\n2. Stand side-on, grip handle with far hand\n3. Raise arm out to the side to shoulder height\n4. Slight bend in elbow\n5. Lower slowly — cable keeps constant tension",
         "tips": "Cable keeps tension at the bottom where dumbbells lose it. Lighter is better — control every rep.",
         "rank_bronze": 5, "rank_silver": 8, "rank_gold": 12, "rank_platinum": 16, "rank_diamond": 20
@@ -136,7 +136,7 @@ EXERCISES = [
         "secondary_muscles": ["biceps"],
         "equipment": "machine",
         "exercise_type": "compound",
-        "youtube_url": "https://www.youtube.com/watch?v=CAwf7n6Tuhs",
+        "youtube_url": "https://www.youtube.com/watch?v=O94yEoGXtBY",
         "instructions": "1. Grip bar wide\n2. Lean back slightly\n3. Pull bar to upper chest\n4. Squeeze lats at bottom\n5. Return slowly — full stretch at top",
         "tips": "Imagine pulling your elbows to your hips. Don't use momentum.",
         "rank_bronze": 30, "rank_silver": 45, "rank_gold": 60, "rank_platinum": 75, "rank_diamond": 90
@@ -259,7 +259,7 @@ EXERCISES = [
         "secondary_muscles": [],
         "equipment": "machine",
         "exercise_type": "isolation",
-        "youtube_url": "https://www.youtube.com/watch?v=-M4-G8p1fCI",
+        "youtube_url": "https://www.youtube.com/watch?v=baEXLy09Ncc",
         "instructions": "1. Stand on calf raise machine\n2. Full stretch at bottom — heel below platform\n3. Rise up on toes as high as possible\n4. Hold at top 1 second\n5. Lower slowly",
         "tips": "Full range of motion is key. Calves respond well to high reps and stretch.",
         "rank_bronze": 30, "rank_silver": 50, "rank_gold": 70, "rank_platinum": 90, "rank_diamond": 110
@@ -303,7 +303,7 @@ EXERCISES = [
         "secondary_muscles": ["hamstrings", "glutes"],
         "equipment": "machine",
         "exercise_type": "compound",
-        "youtube_url": "https://www.youtube.com/watch?v=XuFhWuNSAHk",
+        "youtube_url": "https://www.youtube.com/watch?v=AHnX-aimA4E",
         "instructions": "1. Set bar on upper traps\n2. Feet slightly forward of bar\n3. Squat down to parallel\n4. Drive up through heels\n5. Keep chest up",
         "tips": "Feet further forward than free squat due to fixed bar path.",
         "rank_bronze": 40, "rank_silver": 65, "rank_gold": 90, "rank_platinum": 115, "rank_diamond": 140
@@ -314,7 +314,7 @@ EXERCISES = [
         "secondary_muscles": ["triceps", "shoulders"],
         "equipment": "machine",
         "exercise_type": "compound",
-        "youtube_url": "https://www.youtube.com/watch?v=EdtPPGqNrFo",
+        "youtube_url": "https://www.youtube.com/watch?v=b8DqTO6ak0k",
         "instructions": "1. Set bench to 30-45 degrees under Smith machine\n2. Grip bar slightly wider than shoulders\n3. Lower to upper chest\n4. Press up\n5. Keep shoulder blades retracted",
         "tips": "Great for upper chest isolation. Safer than free bar incline.",
         "rank_bronze": 30, "rank_silver": 50, "rank_gold": 70, "rank_platinum": 90, "rank_diamond": 110
@@ -325,7 +325,7 @@ EXERCISES = [
         "secondary_muscles": ["triceps"],
         "equipment": "machine",
         "exercise_type": "compound",
-        "youtube_url": "https://www.youtube.com/watch?v=xUm0BiZCX_I",
+        "youtube_url": "https://www.youtube.com/watch?v=xUm0BiZCWlQ",
         "instructions": "1. Adjust seat so handles at chest height\n2. Press forward fully\n3. Squeeze chest at full extension\n4. Return slowly\n5. Don't let weight stack touch between reps",
         "tips": "Good for beginners learning chest activation. Focus on the squeeze.",
         "rank_bronze": 30, "rank_silver": 50, "rank_gold": 70, "rank_platinum": 90, "rank_diamond": 110
@@ -358,7 +358,7 @@ EXERCISES = [
         "secondary_muscles": [],
         "equipment": "treadmill",
         "exercise_type": "cardio",
-        "youtube_url": "https://www.youtube.com/watch?v=HbVCsJAOr5Y",
+        "youtube_url": "https://www.youtube.com/watch?v=NAsObfFJXvE",
         "instructions": "1. Set treadmill to speed 3.5\n2. Set incline to 13\n3. Walk for 25 minutes\n4. Hold sides only if necessary\n5. Keep upright posture",
         "tips": "Don't hold the rails — it reduces calorie burn significantly. Swing arms naturally.",
         "rank_bronze": 10, "rank_silver": 20, "rank_gold": 30, "rank_platinum": 45, "rank_diamond": 60

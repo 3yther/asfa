@@ -1488,7 +1488,7 @@ async function openVideo(ex) {
   }
   body.innerHTML = `<h2>${esc(ex.name)}</h2>
     <div class="muted-sub" style="margin-bottom:12px">${esc(ex.muscle_group)} · ${esc(ex.exercise_type||"")} · ${esc(ex.equipment||"")}</div>
-    ${embed ? `<div class="video-frame"><iframe src="${embed}" allowfullscreen loading="lazy"></iframe></div>` : ""}
+    ${embed ? `<div class="video-frame"><iframe src="${embed}" allowfullscreen loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>` : ""}
     ${ex.instructions ? `<div class="modal-section"><h4>How To</h4><div class="modal-steps">${esc(ex.instructions)}</div></div>` : ""}
     ${ex.tips ? `<div class="modal-section"><h4>Form Tips</h4><div class="form-tip">${esc(ex.tips)}</div></div>` : ""}
     ${ormTable}
