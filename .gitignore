@@ -16,6 +16,7 @@ google_token.json
 repomix-output.xml
 .obsidian/
 cookies.txt
+test_leak.txt
 static/uploads/fragrances/
 static/uploads/gym-photos/
 # FragDB reference dataset (Tier 3 Part 6) — downloaded locally, never committed
