@@ -64,7 +64,7 @@ os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 import requests
-from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, g, jsonify, redirect, render_template, request, session, url_for
 
 import database as db
 from flask_limiter.util import get_remote_address
@@ -119,6 +119,32 @@ assert app.jinja_env.autoescape, "Jinja autoescape is OFF — XSS vulnerability!
 # own tighter explicit limit below, and authenticated /api/gym/* is exempted via
 # a request_filter further down. In-memory storage suits our single worker.
 limiter = init_rate_limiter(app)
+
+# ── Request timing (diagnostics) ─────────────────────────────────────────────────
+# Single gunicorn worker / 8 threads means one slow endpoint (blocking external
+# call or a synchronous Claude loop) can starve the whole homepage load. Log the
+# duration of every request and warn loudly on anything over the threshold so the
+# culprit endpoint is obvious in the Railway logs.
+_SLOW_REQUEST_SECONDS = 3.0
+
+
+@app.before_request
+def _start_timer():
+    g._request_start = time.monotonic()
+
+
+@app.after_request
+def _log_duration(response):
+    start = getattr(g, "_request_start", None)
+    if start is not None:
+        elapsed = time.monotonic() - start
+        if elapsed >= _SLOW_REQUEST_SECONDS:
+            logger.warning("SLOW %.1fs %s %s -> %s",
+                           elapsed, request.method, request.path, response.status_code)
+        else:
+            logger.info("%.3fs %s %s", elapsed, request.method, request.path)
+    return response
+
 
 # ── App access gate ────────────────────────────────────────────────────────────
 # The dashboard exposes personal Gmail/Calendar/finance data, so the whole app
