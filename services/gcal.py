@@ -1,9 +1,15 @@
 import os
 from datetime import datetime, timedelta, timezone
 
+import httplib2
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 
 from .gmail import load_credentials
+
+# See gmail.py: Google's default transport has no timeout, so a hung connection
+# pins a request thread indefinitely. Give every Calendar client a hard timeout.
+_GOOGLE_HTTP_TIMEOUT = 15
 
 
 def get_todays_events():
@@ -11,7 +17,8 @@ def get_todays_events():
     if not creds:
         return []
     try:
-        service = build("calendar", "v3", credentials=creds)
+        service = build("calendar", "v3",
+                        http=AuthorizedHttp(httplib2.Http(timeout=_GOOGLE_HTTP_TIMEOUT), creds))
         now = datetime.now(timezone.utc)
         start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         end = now.replace(hour=23, minute=59, second=59).isoformat()
@@ -44,7 +51,8 @@ def get_tomorrow_events():
     if not creds:
         return []
     try:
-        service = build("calendar", "v3", credentials=creds)
+        service = build("calendar", "v3",
+                        http=AuthorizedHttp(httplib2.Http(timeout=_GOOGLE_HTTP_TIMEOUT), creds))
         now = datetime.now(timezone.utc)
         tomorrow = now + timedelta(days=1)
         start = tomorrow.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
@@ -77,7 +85,8 @@ def add_event(title, start_datetime, end_datetime, description="", location=""):
     if not creds:
         return {"error": "Not authenticated"}
     try:
-        service = build("calendar", "v3", credentials=creds)
+        service = build("calendar", "v3",
+                        http=AuthorizedHttp(httplib2.Http(timeout=_GOOGLE_HTTP_TIMEOUT), creds))
         event = {
             "summary": title,
             "location": location,

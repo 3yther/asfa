@@ -5,9 +5,17 @@ import base64
 import logging
 from datetime import datetime, timedelta
 
+import httplib2
 from google.oauth2.credentials import Credentials
+from google_auth_httplib2 import AuthorizedHttp
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+
+# Google's default httplib2 transport has NO timeout, so a hung connection blocks
+# the request thread forever. With 1 gunicorn worker / 8 threads, a few stuck
+# Gmail/Calendar calls exhaust the pool and hang the whole app. Wrap every client
+# in a transport with a hard timeout so calls fail fast instead.
+_GOOGLE_HTTP_TIMEOUT = 15
 
 logger = logging.getLogger("asfa.gmail")
 
@@ -164,7 +172,8 @@ def get_unread_emails(hours=24, max_results=10):
     if not creds:
         return []
     try:
-        service = build("gmail", "v1", credentials=creds)
+        service = build("gmail", "v1",
+                        http=AuthorizedHttp(httplib2.Http(timeout=_GOOGLE_HTTP_TIMEOUT), creds))
         after = int((datetime.utcnow() - timedelta(hours=hours)).timestamp())
         ids = []
         page_token = None
@@ -199,7 +208,8 @@ def get_email_by_id(msg_id: str):
     if not creds:
         return {"error": "Gmail not connected"}
     try:
-        service = build("gmail", "v1", credentials=creds)
+        service = build("gmail", "v1",
+                        http=AuthorizedHttp(httplib2.Http(timeout=_GOOGLE_HTTP_TIMEOUT), creds))
         full = service.users().messages().get(
             userId="me", id=msg_id, format="full").execute()
         return _parse_message(full)
