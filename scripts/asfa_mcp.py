@@ -19,6 +19,7 @@ Run manually:   python scripts/asfa_mcp.py
 Claude Desktop: add to claude_desktop_config.json (see README note below).
 """
 
+import hmac
 import json
 import os
 import sys
@@ -37,8 +38,8 @@ _WRITE_TOKEN = os.environ.get("ASFA_MCP_TOKEN") or os.environ.get("APP_PASSWORD"
 
 
 def _check_token(token: str) -> bool:
-    """Constant-ish comparison; writes are refused if no token is configured."""
-    return bool(_WRITE_TOKEN) and (token or "") == _WRITE_TOKEN
+    """Constant-time comparison; writes are refused if no token is configured."""
+    return bool(_WRITE_TOKEN) and hmac.compare_digest(token or "", _WRITE_TOKEN)
 
 
 # ── Read tools ───────────────────────────────────────────────────────────────
