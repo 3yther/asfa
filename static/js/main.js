@@ -873,13 +873,14 @@ function renderTradingActivity(d) {
   return html;
 }
 
-// ── Habits (water + sleep) ─────────────────────────────────────────────────────
+// ── Habits (water) ─────────────────────────────────────────────────────────────
+// Sleep moved to its own Sleep & Recovery card (fetchSleep); habits.sleep_hours
+// is no longer written from the dashboard.
 async function fetchHabits() {
   try {
     const d = await apiGet("/api/habits");
     const today = d.today || {};
     renderWater(today.water_ml || 0, WATER_TARGET, d.water_streak || 0);
-    renderSleep(today.sleep_hours || 0);
     glowCard("hydration");
   } catch { /* silent */ }
 }
@@ -890,15 +891,6 @@ function renderWater(ml, target, streak) {
   if (numEl) numEl.textContent = ml;
   const strkEl = document.getElementById("water-streak");
   if (strkEl) strkEl.textContent = streak ? `🔥 ${streak}` : "";
-}
-
-function renderSleep(hours) {
-  const el = document.getElementById("sleep-val");
-  if (el) el.textContent = hours ? `${hours}h` : "—";
-  const bar = document.getElementById("sleep-bar");
-  if (!bar) return;
-  bar.style.width = Math.min((hours / 9) * 100, 100) + "%";
-  bar.style.background = hours >= 7 ? "var(--green)" : hours >= 5 ? "var(--gold)" : "var(--red)";
 }
 
 // ── Sleep & Recovery (Tier 6) ───────────────────────────────────────────────────
@@ -1808,14 +1800,6 @@ async function logWater(ml) {
   if (!ml) return;
   await apiPost("/api/habits/water", { ml });
   toast(`+${ml}ML LOGGED`);
-  fetchHabits();
-}
-
-async function logSleep() {
-  const h = parseFloat(document.getElementById("sleep-hours")?.value || 0);
-  if (!h) return;
-  await apiPost("/api/habits/sleep", { hours: h });
-  toast(`${h}H SLEEP LOGGED`);
   fetchHabits();
 }
 
