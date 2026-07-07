@@ -39,7 +39,12 @@
   --amber:    #f59e0b;
   --red:      #ff3030;
   --radius:   4px;
-  --cyan:     #22d3ee;
+  /* Design-system collision fix: legacy --cyan (#22d3ee) previously shadowed
+     the design cyan. Unify to the design value so var(--cyan) is authoritative
+     for the reskinned primitives (card titles, dots, focus rings, progress,
+     primary buttons) and for legacy consumers (nav / plan modal / agents),
+     which now share the single design cyan. */
+  --cyan:     #3DE1F0;
   --cyan-hi:  #67e8f9;
   --orb-glow: rgba(34,211,238,0.65);
   --orb-crit: #ff3030;
@@ -366,22 +371,26 @@ body {
 /* ── Cards — refined sci-fi (soft shadow, translucent, no neon edges) ──── */
 .card {
   position: relative;
-  background: var(--card-bg);
+  background: var(--panel);
   backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
-  border: 1px solid rgba(140,170,200,.07);
-  border-radius: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
   /* Phase B — roomier padding (28px) */
   padding: 28px;
   /* Idle widgets sit slightly dimmed; active/hovered ones brighten. */
   opacity: 0; transform: translateY(14px);
   animation: card-in .55s cubic-bezier(.22,1,.36,1) forwards;
   box-shadow: 0 8px 30px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.02);
-  transition: box-shadow .3s ease, border-color .3s ease, transform .3s ease, filter .3s ease, opacity .4s ease;
+  transition: box-shadow .3s ease, border-color .3s var(--ease), transform .3s var(--ease), filter .3s ease, opacity .4s ease;
   filter: saturate(.94) brightness(.96);
 }
 .card:hover {
-  border-color: rgba(0,217,255,.18);
-  box-shadow: 0 10px 38px rgba(0,0,0,.46), 0 0 32px rgba(0,217,255,.06);
+  border-color: var(--line-bright);
+  /* !important: card-in uses animation-fill-mode:forwards and therefore owns
+     `transform` after it completes; only an important declaration outranks a
+     filled animation, so the hover lift needs it (transitions still apply). */
+  transform: translateY(-2px) !important;
+  box-shadow: 0 10px 38px rgba(0,0,0,.46), 0 0 32px var(--cyan-glow);
   filter: saturate(1) brightness(1.02);
 }
 @keyframes card-in { to { opacity: 1; transform: none; } }
@@ -389,8 +398,12 @@ body {
 /* ── Cosmic UI — angular bracket-corner frame borders ───────────────────── */
 .sci-fi-panel {
   position: relative;
-  border: none;
-  background: rgba(9,15,24,0.55);
+  /* Design-system surface: 1px --line border (was borderless — home cards
+     relied only on the corner brackets). The hover glow-EDGE from the spec is
+     deliberately skipped: .sci-fi-panel already uses BOTH ::before and ::after
+     for its corner brackets, so no free pseudo-element remains for a top glow. */
+  border: 1px solid var(--line);
+  background: var(--panel);
   backdrop-filter: blur(18px);
 }
 
@@ -400,7 +413,7 @@ body {
   position: absolute;
   width: 12px;
   height: 12px;
-  border-color: #00d9ff;
+  border-color: var(--cyan);
   border-style: solid;
   opacity: 0;
   pointer-events: none;
@@ -424,7 +437,7 @@ body {
   position: absolute;
   width: 12px;
   height: 12px;
-  border-color: #00d9ff;
+  border-color: var(--cyan);
   border-style: solid;
   opacity: 0;
   animation: corner-draw-in 0.4s ease forwards;
@@ -463,12 +476,11 @@ body {
   border-bottom: 1px solid rgba(140,170,200,.08);
 }
 .card-head h2 {
-  /* Phase B — H2: 1.3rem / 700, cyan with refined glow */
-  font-family: 'Inter', sans-serif;
-  font-size: 1.3rem; font-weight: 700;
-  letter-spacing: .2px; text-transform: none;
-  color: var(--primary);
-  text-shadow: 0 0 12px rgba(0,217,255,.22);
+  /* Design system — card title: 600 / 13px / sans, cyan */
+  font: 600 13px var(--sans);
+  letter-spacing: .04em; text-transform: none;
+  color: var(--cyan);
+  text-shadow: 0 0 12px var(--cyan-glow);
 }
 
 /* ── Card reorder + collapse controls (Tier 3 Part 3) ───────────────────── */
@@ -511,9 +523,10 @@ body {
 .mono   { font-family: 'JetBrains Mono', monospace; }
 .data, .metric { font-family: 'JetBrains Mono', monospace; font-size: .9rem; color: var(--primary); }
 .hud-label {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: .58rem; letter-spacing: 2px; color: var(--muted);
-  text-transform: uppercase;
+  /* Design system — meta / footer line */
+  font: 500 11px var(--mono);
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--text-dim);
 }
 /* Phase B — softened glow */
 .glow   { text-shadow: 0 0 10px rgba(0,217,255,.45); }
@@ -530,35 +543,38 @@ body {
 }
 .btn:active { transform: scale(.97); }
 .btn-grad {
-  background: var(--grad); color: #fff;
-  box-shadow: 0 0 14px rgba(124,58,237,.35);
-  border: 1px solid rgba(124,58,237,.5);
+  /* Design system — primary: solid cyan on void (was purple gradient) */
+  background: var(--cyan); color: var(--void);
+  box-shadow: 0 0 14px var(--cyan-glow);
+  border: 1px solid transparent;
 }
-.btn-grad:hover { box-shadow: 0 0 24px rgba(124,58,237,.6); }
+.btn-grad:hover { box-shadow: 0 0 24px var(--cyan-glow); }
 .btn-ghost {
-  background: rgba(0,217,255,.06);
-  border: 1px solid rgba(0,217,255,.2);
-  color: var(--primary);
+  /* Design system — ghost: transparent, line-bright border, cyan text */
+  background: transparent;
+  border: 1px solid var(--line-bright);
+  color: var(--cyan);
+  font-size: 11px;
 }
-.btn-ghost:hover { border-color: var(--primary); background: rgba(0,217,255,.12); }
+.btn-ghost:hover { border-color: var(--cyan); background: transparent; box-shadow: 0 0 16px var(--cyan-glow); }
 .btn.full { width: 100%; margin-top: 8px; }
 .btn-spinning { animation: spin-one .5s linear infinite; }
 @keyframes spin-one { to { transform: rotate(360deg); } }
 
 /* ── Forms ────────────────────────────────────────────────────────────── */
 input, select, textarea {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: .75rem; letter-spacing: .5px;
-  background: rgba(0,0,0,.5); color: var(--text);
-  border: 1px solid rgba(0,217,255,.15); border-radius: 2px;
+  /* Design system — inputs: mono 13px, panel-2 surface, line border */
+  font: 13px var(--mono); letter-spacing: .5px;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
   padding: 9px 12px; width: 100%;
   outline: none; transition: border-color .2s, box-shadow .2s;
   text-transform: uppercase;
 }
 input::placeholder, textarea::placeholder { color: var(--muted); letter-spacing: 1px; }
 input:focus, select:focus, textarea:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(0,217,255,.12), 0 0 12px rgba(0,217,255,.15);
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 3px var(--cyan-glow);
 }
 textarea { resize: vertical; min-height: 64px; margin-top: 8px; text-transform: none; }
 input[type=range] { accent-color: var(--purple); padding: 0; border: none; background: none; }
@@ -766,10 +782,11 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
 .streak { font-size: .9rem; font-family: 'JetBrains Mono', monospace; color: var(--gold); }
 
 /* ── Progress bar ─────────────────────────────────────────────────────── */
-.progress { height: 4px; background: rgba(139,148,158,.1); border-radius: 0; overflow: hidden; margin-top: 10px; }
+.progress { height: 6px; background: var(--panel-2); border-radius: var(--r-pill); overflow: hidden; margin-top: 10px; }
 .progress-fill {
   height: 100%; width: 0;
-  background: linear-gradient(90deg, var(--purple), var(--primary));
+  background: var(--cyan); box-shadow: 0 0 8px var(--cyan-glow);
+  border-radius: var(--r-pill);
   transition: width 1s cubic-bezier(.25,1,.35,1);
 }
 
@@ -1379,11 +1396,12 @@ body.nav-with-mission .pc-tr      { top: 100px; }
 .hb-fail { color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: .8rem; }
 .heartbeat-bar.hb-error .hb-fail { color: var(--red); }
 
-/* Status indicators (small solid dots, no animation) */
-.status-indicator { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
-.status-green  { background: var(--green);  box-shadow: 0 0 6px rgba(63,185,80,.6); }
-.status-yellow { background: var(--amber);  box-shadow: 0 0 6px rgba(245,158,11,.6); }
-.status-red    { background: var(--red);    box-shadow: 0 0 6px rgba(255,48,48,.6); }
+/* Status indicators — design-system dots (7px + glow) */
+.status-indicator { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+.status-green  { background: var(--online); box-shadow: 0 0 6px var(--online); }
+.status-yellow { background: var(--warn);   box-shadow: 0 0 6px var(--warn); }
+.status-red    { background: var(--alert);  box-shadow: 0 0 6px var(--alert); }
+.status-live   { background: var(--cyan);   box-shadow: 0 0 6px var(--cyan); animation: blink-dot 2s ease-in-out infinite; }
 
 /* Grid: 3 cols → 2 → 1 */
 .agents-grid {
