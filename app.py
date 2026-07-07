@@ -498,6 +498,100 @@ def api_log_sleep():
     return jsonify({"ok": True, "message": _do_sleep(hours)})
 
 
+# ── Sleep tracking (Tier 6) ─────────────────────────────────────────────────────
+# Auth-gated by the global _require_login before_request (these endpoints are NOT
+# in _PUBLIC_ENDPOINTS); POSTs also carry the CSRF token via the patched fetch.
+
+_WAKE_FEELINGS = ("refreshed", "groggy", "neutral")
+
+
+def _readiness_status(readiness):
+    """Map a 0–100 readiness score to a status band (None → 'no data')."""
+    if readiness is None:
+        return "no data"
+    if readiness >= 85:
+        return "optimal"
+    if readiness >= 70:
+        return "good"
+    if readiness >= 55:
+        return "fair"
+    return "low"
+
+
+@app.route("/api/sleep/log", methods=["POST"])
+def api_sleep_log():
+    data = request.get_json(force=True) or {}
+
+    date_str = (data.get("date") or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"error": "date must be a real calendar date"}), 400
+
+    try:
+        duration = float(data.get("duration"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "duration must be a number"}), 400
+    if not 0 <= duration <= 12:
+        return jsonify({"error": "duration must be between 0 and 12 hours"}), 400
+
+    quality_raw = data.get("quality")
+    if isinstance(quality_raw, bool) or (isinstance(quality_raw, float)
+                                         and not quality_raw.is_integer()):
+        return jsonify({"error": "quality must be an integer 1-5"}), 400
+    try:
+        quality = int(quality_raw)
+    except (TypeError, ValueError):
+        return jsonify({"error": "quality must be an integer 1-5"}), 400
+    if not 1 <= quality <= 5:
+        return jsonify({"error": "quality must be between 1 and 5"}), 400
+
+    wake_feeling = data.get("wake_feeling")
+    if wake_feeling:
+        if wake_feeling not in _WAKE_FEELINGS:
+            return jsonify({"error": f"wake_feeling must be one of {', '.join(_WAKE_FEELINGS)}"}), 400
+    else:
+        wake_feeling = None
+    notes = data.get("notes") or None
+
+    row, err = db.log_sleep_entry(date_str, duration, quality, wake_feeling, notes)
+    if err == "duplicate":
+        return jsonify({"error": f"sleep already logged for {date_str}"}), 409
+    return jsonify({
+        "ok": True,
+        "readiness": db.score_readiness(duration, quality),
+        "message": f"Sleep logged for {date_str}",
+    })
+
+
+@app.route("/api/sleep/readiness")
+def api_sleep_readiness():
+    today = _today()
+    row = db.get_sleep(today)
+    if not row:
+        return jsonify({"readiness": None, "date": today, "status": "no data"})
+    readiness = db.score_readiness(row["duration"], row["quality"])
+    return jsonify({
+        "readiness": readiness,
+        "date": today,
+        "duration": row["duration"],
+        "quality": row["quality"],
+        "status": _readiness_status(readiness),
+    })
+
+
+@app.route("/api/sleep/history")
+def api_sleep_history():
+    try:
+        days = int(request.args.get("days", 14))
+    except (TypeError, ValueError):
+        days = 14
+    days = max(1, min(90, days))
+    return jsonify(db.get_sleep_history(days))
+
+
 # ── Body / gym (PBs + body weight only — workout logging removed) ──────────────
 
 @app.route("/api/gym")
