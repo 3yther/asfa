@@ -45,6 +45,7 @@ function wireControls() {
   wireObsidian();
   wireBodyComp();
   wireSpendForm();
+  wireSleep();
 }
 
 // ── Spend logging (Financial Report card) ─────────────────────────────────────────
@@ -594,6 +595,7 @@ const CARD_LOADERS = {
   inbox: fetchEmails, news: fetchNews, scent: fetchScent,
   money: fetchMoney, goals: fetchGoals, reflection: fetchReflection,
   supplements: fetchSupplements, bodycomp: fetchBodyComp,
+  sleep: fetchSleep,
 };
 
 function loadAll() {
@@ -897,6 +899,117 @@ function renderSleep(hours) {
   if (!bar) return;
   bar.style.width = Math.min((hours / 9) * 100, 100) + "%";
   bar.style.background = hours >= 7 ? "var(--green)" : hours >= 5 ? "var(--gold)" : "var(--red)";
+}
+
+// ── Sleep & Recovery (Tier 6) ───────────────────────────────────────────────────
+// Two-state card: STATE A (quick-log form) until today is logged, then STATE B
+// (readiness readout, locked for the day). A failed fetch leaves the card as-is
+// so it never blanks — matching the other loaders' try/catch pattern.
+let __sleepQuality = null;   // selected quality 1–5
+let __sleepFeel = null;      // optional wake feeling
+
+// Server logs sleep against its local date; compute the same local date client-side.
+function sleepLocalToday() {
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function showSleepState(logged) {
+  const log = document.getElementById("sleep-log");
+  const readout = document.getElementById("sleep-readout");
+  if (!log || !readout) return;
+  log.hidden = !!logged;
+  readout.hidden = !logged;
+}
+
+function renderSleepReadout(r) {
+  const num = document.getElementById("sleep-readiness");
+  if (num) num.textContent = r.readiness;
+  const meta = document.getElementById("sleep-readout-meta");
+  if (meta) {
+    const dur = (r.duration != null) ? `${r.duration}H` : "—";
+    const q = (r.quality != null) ? `${r.quality}/5` : "—";
+    meta.innerHTML = `<span>${esc(dur)}</span><span>${esc(q)} QUALITY</span>`;
+  }
+  showSleepState(true);
+}
+
+async function fetchSleep() {
+  try {
+    const r = await apiGet("/api/sleep/readiness");
+    if (r && r.readiness != null) renderSleepReadout(r);
+    else showSleepState(false);
+  } catch { /* leave card visible; keep whatever state is showing */ }
+  fetchSleepHistory();
+}
+
+async function fetchSleepHistory() {
+  const strip = document.getElementById("sleep-strip");
+  if (!strip) return;
+  try {
+    const rows = await apiGet("/api/sleep/history?days=14");
+    if (!Array.isArray(rows) || !rows.length) { strip.innerHTML = ""; return; }
+    strip.innerHTML = rows.map((n) => {
+      const h = Math.max(4, Math.min(100, Number(n.readiness) || 0));
+      return `<div class="sleep-bar" style="height:${h}%" title="${esc(n.date)} · readiness ${esc(n.readiness)}"></div>`;
+    }).join("");
+  } catch { /* leave strip as-is */ }
+}
+
+function wireSleep() {
+  const qWrap = document.getElementById("sleep-quality");
+  if (qWrap) qWrap.addEventListener("click", (e) => {
+    const b = e.target.closest(".sleep-q");
+    if (!b) return;
+    __sleepQuality = parseInt(b.dataset.q, 10);
+    qWrap.querySelectorAll(".sleep-q").forEach((x) => x.classList.toggle("sel", x === b));
+  });
+  const fWrap = document.getElementById("sleep-feel");
+  if (fWrap) fWrap.addEventListener("click", (e) => {
+    const b = e.target.closest(".sleep-feel-pill");
+    if (!b) return;
+    const already = b.classList.contains("sel");
+    fWrap.querySelectorAll(".sleep-feel-pill").forEach((x) => x.classList.remove("sel"));
+    __sleepFeel = already ? null : b.dataset.feel;   // tap again to clear (optional)
+    if (!already) b.classList.add("sel");
+  });
+  const btn = document.getElementById("sleep-log-btn");
+  if (btn) btn.addEventListener("click", submitSleep);
+}
+
+async function submitSleep() {
+  const err = document.getElementById("sleep-err");
+  const setErr = (m) => { if (err) err.textContent = m || ""; };
+  setErr("");
+
+  const duration = parseFloat(document.getElementById("sleep-duration")?.value);
+  if (isNaN(duration)) { setErr("ENTER SLEEP DURATION IN HOURS"); return; }
+  if (!__sleepQuality) { setErr("TAP A QUALITY RATING (1–5)"); return; }
+
+  const payload = { date: sleepLocalToday(), duration, quality: __sleepQuality };
+  if (__sleepFeel) payload.wake_feeling = __sleepFeel;
+  const notes = document.getElementById("sleep-notes")?.value.trim();
+  if (notes) payload.notes = notes;
+
+  const btn = document.getElementById("sleep-log-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const d = await apiPost("/api/sleep/log", payload);
+    renderSleepReadout({ readiness: d.readiness, duration, quality: __sleepQuality });
+    toast("SLEEP LOGGED");
+    fetchSleepHistory();
+  } catch (e) {
+    if (String(e.message) === "409") {
+      // Already logged today — reconcile to STATE B.
+      fetchSleep();
+    } else if (String(e.message) === "400") {
+      setErr("COULDN'T LOG — CHECK DURATION (0–12H) AND QUALITY");
+    } else {
+      setErr("LOG FAILED — TRY AGAIN");
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // ── Calendar ───────────────────────────────────────────────────────────────────
