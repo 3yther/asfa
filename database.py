@@ -732,6 +732,123 @@ def get_body_weight(days=30):
         return [dict(r) for r in cur.fetchall()]
 
 
+# ── Sleep tracking (Tier 6) ─────────────────────────────────────────────────────
+# Structured sleep log, one row per night (UNIQUE date). Distinct from the
+# habits.sleep_hours rollup written by log_sleep() above — this table also
+# captures quality/wake-feeling and drives the readiness score.
+# Self-initialising, same pattern as focus/supplements: idempotent CREATE on
+# first use, works on SQLite and a fresh Postgres.
+
+_SLEEP_READY = False
+
+
+def _ensure_sleep_table():
+    global _SLEEP_READY
+    if _SLEEP_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS sleep (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL UNIQUE,
+        duration REAL NOT NULL,
+        quality INTEGER NOT NULL,
+        wake_feeling TEXT,
+        notes TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+    )"""
+    if USE_POSTGRES:
+        stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        stmt = stmt.replace("datetime('now')", "NOW()")
+    with get_db() as conn:
+        conn.cursor().execute(stmt)
+    _SLEEP_READY = True
+
+
+def score_readiness(duration, quality) -> int:
+    """Pure readiness score in 0–100 from sleep duration (hours) and quality (1–5).
+    Shared by log_sleep_entry, get_sleep_readiness, and get_sleep_history so the
+    maths can never drift. Boundaries: 5.5 and 9.0 hours both incur no duration
+    penalty; 9.0 is NOT oversleep.
+      duration <5.5 → −20 · 5.5–9.0 → 0 · >9.0 → −10 (oversleep)
+      quality ≤3 → −15 · ==4 → −5 · ==5 → 0
+    Worked checks: (7.0,4)=95 · (8.0,5)=100 · (5.0,3)=65 · (10.0,2)=75."""
+    score = 100
+    d = float(duration)
+    if d < 5.5:
+        score -= 20
+    elif d > 9.0:
+        score -= 10
+    q = int(quality)
+    if q <= 3:
+        score -= 15
+    elif q == 4:
+        score -= 5
+    return max(0, min(100, score))
+
+
+def log_sleep_entry(date, duration, quality, wake_feeling=None, notes=None):
+    """Insert one night of sleep. Returns (row_dict, None) on success or
+    (None, "duplicate") on a UNIQUE(date) violation — never overwrites an
+    existing night (no update path yet)."""
+    _ensure_sleep_table()
+    IntegrityError = psycopg2.IntegrityError if USE_POSTGRES else sqlite3.IntegrityError
+    ph = "%s" if USE_POSTGRES else "?"
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"INSERT INTO sleep (date, duration, quality, wake_feeling, notes) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph})",
+                (date, float(duration), int(quality), wake_feeling, notes))
+    except IntegrityError:
+        return (None, "duplicate")
+    return (get_sleep(date), None)
+
+
+def get_sleep(date):
+    """Fetch one night as a dict, or None if nothing logged for that date."""
+    _ensure_sleep_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM sleep WHERE date = {ph}", (date,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def get_sleep_readiness(date=None):
+    """Readiness score for a given night (defaults to today, server-local).
+    Returns None if no entry exists for that date."""
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+    row = get_sleep(date)
+    if not row:
+        return None
+    return score_readiness(row["duration"], row["quality"])
+
+
+def get_sleep_history(days: int = 14) -> list:
+    """Logged nights within the last `days`, oldest→newest for charting.
+    Missing days are omitted. Shape: [{date, duration, quality, readiness}, ...]."""
+    _ensure_sleep_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "SELECT date, duration, quality FROM sleep "
+                "WHERE CAST(date AS TIMESTAMP) >= NOW() - (%s * INTERVAL '1 day') "
+                "ORDER BY date ASC", (days,))
+        else:
+            cur.execute(
+                "SELECT date, duration, quality FROM sleep "
+                "WHERE date >= date('now', ?) ORDER BY date ASC",
+                (f"-{days} days",))
+        rows = cur.fetchall()
+    return [{"date": r["date"], "duration": r["duration"], "quality": r["quality"],
+             "readiness": score_readiness(r["duration"], r["quality"])}
+            for r in rows]
+
+
 # ── Briefing cache ─────────────────────────────────────────────────────────────
 
 def get_cached_briefing(date: str):
