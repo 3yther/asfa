@@ -1650,3 +1650,8 @@ body.nav-with-mission .pc-tr      { top: 100px; }
 #request-card #request-input { flex: 1; }
 #request-card #decompose-status { margin-top: 10px; font-family: 'JetBrains Mono', monospace; font-size: .72rem; color: var(--muted); min-height: 16px; }
 #request-card #decompose-status.error { color: #ff6b6b; }
+
+/* ── Design system — readout typography (Phase 3) ─────────────────────────── */
+.readout-l { font: 600 26px/1.1 var(--mono); letter-spacing: .02em; }
+.val-live  { color: var(--cyan); text-shadow: 0 0 20px var(--cyan-glow); }
+.metastrip { display: flex; gap: 12px; font: 500 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--text-dim); }
