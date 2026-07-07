@@ -35,6 +35,36 @@
   #bodycomp-card .bc-val { font-size: 1.15rem; margin-top: 2px; }
   #bodycomp-card .bc-manual summary { cursor: pointer; font-size: .68rem; letter-spacing: 1px; color: var(--muted); padding: 4px 0; }
   #bodycomp-card .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  /* Sleep & Recovery card */
+  #sleep-card .sleep-log { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+  #sleep-card .sleep-input { width: 100%; }
+  #sleep-card .sleep-quality { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  #sleep-card .sleep-q,
+  #sleep-card .sleep-feel-pill {
+    font: 600 12px var(--mono); letter-spacing: .06em; cursor: pointer;
+    padding: 8px 0; border-radius: var(--r-pill, 999px);
+    background: var(--panel-2); color: var(--text-dim);
+    border: 1px solid rgba(140,170,200,.14); transition: all .16s ease;
+  }
+  #sleep-card .sleep-feel { display: flex; gap: 6px; }
+  #sleep-card .sleep-feel-pill { flex: 1; text-transform: uppercase; padding: 7px 0; }
+  #sleep-card .sleep-q:hover,
+  #sleep-card .sleep-feel-pill:hover { border-color: var(--cyan); color: var(--text); }
+  #sleep-card .sleep-q.sel,
+  #sleep-card .sleep-feel-pill.sel {
+    background: var(--cyan); color: var(--void);
+    border-color: var(--cyan); box-shadow: 0 0 14px var(--cyan-glow);
+  }
+  #sleep-card .sleep-err { min-height: 15px; font: 500 11px var(--mono); letter-spacing: .06em; color: var(--red); }
+  #sleep-card .sleep-err:empty { min-height: 0; }
+  #sleep-card .sleep-readout { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 10px; }
+  #sleep-card .sleep-readout .readout-l { font-size: 40px; }
+  #sleep-card .sleep-strip {
+    display: flex; align-items: flex-end; gap: 3px; height: 42px;
+    margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(140,170,200,.10);
+  }
+  #sleep-card .sleep-bar { flex: 1; min-width: 2px; background: var(--cyan); border-radius: 2px 2px 0 0; box-shadow: 0 0 6px var(--cyan-glow); opacity: .85; }
+  #sleep-card .sleep-bar.empty { background: rgba(140,170,200,.10); box-shadow: none; }
 </style>
 </head>
 <body class="nav-with-mission">
@@ -374,13 +404,41 @@
     </div>
   </section>
 
-  <section class="card sci-fi-panel" id="sleep-card" data-tabs="habits">
-    <div class="card-head"><h2 data-decode>Biometrics // Rest</h2></div>
-    <form id="sleep-form" class="inline-form">
-      <input type="number" id="sleep-hours" step="0.5" min="0" max="24" placeholder="HOURS LAST NIGHT">
-      <button class="btn btn-grad" type="submit">LOG</button>
-    </form>
-    <canvas id="sleep-chart" height="110" style="margin-top:14px"></canvas>
+  <section class="card sci-fi-panel" id="sleep-card" data-card="sleep" data-tabs="habits">
+    <div class="card-head">
+      <h2 data-decode>Sleep &amp; Recovery</h2>
+      <span class="hud-label">LAST NIGHT</span>
+    </div>
+
+    <!-- STATE A — quick log (shown when nothing is logged for today) -->
+    <div class="sleep-log" id="sleep-log" hidden>
+      <input type="number" class="sleep-input" id="sleep-duration" step="0.25" min="0" max="12" placeholder="HRS — E.G. 7.5">
+      <div class="sleep-quality" id="sleep-quality" role="group" aria-label="Sleep quality, 1 to 5">
+        <button type="button" class="sleep-q" data-q="1">1</button>
+        <button type="button" class="sleep-q" data-q="2">2</button>
+        <button type="button" class="sleep-q" data-q="3">3</button>
+        <button type="button" class="sleep-q" data-q="4">4</button>
+        <button type="button" class="sleep-q" data-q="5">5</button>
+      </div>
+      <div class="sleep-feel" id="sleep-feel" role="group" aria-label="How you woke (optional)">
+        <button type="button" class="sleep-feel-pill" data-feel="refreshed">refreshed</button>
+        <button type="button" class="sleep-feel-pill" data-feel="neutral">neutral</button>
+        <button type="button" class="sleep-feel-pill" data-feel="groggy">groggy</button>
+      </div>
+      <input type="text" class="sleep-input" id="sleep-notes" maxlength="200" placeholder="NOTES (OPTIONAL)">
+      <button type="button" class="btn btn-grad" id="sleep-log-btn">Log Sleep</button>
+      <div class="sleep-err" id="sleep-err" role="alert"></div>
+    </div>
+
+    <!-- STATE B — readout (shown once today is logged; locked for the day) -->
+    <div class="sleep-readout" id="sleep-readout" hidden>
+      <div class="readout-l val-live glow" id="sleep-readiness">—</div>
+      <div class="metastrip" id="sleep-readout-meta"></div>
+      <span class="hud-label">LOGGED — READINESS FEEDS GYM</span>
+    </div>
+
+    <!-- 14-night readiness history strip -->
+    <div class="sleep-strip" id="sleep-strip" aria-label="14-night readiness history"></div>
   </section>
 
   <section class="card sci-fi-panel" id="bodyweight-card" data-tabs="body">
