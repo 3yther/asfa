@@ -1,7 +1,9 @@
+import calendar
 import hashlib
 import json
 import os
 import random
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -366,6 +368,227 @@ def get_spending(days: int = 7):
                 "SELECT * FROM spending WHERE date >= date('now', ?) ORDER BY date DESC",
                 (f"-{days} days",))
         return [dict(r) for r in cur.fetchall()]
+
+
+# ── Finance / transactions (Tier 8) ─────────────────────────────────────────────
+# Tier 8 EXTENDS the legacy `spending` table (Tier 1) rather than opening a
+# parallel store: it adds `merchant` and `source` columns and layers richer
+# helpers (month summary, spend pace, category history) on top. log_spend()/
+# get_spending() and the /api/money card keep working and read the SAME rows.
+# Amount sign convention: positive = spending, negative = income/refund. The
+# legacy `note` column doubles as Tier 8's `notes`.
+
+_SPENDING_READY = False
+
+
+def _ensure_transactions_table():
+    """Ensure the spending table exists and carries the Tier 8 columns. Safe to
+    call before init_db() (e.g. isolated test DBs): creates the table if missing,
+    then idempotently adds merchant/source."""
+    global _SPENDING_READY
+    if _SPENDING_READY:
+        return
+    create = """CREATE TABLE IF NOT EXISTS spending (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        amount REAL NOT NULL,
+        category TEXT NOT NULL,
+        note TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+    )"""
+    if USE_POSTGRES:
+        create = create.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        create = create.replace("datetime('now')", "NOW()")
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(create)
+        _add_column(cur, "spending", "merchant", "TEXT")
+        _add_column(cur, "spending", "source", "TEXT DEFAULT 'manual'")
+    _SPENDING_READY = True
+
+
+def get_transaction(txn_id):
+    """Fetch one transaction as a dict, or None if it doesn't exist."""
+    _ensure_transactions_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM spending WHERE id = {ph}", (txn_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def log_transaction(date, amount, category, merchant=None, notes=None, source="manual"):
+    """Insert one transaction. Positive amount = spending, negative = income/refund.
+    Returns (row_dict, None) on success or (None, error_str) on a validation
+    failure. Validates: date YYYY-MM-DD (real calendar date), amount a finite real
+    number (bools rejected), category non-blank. category is lower-cased."""
+    _ensure_transactions_table()
+    if not isinstance(date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
+        return (None, "date must be YYYY-MM-DD")
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return (None, "date must be a real calendar date")
+    if isinstance(amount, bool):
+        return (None, "amount must be a number")
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        return (None, "amount must be a number")
+    if amount != amount or amount in (float("inf"), float("-inf")):
+        return (None, "amount must be a finite number")
+    category = (category or "").strip().lower()
+    if not category:
+        return (None, "category is required")
+    if source not in ("manual", "import"):
+        return (None, "source must be 'manual' or 'import'")
+
+    merchant = (merchant or "").strip() or None
+    notes = (notes or "").strip() or None
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO spending (date, amount, category, merchant, note, source) "
+            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph})",
+            (date, amount, category, merchant, notes, source))
+        if USE_POSTGRES:
+            cur.execute("SELECT lastval() AS id")
+        else:
+            cur.execute("SELECT last_insert_rowid() AS id")
+        new_id = cur.fetchone()["id"]
+    return (get_transaction(new_id), None)
+
+
+def _current_month() -> str:
+    return datetime.now().strftime("%Y-%m")
+
+
+def get_month_summary(month=None):
+    """Spending/income rollup for a calendar month (YYYY-MM, defaults to the
+    current month). An empty month yields zeros and an empty by_category.
+    by_category sums SPENDING (positive amounts) per category; total_income is a
+    positive figure; net = total_spent - total_income."""
+    _ensure_transactions_table()
+    if not month:
+        month = _current_month()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT amount, category FROM spending WHERE date LIKE {ph}",
+            (f"{month}-%",))
+        rows = cur.fetchall()
+    total_spent = 0.0
+    total_income = 0.0
+    by_category = {}
+    for r in rows:
+        amt = float(r["amount"])
+        if amt >= 0:
+            total_spent += amt
+            by_category[r["category"]] = round(
+                by_category.get(r["category"], 0.0) + amt, 2)
+        else:
+            total_income += -amt
+    return {
+        "month": month,
+        "total_spent": round(total_spent, 2),
+        "total_income": round(total_income, 2),
+        "net": round(total_spent - total_income, 2),
+        "by_category": by_category,
+        "transaction_count": len(rows),
+    }
+
+
+def get_spending_pace(month=None):
+    """Spend-rate projection for a month (YYYY-MM, defaults to current). For the
+    current month days_elapsed is today's day-of-month; a past month counts as
+    fully elapsed, a future month as not started. projected_month_total =
+    daily_avg * days_in_month."""
+    if not month:
+        month = _current_month()
+    spent_so_far = get_month_summary(month)["total_spent"]
+    year, mon = (int(x) for x in month.split("-"))
+    days_in_month = calendar.monthrange(year, mon)[1]
+    now = datetime.now()
+    cur_month = now.strftime("%Y-%m")
+    if month == cur_month:
+        days_elapsed = now.day
+    elif month < cur_month:
+        days_elapsed = days_in_month
+    else:
+        days_elapsed = 0
+    daily_avg = round(spent_so_far / days_elapsed, 2) if days_elapsed else 0.0
+    return {
+        "month": month,
+        "spent_so_far": spent_so_far,
+        "days_elapsed": days_elapsed,
+        "days_in_month": days_in_month,
+        "daily_avg": daily_avg,
+        "projected_month_total": round(daily_avg * days_in_month, 2),
+    }
+
+
+def get_recent_transactions(limit=20):
+    """Most recent transactions, newest first. Ordered by date then id so
+    same-day inserts keep insertion order. limit is clamped to 1..200."""
+    _ensure_transactions_table()
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 20
+    limit = max(1, min(200, limit))
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT * FROM spending ORDER BY date DESC, id DESC LIMIT {ph}",
+            (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_category_history(months=6):
+    """Per-month spending totals per category for the last `months`
+    (oldest→newest), for trend charts. Only spending (positive amounts) counts.
+    Every month in the window gets an entry (empty months as zeros). Shape:
+    [{month, total_spent, by_category: {cat: sum}}, ...]. months clamped 1..36."""
+    _ensure_transactions_table()
+    try:
+        months = int(months)
+    except (TypeError, ValueError):
+        months = 6
+    months = max(1, min(36, months))
+    now = datetime.now()
+    buckets = []
+    y, m = now.year, now.month
+    for _ in range(months):
+        buckets.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    buckets.reverse()
+    start = buckets[0] + "-01"
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT date, amount, category FROM spending WHERE date >= {ph}",
+            (start,))
+        rows = cur.fetchall()
+    out = {b: {"month": b, "total_spent": 0.0, "by_category": {}} for b in buckets}
+    for r in rows:
+        b = r["date"][:7]
+        if b not in out:
+            continue
+        amt = float(r["amount"])
+        if amt < 0:
+            continue
+        entry = out[b]
+        entry["total_spent"] = round(entry["total_spent"] + amt, 2)
+        entry["by_category"][r["category"]] = round(
+            entry["by_category"].get(r["category"], 0.0) + amt, 2)
+    return [out[b] for b in buckets]
 
 
 # ── CSP violation reports ───────────────────────────────────────────────────────
