@@ -579,20 +579,33 @@ const CARD_LOADERS = {
 };
 
 function loadAll() {
+  // Suppress card glow on the first render so the card-in fade animation runs
+  // uninterrupted; cleared once loaders complete so subsequent polling updates
+  // glow normally. Loaders below check this flag before calling glowCard().
+  window.asfa_initial_load = true;
   const collapsed = window.__asfaCollapsed || (() => false);
+  const pending = [];
   for (const [cardId, fn] of Object.entries(CARD_LOADERS)) {
-    if (!collapsed(cardId)) fn();
+    if (!collapsed(cardId)) pending.push(fn());
   }
   // Not gated: multi-card habits (water+sleep), gym (separate page seam), the
   // local market clock, and global/non-card widgets.
-  fetchHabits();
-  fetchGym();
-  initChat();
-  fetchNotifications();
-  initSpotify();
-  fetchFocusLine();
-  fetchFocusToday();
-  initMarketClock();
+  pending.push(
+    fetchHabits(),
+    fetchGym(),
+    initChat(),
+    fetchNotifications(),
+    initSpotify(),
+    fetchFocusLine(),
+    fetchFocusToday(),
+    initMarketClock(),
+  );
+  // Loaders glow their cards after their fetch resolves (post-await), so the
+  // flag must stay true until those promises settle — clearing it synchronously
+  // here would flip it back before the first glowCard() ever checks it, and the
+  // cards would glow on initial render anyway. allSettled tolerates the
+  // non-promise return values from the init* helpers.
+  Promise.allSettled(pending).then(() => { window.asfa_initial_load = false; });
 }
 
 // Expanding a collapsed card (re)loads its data, since it was skipped on load.
@@ -707,7 +720,7 @@ async function fetchScoutPipeline() {
                  `<span class="sp-nudge-days">nudge · ${d == null ? "?" : d}d</span></div>`;
         }).join("");
     }
-    glowCard("scout-pipeline");
+    if (!window.asfa_initial_load) glowCard("scout-pipeline");
   } catch { /* silent */ }
 }
 
@@ -721,7 +734,7 @@ async function fetchBriefing() {
     if (uv) uv.textContent = uptime();
     const ls = document.getElementById("last-sync");
     if (ls) ls.textContent = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-    glowCard("briefing");
+    if (!window.asfa_initial_load) glowCard("briefing");
   } catch { /* silent */ }
 }
 
@@ -736,7 +749,7 @@ async function fetchScore() {
   try {
     const d = await apiGet("/api/score");
     renderScore(d);
-    glowCard("score");
+    if (!window.asfa_initial_load) glowCard("score");
   } catch { /* silent */ }
 }
 
@@ -784,7 +797,7 @@ async function fetchBots() {
   try {
     const d = await apiGet("/api/asfa/bot-status");
     body.innerHTML = renderTradingActivity(d);
-    glowCard("bots");
+    if (!window.asfa_initial_load) glowCard("bots");
   } catch {
     // Even on failure, fall back to the static dashboard links.
     body.innerHTML = renderBotLinks({
@@ -861,7 +874,7 @@ async function fetchHabits() {
     const d = await apiGet("/api/habits");
     const today = d.today || {};
     renderWater(today.water_ml || 0, WATER_TARGET, d.water_streak || 0);
-    glowCard("hydration");
+    if (!window.asfa_initial_load) glowCard("hydration");
   } catch { /* silent */ }
 }
 
@@ -1517,7 +1530,7 @@ async function fetchNews() {
       const txt = articles.map(a => esc(a.title || "")).join('<span class="ticker-sep">///</span>');
       ticker.innerHTML = txt + '<span class="ticker-sep">///</span>' + txt;
     }
-    glowCard("news");
+    if (!window.asfa_initial_load) glowCard("news");
   } catch { /* silent */ }
 }
 
@@ -1574,7 +1587,7 @@ async function fetchScent() {
         btn.disabled = false;
       }
     });
-    glowCard("scent");
+    if (!window.asfa_initial_load) glowCard("scent");
   } catch {
     body.innerHTML = `<span class="muted">// SCENT VAULT OFFLINE</span>`;
   }
@@ -1621,7 +1634,7 @@ async function fetchSupplements() {
   try {
     const d = await apiGet("/api/supplements");
     renderSupplements(el, d);
-    glowCard("supplements");
+    if (!window.asfa_initial_load) glowCard("supplements");
   } catch { el.innerHTML = `<div class="muted mono">// SUPPLEMENTS OFFLINE</div>`; }
 }
 
@@ -1798,7 +1811,7 @@ async function fetchSystems() {
         <span class="system-meta mono">${esc(b.online ? (b.last_signal || b.status || "online") : "offline")}</span>
       </a>`
     ).join("") || `<span class="muted mono">// NO SYSTEMS</span>`;
-    glowCard("systems");
+    if (!window.asfa_initial_load) glowCard("systems");
   } catch { el.innerHTML = `<span class="muted mono">// LINK DOWN</span>`; }
 }
 
@@ -1817,7 +1830,7 @@ async function fetchValidation() {
       dayEl.textContent = `VALIDATION: Day ${d.day} of ${d.total}`;
     }
     if (fill) fill.style.width = `${d.pct || 0}%`;
-    glowCard("validation");
+    if (!window.asfa_initial_load) glowCard("validation");
   } catch { dayEl.textContent = "VALIDATION: —"; }
 }
 
