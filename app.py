@@ -592,6 +592,112 @@ def api_sleep_history():
     return jsonify(db.get_sleep_history(days))
 
 
+# ── Nutrition / meal logging (Tier 7) ───────────────────────────────────────────
+# Auth-gated by the global _require_login before_request. Barcode data comes from
+# Open Food Facts (per-100g); the client scales macros to the portion eaten and
+# posts the final grams to /api/nutrition/log. Everything falls back to manual.
+
+_MEAL_SOURCES = ("barcode", "manual")
+
+
+@app.route("/api/nutrition/lookup-barcode", methods=["POST"])
+def api_nutrition_lookup_barcode():
+    from services import nutrition
+    data = request.get_json(force=True) or {}
+    barcode = (data.get("barcode") or "").strip()
+    if not barcode:
+        return jsonify({"error": "barcode is required"}), 400
+
+    product = nutrition.lookup_barcode(barcode)
+    if not product:
+        return jsonify({"ok": False, "message": "Barcode not found"})
+    return jsonify({"ok": True, **product})
+
+
+@app.route("/api/nutrition/log", methods=["POST"])
+def api_nutrition_log():
+    data = request.get_json(force=True) or {}
+
+    date_str = (data.get("date") or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"error": "date must be a real calendar date"}), 400
+
+    food_name = (data.get("food_name") or "").strip()
+    if not food_name:
+        return jsonify({"error": "food_name is required"}), 400
+
+    macros = {}
+    for key in ("protein", "carbs", "fat"):
+        raw = data.get(key)
+        if isinstance(raw, bool):
+            return jsonify({"error": f"{key} must be a number >= 0"}), 400
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": f"{key} must be a number >= 0"}), 400
+        if val < 0:
+            return jsonify({"error": f"{key} must be a number >= 0"}), 400
+        macros[key] = val
+
+    source = data.get("source") or "manual"
+    if source not in _MEAL_SOURCES:
+        return jsonify({"error": f"source must be one of {', '.join(_MEAL_SOURCES)}"}), 400
+
+    time_str = (data.get("time") or "").strip() or None
+    if time_str and not re.fullmatch(r"\d{2}:\d{2}", time_str):
+        return jsonify({"error": "time must be HH:MM"}), 400
+
+    calories = data.get("calories")
+    if calories is not None:
+        try:
+            calories = float(calories)
+        except (TypeError, ValueError):
+            return jsonify({"error": "calories must be a number"}), 400
+        if calories < 0:
+            return jsonify({"error": "calories must be >= 0"}), 400
+
+    barcode = (data.get("barcode") or "").strip() or None
+    notes = data.get("notes") or None
+
+    meal, err = db.log_meal(
+        date_str, food_name, macros["protein"], macros["carbs"], macros["fat"],
+        time=time_str, calories=calories, barcode=barcode, source=source,
+        notes=notes)
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({
+        "ok": True,
+        "meal": meal,
+        "daily_macros": db.get_daily_macros(date_str),
+    })
+
+
+@app.route("/api/nutrition/today")
+def api_nutrition_today():
+    today = _today()
+    totals = db.get_daily_macros(today)
+    totals["meals"] = [
+        {"food_name": m["food_name"], "protein": m["protein"],
+         "carbs": m["carbs"], "fat": m["fat"]}
+        for m in db.get_meals(today)
+    ]
+    return jsonify(totals)
+
+
+@app.route("/api/nutrition/history")
+def api_nutrition_history():
+    try:
+        days = int(request.args.get("days", 14))
+    except (TypeError, ValueError):
+        days = 14
+    days = max(1, min(90, days))
+    return jsonify(db.get_nutrition_history(days))
+
+
 # ── Body / gym (PBs + body weight only — workout logging removed) ──────────────
 
 @app.route("/api/gym")
