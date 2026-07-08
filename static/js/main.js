@@ -46,6 +46,7 @@ function wireControls() {
   wireBodyComp();
   wireSpendForm();
   wireSleep();
+  wireNutrition();
 }
 
 // ── Spend logging (Financial Report card) ─────────────────────────────────────────
@@ -595,7 +596,7 @@ const CARD_LOADERS = {
   inbox: fetchEmails, news: fetchNews, scent: fetchScent,
   money: fetchMoney, goals: fetchGoals, reflection: fetchReflection,
   supplements: fetchSupplements, bodycomp: fetchBodyComp,
-  sleep: fetchSleep,
+  sleep: fetchSleep, nutrition: fetchNutrition,
 };
 
 function loadAll() {
@@ -999,6 +1000,192 @@ async function submitSleep() {
     } else {
       setErr("LOG FAILED — TRY AGAIN");
     }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ── Nutrition (barcode + manual meal logging) ───────────────────────────────────
+// Server logs meals against a date; compute the same client-local date as sleep.
+function nutritionLocalToday() {
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// Per-100g preview held between a successful lookup and the scaled log.
+let __nutriScan = null;
+
+function renderNutritionTotals(t) {
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = (v == null ? 0 : v); };
+  set("nutri-protein", t && t.total_protein);
+  set("nutri-carbs", t && t.total_carbs);
+  set("nutri-fat", t && t.total_fat);
+  set("nutri-cals", t && t.total_calories);
+}
+
+function renderNutritionMeals(meals) {
+  const list = document.getElementById("nutri-meals");
+  const empty = document.getElementById("nutri-empty");
+  if (!list || !empty) return;
+  if (!Array.isArray(meals) || !meals.length) {
+    list.hidden = true;
+    list.innerHTML = "";
+    empty.hidden = false;
+    return;
+  }
+  const g = (v) => (v == null ? 0 : v);
+  list.innerHTML = meals.map((m) =>
+    `<li class="nutri-meal"><span class="nm-name">${esc(m.food_name)}</span>` +
+    `<span class="nm-macros">${esc(g(m.protein))}P · ${esc(g(m.carbs))}C · ${esc(g(m.fat))}F</span></li>`
+  ).join("");
+  list.hidden = false;
+  empty.hidden = true;
+}
+
+async function fetchNutrition() {
+  const card = document.getElementById("nutrition-card");
+  if (!card) return;
+  try {
+    const t = await apiGet("/api/nutrition/today");
+    renderNutritionTotals(t);
+    renderNutritionMeals(t && t.meals);
+  } catch { /* leave card visible; keep whatever state is showing */ }
+}
+
+// Refresh totals + meals after a successful log (reuses the same fetch).
+function refreshNutrition() { fetchNutrition(); }
+
+function wireNutrition() {
+  const card = document.getElementById("nutrition-card");
+  if (!card) return;
+
+  // PATH A — barcode lookup
+  const lookupBtn = document.getElementById("nutri-lookup-btn");
+  if (lookupBtn) lookupBtn.addEventListener("click", nutritionLookup);
+
+  // PATH A — log scaled portion
+  const scanLogBtn = document.getElementById("nutri-scan-log-btn");
+  if (scanLogBtn) scanLogBtn.addEventListener("click", nutritionLogScanned);
+
+  // PATH B — manual log
+  const logBtn = document.getElementById("nutri-log-btn");
+  if (logBtn) logBtn.addEventListener("click", nutritionLogManual);
+}
+
+async function nutritionLookup() {
+  const hint = document.getElementById("nutri-lookup-hint");
+  const result = document.getElementById("nutri-scan-result");
+  const preview = document.getElementById("nutri-scan-preview");
+  const setHint = (m) => { if (hint) hint.textContent = m || ""; };
+  setHint("");
+  const barcode = document.getElementById("nutri-barcode")?.value.trim();
+  if (!barcode) { setHint("ENTER A BARCODE"); return; }
+
+  const btn = document.getElementById("nutri-lookup-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const d = await apiPost("/api/nutrition/lookup-barcode", { barcode });
+    if (!d || !d.ok) {
+      __nutriScan = null;
+      if (result) result.hidden = true;
+      setHint("Not found — enter manually below");
+      return;
+    }
+    __nutriScan = {
+      barcode,
+      food_name: d.food_name,
+      protein: Number(d.protein_per_100g) || 0,
+      carbs: Number(d.carbs_per_100g) || 0,
+      fat: Number(d.fat_per_100g) || 0,
+    };
+    if (preview) {
+      preview.innerHTML =
+        `<b>${esc(d.food_name)}</b> — per 100g: ` +
+        `${esc(__nutriScan.protein)}P · ${esc(__nutriScan.carbs)}C · ${esc(__nutriScan.fat)}F`;
+    }
+    if (result) result.hidden = false;
+    setHint("");
+  } catch {
+    setHint("LOOKUP FAILED — TRY AGAIN OR ENTER MANUALLY");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function nutritionLogScanned() {
+  const hint = document.getElementById("nutri-lookup-hint");
+  const setHint = (m) => { if (hint) hint.textContent = m || ""; };
+  setHint("");
+  if (!__nutriScan) { setHint("LOOK UP A BARCODE FIRST"); return; }
+  const grams = parseFloat(document.getElementById("nutri-grams")?.value);
+  if (isNaN(grams) || grams <= 0) { setHint("ENTER GRAMS EATEN"); return; }
+
+  const scale = grams / 100;
+  const round1 = (v) => Math.round(v * scale * 10) / 10;
+  const payload = {
+    date: nutritionLocalToday(),
+    food_name: __nutriScan.food_name,
+    protein: round1(__nutriScan.protein),
+    carbs: round1(__nutriScan.carbs),
+    fat: round1(__nutriScan.fat),
+    barcode: __nutriScan.barcode,
+    source: "barcode",
+  };
+
+  const btn = document.getElementById("nutri-scan-log-btn");
+  if (btn) btn.disabled = true;
+  try {
+    await apiPost("/api/nutrition/log", payload);
+    toast("MEAL LOGGED");
+    // Reset the barcode path.
+    __nutriScan = null;
+    const result = document.getElementById("nutri-scan-result");
+    if (result) result.hidden = true;
+    ["nutri-barcode", "nutri-grams"].forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });
+    refreshNutrition();
+  } catch (e) {
+    setHint(String(e.message) === "400" ? "COULDN'T LOG — CHECK GRAMS" : "LOG FAILED — TRY AGAIN");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function nutritionLogManual() {
+  const err = document.getElementById("nutri-err");
+  const setErr = (m) => { if (err) err.textContent = m || ""; };
+  setErr("");
+
+  const food_name = document.getElementById("nutri-name")?.value.trim();
+  if (!food_name) { setErr("ENTER A FOOD NAME"); return; }
+  const num = (id) => {
+    const raw = document.getElementById(id)?.value;
+    if (raw == null || raw === "") return 0;   // blank macro counts as 0
+    const v = parseFloat(raw);
+    return isNaN(v) ? NaN : v;
+  };
+  const protein = num("nutri-in-protein"), carbs = num("nutri-in-carbs"), fat = num("nutri-in-fat");
+  if ([protein, carbs, fat].some((v) => isNaN(v) || v < 0)) {
+    setErr("MACROS MUST BE NUMBERS ≥ 0"); return;
+  }
+
+  const payload = {
+    date: nutritionLocalToday(),
+    food_name, protein, carbs, fat,
+    source: "manual",
+  };
+  const time = document.getElementById("nutri-time")?.value.trim();
+  if (time) payload.time = time;
+
+  const btn = document.getElementById("nutri-log-btn");
+  if (btn) btn.disabled = true;
+  try {
+    await apiPost("/api/nutrition/log", payload);
+    toast("MEAL LOGGED");
+    ["nutri-name", "nutri-in-protein", "nutri-in-carbs", "nutri-in-fat", "nutri-time"]
+      .forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });
+    refreshNutrition();
+  } catch (e) {
+    setErr(String(e.message) === "400" ? "COULDN'T LOG — CHECK FOOD NAME AND MACROS" : "LOG FAILED — TRY AGAIN");
   } finally {
     if (btn) btn.disabled = false;
   }
