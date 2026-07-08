@@ -87,6 +87,38 @@
   #nutrition-card .nutri-meal .nm-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #nutrition-card .nutri-meal .nm-macros { color: var(--text-dim); white-space: nowrap; }
   #nutrition-card .nutri-empty { font: 500 11px var(--mono); letter-spacing: .06em; color: var(--muted); margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(140,170,200,.10); }
+
+  /* Finance card (Tier 8) — dense telemetry. Design-system tokens only. */
+  #finance-card .fin-readouts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0 6px; }
+  #finance-card .fin-stat { text-align: center; }
+  #finance-card .fin-stat .readout-l { font-size: 26px; }
+  #finance-card .fin-stat .fin-proj-warn { color: var(--warn); text-shadow: 0 0 20px rgba(243,169,60,.30); }
+  #finance-card .fin-stat .fin-proj-ok { color: var(--online); text-shadow: 0 0 20px rgba(55,217,160,.30); }
+  #finance-card .fin-pace { margin: 4px 0 12px; }
+  #finance-card .fin-pace b { color: var(--cyan); }
+  #finance-card .fin-cats { display: flex; flex-direction: column; gap: 9px; margin-top: 6px; padding-top: 12px; border-top: 1px solid rgba(140,170,200,.10); }
+  #finance-card .fin-cat-row { display: flex; flex-direction: column; gap: 4px; }
+  #finance-card .fin-cat-head { display: flex; justify-content: space-between; font: 500 11px var(--mono); letter-spacing: .04em; color: var(--text-dim); }
+  #finance-card .fin-cat-head .fin-cat-name { color: var(--text); text-transform: uppercase; }
+  #finance-card .fin-cat-empty { font: 500 11px var(--mono); letter-spacing: .06em; color: var(--muted); }
+  #finance-card .fin-txns { list-style: none; margin: 12px 0 0; padding: 12px 0 0; border-top: 1px solid rgba(140,170,200,.10); display: flex; flex-direction: column; gap: 6px; }
+  #finance-card .fin-txn { display: flex; justify-content: space-between; gap: 10px; font: 500 12px var(--mono); letter-spacing: .03em; }
+  #finance-card .fin-txn .ft-when { color: var(--text-dim); white-space: nowrap; }
+  #finance-card .fin-txn .ft-what { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  #finance-card .fin-txn .ft-amt { color: var(--text); white-space: nowrap; }
+  #finance-card .fin-txn .ft-amt.ft-income { color: var(--online); }
+  #finance-card .fin-txn-empty { font: 500 11px var(--mono); letter-spacing: .06em; color: var(--muted); margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(140,170,200,.10); }
+  #finance-card .fin-log { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 12px; border-top: 1px solid rgba(140,170,200,.10); }
+  #finance-card .fin-log .fin-section-label { font: 600 10px var(--mono); letter-spacing: .12em; color: var(--muted); }
+  #finance-card .fin-presets { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  #finance-card .fin-preset { text-transform: uppercase; padding: 7px 0; font: 600 10px var(--mono); letter-spacing: .06em; cursor: pointer; background: transparent; border: 1px solid var(--line-bright); color: var(--text-dim); border-radius: var(--r-pill); }
+  #finance-card .fin-preset:hover { border-color: var(--cyan); color: var(--text); }
+  #finance-card .fin-preset.sel { border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 12px var(--cyan-glow); }
+  #finance-card .fin-input { width: 100%; }
+  #finance-card .fin-row { display: flex; gap: 6px; }
+  #finance-card .fin-row .fin-input { flex: 1; }
+  #finance-card .fin-err { min-height: 15px; font: 500 11px var(--mono); letter-spacing: .06em; color: var(--red); }
+  #finance-card .fin-err:empty { min-height: 0; }
 </style>
 </head>
 <body class="nav-with-mission">
@@ -582,6 +614,50 @@
     </form>
     <canvas id="money-chart" height="130" style="margin-top:14px"></canvas>
     <div id="spend-recent" class="small" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card sci-fi-panel" id="finance-card" data-card="finance" data-tabs="money">
+    <div class="card-head">
+      <h2 data-decode>Finance</h2>
+      <span class="hud-label" id="fin-month-label">THIS MONTH</span>
+    </div>
+
+    <!-- 1. Three readouts -->
+    <div class="fin-readouts" role="group" aria-label="This month's finance totals">
+      <div class="fin-stat"><div class="hud-label">SPENT</div><div class="readout-l val-live glow" id="fin-spent">£0.00</div></div>
+      <div class="fin-stat"><div class="hud-label">NET</div><div class="readout-l val-live glow" id="fin-net">£0.00</div></div>
+      <div class="fin-stat"><div class="hud-label">PROJECTED</div><div class="readout-l glow" id="fin-projected">£0.00</div></div>
+    </div>
+
+    <!-- 2. Pace line -->
+    <div class="metastrip fin-pace" id="fin-pace">// AWAITING DATA</div>
+
+    <!-- 3. Category bars -->
+    <div class="fin-cats" id="fin-cats">
+      <div class="fin-cat-empty">No spending this month</div>
+    </div>
+
+    <!-- 4. Recent transactions -->
+    <ul class="fin-txns" id="fin-txns" hidden></ul>
+    <div class="fin-txn-empty" id="fin-txn-empty">No transactions this month</div>
+
+    <!-- 5. Quick log -->
+    <div class="fin-log">
+      <div class="fin-section-label">QUICK LOG</div>
+      <div class="fin-presets" role="group" aria-label="Category">
+        <button type="button" class="fin-preset sel" data-cat="food">Food</button>
+        <button type="button" class="fin-preset" data-cat="transport">Transit</button>
+        <button type="button" class="fin-preset" data-cat="subs">Subs</button>
+        <button type="button" class="fin-preset" data-cat="gym">Gym</button>
+        <button type="button" class="fin-preset" data-cat="other">Other</button>
+      </div>
+      <div class="fin-row">
+        <input type="number" class="fin-input" id="fin-amount" step="0.01" min="0" placeholder="£ AMOUNT">
+        <input type="text" class="fin-input" id="fin-merchant" maxlength="120" placeholder="MERCHANT (OPTIONAL)">
+      </div>
+      <button type="button" class="btn btn-ghost" id="fin-log-btn">Log</button>
+      <div class="fin-err" id="fin-err" role="alert"></div>
+    </div>
   </section>
 
   <section class="card sci-fi-panel" id="pbs-card" data-tabs="body">
