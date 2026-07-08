@@ -698,6 +698,80 @@ def api_nutrition_history():
     return jsonify(db.get_nutrition_history(days))
 
 
+# ── Finance / spending (Tier 8) ─────────────────────────────────────────────────
+# Richer transaction logging layered on the legacy /api/money spending store.
+# /api/money (GET+POST) still works and reads the SAME rows; these endpoints add
+# income (negative amounts), merchant, month summaries and spend pace.
+
+_FINANCE_SOURCES = ("manual", "import")
+
+
+@app.route("/api/finance/log", methods=["POST"])
+def api_finance_log():
+    data = request.get_json(force=True) or {}
+
+    date_str = (data.get("date") or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"error": "date must be a real calendar date"}), 400
+
+    amount = data.get("amount")
+    if isinstance(amount, bool):
+        return jsonify({"error": "amount must be a number"}), 400
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        return jsonify({"error": "amount must be a number"}), 400
+    if amount != amount or amount in (float("inf"), float("-inf")):
+        return jsonify({"error": "amount must be a finite number"}), 400
+
+    category = (data.get("category") or "").strip()
+    if not category:
+        return jsonify({"error": "category is required"}), 400
+
+    source = data.get("source") or "manual"
+    if source not in _FINANCE_SOURCES:
+        return jsonify({"error": f"source must be one of {', '.join(_FINANCE_SOURCES)}"}), 400
+
+    merchant = (data.get("merchant") or "").strip() or None
+    notes = (data.get("notes") or "").strip() or None
+
+    txn, err = db.log_transaction(
+        date_str, amount, category, merchant=merchant, notes=notes, source=source)
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({
+        "ok": True,
+        "transaction": txn,
+        "month_summary": db.get_month_summary(date_str[:7]),
+    })
+
+
+@app.route("/api/finance/summary")
+def api_finance_summary():
+    month = (request.args.get("month") or "").strip() or None
+    if month and not re.fullmatch(r"\d{4}-\d{2}", month):
+        return jsonify({"error": "month must be YYYY-MM"}), 400
+    return jsonify(db.get_month_summary(month))
+
+
+@app.route("/api/finance/pace")
+def api_finance_pace():
+    return jsonify(db.get_spending_pace())
+
+
+@app.route("/api/finance/recent")
+def api_finance_recent():
+    try:
+        limit = int(request.args.get("limit", 20))
+    except (TypeError, ValueError):
+        limit = 20
+    return jsonify(db.get_recent_transactions(limit))
+
+
 # ── Body / gym (PBs + body weight only — workout logging removed) ──────────────
 
 @app.route("/api/gym")
