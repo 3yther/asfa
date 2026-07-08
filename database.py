@@ -849,6 +849,156 @@ def get_sleep_history(days: int = 14) -> list:
             for r in rows]
 
 
+# ── Nutrition / meal logging (Tier 7) ──────────────────────────────────────────
+# One row per logged food item. Macros are stored in grams; calories are derived
+# (protein*4 + carbs*4 + fat*9) unless the caller supplies their own. Meals are
+# never deduplicated automatically — the barcode column is kept only so a caller
+# can spot repeat scans of the same product.
+
+_MEALS_READY = False
+
+
+def _ensure_meals_table():
+    global _MEALS_READY
+    if _MEALS_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS meals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        time TEXT,
+        food_name TEXT NOT NULL,
+        protein REAL NOT NULL,
+        carbs REAL NOT NULL,
+        fat REAL NOT NULL,
+        calories REAL,
+        barcode TEXT,
+        source TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"""
+    if USE_POSTGRES:
+        stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    with get_db() as conn:
+        conn.cursor().execute(stmt)
+    _MEALS_READY = True
+
+
+def compute_calories(protein, carbs, fat) -> float:
+    """Atwater calorie estimate from macros in grams (4/4/9)."""
+    return round(float(protein) * 4 + float(carbs) * 4 + float(fat) * 9, 1)
+
+
+def get_meal(meal_id):
+    """Fetch one logged meal as a dict, or None if it doesn't exist."""
+    _ensure_meals_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT * FROM meals WHERE id = {ph}", (meal_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def log_meal(date, food_name, protein, carbs, fat, time=None, calories=None,
+             barcode=None, source="manual", notes=None):
+    """Insert one logged food item. `calories` is derived from the macros when
+    not supplied. Returns (row_dict, None) on success or (None, error_str) on a
+    validation failure (bad source, negative macro, blank name)."""
+    _ensure_meals_table()
+    if source not in ("barcode", "manual"):
+        return (None, "source must be 'barcode' or 'manual'")
+    if not (food_name or "").strip():
+        return (None, "food_name is required")
+    try:
+        protein, carbs, fat = float(protein), float(carbs), float(fat)
+    except (TypeError, ValueError):
+        return (None, "protein, carbs and fat must be numbers")
+    if protein < 0 or carbs < 0 or fat < 0:
+        return (None, "protein, carbs and fat must be >= 0")
+    if calories is None:
+        calories = compute_calories(protein, carbs, fat)
+    else:
+        calories = float(calories)
+
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO meals (date, time, food_name, protein, carbs, fat, "
+            f"calories, barcode, source, notes) "
+            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+            (date, time, food_name.strip(), protein, carbs, fat, calories,
+             barcode, source, notes))
+        if USE_POSTGRES:
+            cur.execute("SELECT lastval() AS id")
+        else:
+            cur.execute("SELECT last_insert_rowid() AS id")
+        new_id = cur.fetchone()["id"]
+    return (get_meal(new_id), None)
+
+
+def get_daily_macros(date):
+    """Totals across every meal logged on `date`. Always returns a dict; an empty
+    day yields zeros with meal_count 0."""
+    _ensure_meals_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT COALESCE(SUM(protein),0) AS protein, "
+            f"COALESCE(SUM(carbs),0) AS carbs, COALESCE(SUM(fat),0) AS fat, "
+            f"COALESCE(SUM(calories),0) AS calories, COUNT(*) AS n "
+            f"FROM meals WHERE date = {ph}", (date,))
+        r = cur.fetchone()
+    return {
+        "date": date,
+        "total_protein": round(float(r["protein"]), 1),
+        "total_carbs": round(float(r["carbs"]), 1),
+        "total_fat": round(float(r["fat"]), 1),
+        "total_calories": round(float(r["calories"]), 1),
+        "meal_count": int(r["n"]),
+    }
+
+
+def get_meals(date):
+    """Every meal logged on `date`, in the order they were entered."""
+    _ensure_meals_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT * FROM meals WHERE date = {ph} ORDER BY id ASC", (date,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_nutrition_history(days: int = 14) -> list:
+    """Per-day macro totals for the last `days`, oldest→newest for charting and
+    for the insights agent to correlate against sleep/gym. Days with no meals are
+    omitted. Shape: [{date, protein, carbs, fat, calories}, ...]."""
+    _ensure_meals_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "SELECT date, SUM(protein) AS protein, SUM(carbs) AS carbs, "
+                "SUM(fat) AS fat, SUM(calories) AS calories FROM meals "
+                "WHERE CAST(date AS TIMESTAMP) >= NOW() - (%s * INTERVAL '1 day') "
+                "GROUP BY date ORDER BY date ASC", (days,))
+        else:
+            cur.execute(
+                "SELECT date, SUM(protein) AS protein, SUM(carbs) AS carbs, "
+                "SUM(fat) AS fat, SUM(calories) AS calories FROM meals "
+                "WHERE date >= date('now', ?) GROUP BY date ORDER BY date ASC",
+                (f"-{days} days",))
+        rows = cur.fetchall()
+    return [{"date": r["date"],
+             "protein": round(float(r["protein"]), 1),
+             "carbs": round(float(r["carbs"]), 1),
+             "fat": round(float(r["fat"]), 1),
+             "calories": round(float(r["calories"]), 1)}
+            for r in rows]
+
+
 # ── Briefing cache ─────────────────────────────────────────────────────────────
 
 def get_cached_briefing(date: str):
