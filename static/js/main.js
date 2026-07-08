@@ -47,6 +47,7 @@ function wireControls() {
   wireSpendForm();
   wireSleep();
   wireNutrition();
+  wireFinance();
 }
 
 // ── Spend logging (Financial Report card) ─────────────────────────────────────────
@@ -597,6 +598,7 @@ const CARD_LOADERS = {
   money: fetchMoney, goals: fetchGoals, reflection: fetchReflection,
   supplements: fetchSupplements, bodycomp: fetchBodyComp,
   sleep: fetchSleep, nutrition: fetchNutrition,
+  finance: fetchFinance,
 };
 
 function loadAll() {
@@ -1186,6 +1188,208 @@ async function nutritionLogManual() {
     refreshNutrition();
   } catch (e) {
     setErr(String(e.message) === "400" ? "COULDN'T LOG — CHECK FOOD NAME AND MACROS" : "LOG FAILED — TRY AGAIN");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ── Finance (Tier 8 — dense telemetry; /api/finance/*) ──────────────────────────
+// Separate from the older money card (/api/money). Both write the same `spending`
+// table server-side, so figures stay consistent; this card just reads richer rollups.
+function financeLocalToday() {
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// £ prefix, 2 decimals, null/undefined coerced to 0. Negatives → -£X.XX.
+function fmtMoney(v) {
+  const n = Number(v);
+  const safe = isFinite(n) ? n : 0;
+  return (safe < 0 ? "-£" : "£") + Math.abs(safe).toFixed(2);
+}
+
+// "2026-07" → "July". Falls back to the raw string if it can't parse.
+function financeMonthName(month) {
+  if (typeof month !== "string" || !/^\d{4}-\d{2}$/.test(month)) return month || "";
+  const [y, m] = month.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleString("en-GB", { month: "long" });
+}
+
+// "2026-07" → previous month "2026-06".
+function financePrevMonth(month) {
+  if (typeof month !== "string" || !/^\d{4}-\d{2}$/.test(month)) return null;
+  let [y, m] = month.split("-").map(Number);
+  m -= 1; if (m === 0) { m = 12; y -= 1; }
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
+function renderFinanceReadouts(summary, pace, prevSpent) {
+  const s = summary || {};
+  const p = pace || {};
+  const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  set("fin-spent", fmtMoney(s.total_spent));
+  set("fin-net", fmtMoney(s.net));
+
+  const projected = Number(p.projected_month_total) || 0;
+  const projEl = document.getElementById("fin-projected");
+  if (projEl) {
+    projEl.textContent = fmtMoney(projected);
+    projEl.classList.remove("fin-proj-warn", "fin-proj-ok", "val-live");
+    if (prevSpent == null) {
+      // No last-month figure available → neutral --text (via readout-l default).
+      projEl.classList.add("val-live");
+    } else if (projected > prevSpent) {
+      projEl.classList.add("fin-proj-warn");
+    } else {
+      projEl.classList.add("fin-proj-ok");
+    }
+  }
+
+  const label = document.getElementById("fin-month-label");
+  if (label) label.textContent = `THIS MONTH · ${financeMonthName(s.month || p.month)}`;
+}
+
+function renderFinancePace(pace) {
+  const el = document.getElementById("fin-pace");
+  if (!el) return;
+  const p = pace || {};
+  const daily = Number(p.daily_avg) || 0;
+  const d = Number(p.days_elapsed) || 0;
+  const n = Number(p.days_in_month) || 0;
+  const proj = Number(p.projected_month_total) || 0;
+  el.innerHTML = `<b>${fmtMoney(daily)}</b>/day · day ${d} of ${n} · projected <b>${fmtMoney(proj)}</b>`;
+}
+
+function renderFinanceCategories(summary) {
+  const wrap = document.getElementById("fin-cats");
+  if (!wrap) return;
+  const s = summary || {};
+  const total = Number(s.total_spent) || 0;
+  const cats = Object.entries(s.by_category || {})
+    .map(([name, amt]) => ({ name, amt: Number(amt) || 0 }))
+    .filter((c) => c.amt > 0)
+    .sort((a, b) => b.amt - a.amt);
+
+  if (!cats.length) {
+    wrap.innerHTML = `<div class="fin-cat-empty">No spending this month</div>`;
+    return;
+  }
+
+  // Top 5; lump the remainder into "other" (merging if it's already shown).
+  let top = cats.slice(0, 5);
+  const rest = cats.slice(5).reduce((sum, c) => sum + c.amt, 0);
+  if (rest > 0) {
+    const other = top.find((c) => c.name === "other");
+    if (other) other.amt = Math.round((other.amt + rest) * 100) / 100;
+    else top.push({ name: "other", amt: Math.round(rest * 100) / 100 });
+    top = top.sort((a, b) => b.amt - a.amt);
+  }
+
+  const series = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)"];
+  wrap.innerHTML = top.map((c, i) => {
+    const pct = total > 0 ? Math.max(2, Math.round((c.amt / total) * 100)) : 0;
+    const color = series[i % series.length];
+    return `<div class="fin-cat-row">` +
+      `<div class="fin-cat-head"><span class="fin-cat-name">${esc(c.name)}</span>` +
+      `<span>${fmtMoney(c.amt)}</span></div>` +
+      `<div class="progress"><div class="progress-fill" style="width:${pct}%;background:${color};box-shadow:0 0 8px var(--cyan-glow)"></div></div>` +
+      `</div>`;
+  }).join("");
+}
+
+function renderFinanceTxns(recent) {
+  const list = document.getElementById("fin-txns");
+  const empty = document.getElementById("fin-txn-empty");
+  if (!list || !empty) return;
+  const rows = Array.isArray(recent) ? recent.slice(0, 4) : [];
+  if (!rows.length) {
+    list.hidden = true; list.innerHTML = "";
+    empty.hidden = false;
+    return;
+  }
+  const shortDate = (d) => {
+    if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return esc(d || "");
+    const [y, m, day] = d.split("-").map(Number);
+    return esc(new Date(y, m - 1, day).toLocaleString("en-GB", { day: "2-digit", month: "short" }));
+  };
+  list.innerHTML = rows.map((t) => {
+    const amt = Number(t.amount) || 0;
+    const income = amt < 0;
+    const what = t.merchant || t.category || "—";
+    return `<li class="fin-txn"><span class="ft-when">${shortDate(t.date)}</span>` +
+      `<span class="ft-what">${esc(what)}</span>` +
+      `<span class="ft-amt${income ? " ft-income" : ""}">${fmtMoney(amt)}</span></li>`;
+  }).join("");
+  list.hidden = false;
+  empty.hidden = true;
+}
+
+async function fetchFinance() {
+  const card = document.getElementById("finance-card");
+  if (!card) return;
+  try {
+    const [summary, pace, recent] = await Promise.all([
+      apiGet("/api/finance/summary"),
+      apiGet("/api/finance/pace"),
+      apiGet("/api/finance/recent?limit=4"),
+    ]);
+    // Last-month spend drives the PROJECTED status color; best-effort only.
+    let prevSpent = null;
+    const prev = financePrevMonth((summary && summary.month) || (pace && pace.month));
+    if (prev) {
+      try { const pm = await apiGet(`/api/finance/summary?month=${prev}`); prevSpent = Number(pm.total_spent) || 0; }
+      catch { prevSpent = null; }
+    }
+    renderFinanceReadouts(summary, pace, prevSpent);
+    renderFinancePace(pace);
+    renderFinanceCategories(summary);
+    renderFinanceTxns(recent);
+  } catch { /* leave card visible with whatever placeholders are showing */ }
+}
+
+function refreshFinance() { fetchFinance(); }
+
+function wireFinance() {
+  const card = document.getElementById("finance-card");
+  if (!card) return;
+
+  // Category presets — single-select.
+  const presets = Array.from(card.querySelectorAll(".fin-preset"));
+  presets.forEach((btn) => btn.addEventListener("click", () => {
+    presets.forEach((b) => b.classList.remove("sel"));
+    btn.classList.add("sel");
+  }));
+
+  const logBtn = document.getElementById("fin-log-btn");
+  if (logBtn) logBtn.addEventListener("click", financeLog);
+}
+
+async function financeLog() {
+  const err = document.getElementById("fin-err");
+  const setErr = (m) => { if (err) err.textContent = m || ""; };
+  setErr("");
+
+  const raw = document.getElementById("fin-amount")?.value;
+  const amount = parseFloat(raw);
+  if (raw == null || raw === "" || isNaN(amount) || amount <= 0) {
+    setErr("ENTER AN AMOUNT"); return;
+  }
+  const sel = document.querySelector("#finance-card .fin-preset.sel");
+  const category = (sel && sel.dataset.cat) || "other";
+  const merchant = document.getElementById("fin-merchant")?.value.trim() || undefined;
+
+  const payload = { date: financeLocalToday(), amount, category };
+  if (merchant) payload.merchant = merchant;
+
+  const btn = document.getElementById("fin-log-btn");
+  if (btn) btn.disabled = true;
+  try {
+    await apiPost("/api/finance/log", payload);
+    toast(`${fmtMoney(amount)} LOGGED`);
+    ["fin-amount", "fin-merchant"].forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });
+    refreshFinance();
+  } catch (e) {
+    setErr(String(e.message) === "400" ? "COULDN'T LOG — CHECK AMOUNT AND CATEGORY" : "LOG FAILED — TRY AGAIN");
   } finally {
     if (btn) btn.disabled = false;
   }
