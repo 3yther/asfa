@@ -65,6 +65,28 @@
   }
   #sleep-card .sleep-bar { flex: 1; min-width: 2px; background: var(--cyan); border-radius: 2px 2px 0 0; box-shadow: 0 0 6px var(--cyan-glow); opacity: .85; }
   #sleep-card .sleep-bar.empty { background: rgba(140,170,200,.10); box-shadow: none; }
+  /* Nutrition card */
+  #nutrition-card .nutri-totals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0 4px; }
+  #nutrition-card .nutri-stat { text-align: center; }
+  #nutrition-card .nutri-stat .readout-l { font-size: 30px; }
+  #nutrition-card .nutri-cals { text-align: center; margin-bottom: 12px; font: 600 12px var(--mono); letter-spacing: .08em; color: var(--text-dim); }
+  #nutrition-card .nutri-cals b { color: var(--cyan); }
+  #nutrition-card .nutri-log { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; padding-top: 12px; border-top: 1px solid rgba(140,170,200,.10); }
+  #nutrition-card .nutri-input { width: 100%; }
+  #nutrition-card .nutri-row { display: flex; gap: 6px; }
+  #nutrition-card .nutri-row .nutri-input { flex: 1; }
+  #nutrition-card .nutri-macros { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  #nutrition-card .nutri-section-label { font: 600 10px var(--mono); letter-spacing: .12em; color: var(--muted); margin-top: 4px; }
+  #nutrition-card .nutri-preview { font: 500 11px var(--mono); letter-spacing: .04em; color: var(--text-dim); min-height: 15px; }
+  #nutrition-card .nutri-preview b { color: var(--cyan); }
+  #nutrition-card .nutri-hint { min-height: 15px; font: 500 11px var(--mono); letter-spacing: .06em; color: var(--muted); }
+  #nutrition-card .nutri-err { min-height: 15px; font: 500 11px var(--mono); letter-spacing: .06em; color: var(--red); }
+  #nutrition-card .nutri-err:empty, #nutrition-card .nutri-hint:empty, #nutrition-card .nutri-preview:empty { min-height: 0; }
+  #nutrition-card .nutri-meals { list-style: none; margin: 12px 0 0; padding: 12px 0 0; border-top: 1px solid rgba(140,170,200,.10); display: flex; flex-direction: column; gap: 6px; }
+  #nutrition-card .nutri-meal { display: flex; justify-content: space-between; gap: 10px; font: 500 12px var(--mono); letter-spacing: .03em; }
+  #nutrition-card .nutri-meal .nm-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #nutrition-card .nutri-meal .nm-macros { color: var(--text-dim); white-space: nowrap; }
+  #nutrition-card .nutri-empty { font: 500 11px var(--mono); letter-spacing: .06em; color: var(--muted); margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(140,170,200,.10); }
 </style>
 </head>
 <body class="nav-with-mission">
@@ -439,6 +461,57 @@
 
     <!-- 14-night readiness history strip -->
     <div class="sleep-strip" id="sleep-strip" aria-label="14-night readiness history"></div>
+  </section>
+
+  <section class="card sci-fi-panel" id="nutrition-card" data-card="nutrition" data-tabs="habits">
+    <div class="card-head">
+      <h2 data-decode>Nutrition</h2>
+      <span class="hud-label">TODAY'S MACROS</span>
+    </div>
+
+    <!-- Daily totals -->
+    <div class="nutri-totals" role="group" aria-label="Today's macro totals">
+      <div class="nutri-stat"><div class="hud-label">PROTEIN</div><div class="readout-l val-live glow" id="nutri-protein">0</div><div class="hud-label">G</div></div>
+      <div class="nutri-stat"><div class="hud-label">CARBS</div><div class="readout-l val-live glow" id="nutri-carbs">0</div><div class="hud-label">G</div></div>
+      <div class="nutri-stat"><div class="hud-label">FAT</div><div class="readout-l val-live glow" id="nutri-fat">0</div><div class="hud-label">G</div></div>
+    </div>
+    <div class="nutri-cals">TOTAL <b id="nutri-cals">0</b> KCAL</div>
+
+    <!-- Log section -->
+    <div class="nutri-log">
+      <!-- PATH A — Barcode -->
+      <div class="nutri-section-label">BARCODE</div>
+      <div class="nutri-row">
+        <input type="text" class="nutri-input" id="nutri-barcode" inputmode="numeric" placeholder="SCAN OR TYPE BARCODE">
+        <button type="button" class="btn btn-ghost" id="nutri-lookup-btn">Look Up</button>
+      </div>
+      <div class="nutri-hint" id="nutri-lookup-hint" role="status"></div>
+
+      <!-- Barcode result (revealed on lookup success) -->
+      <div id="nutri-scan-result" hidden>
+        <div class="nutri-preview" id="nutri-scan-preview"></div>
+        <div class="nutri-row">
+          <input type="number" class="nutri-input" id="nutri-grams" step="1" min="0" placeholder="HOW MANY GRAMS?">
+          <button type="button" class="btn btn-grad" id="nutri-scan-log-btn">Log</button>
+        </div>
+      </div>
+
+      <!-- PATH B — Manual -->
+      <div class="nutri-section-label">MANUAL ENTRY</div>
+      <input type="text" class="nutri-input" id="nutri-name" maxlength="120" placeholder="FOOD NAME">
+      <div class="nutri-macros">
+        <input type="number" class="nutri-input" id="nutri-in-protein" step="0.1" min="0" placeholder="PROTEIN G">
+        <input type="number" class="nutri-input" id="nutri-in-carbs" step="0.1" min="0" placeholder="CARBS G">
+        <input type="number" class="nutri-input" id="nutri-in-fat" step="0.1" min="0" placeholder="FAT G">
+      </div>
+      <input type="time" class="nutri-input" id="nutri-time">
+      <button type="button" class="btn btn-grad" id="nutri-log-btn">Log Meal</button>
+      <div class="nutri-err" id="nutri-err" role="alert"></div>
+    </div>
+
+    <!-- Today's meals -->
+    <ul class="nutri-meals" id="nutri-meals" hidden></ul>
+    <div class="nutri-empty" id="nutri-empty">No meals logged today.</div>
   </section>
 
   <section class="card sci-fi-panel" id="bodyweight-card" data-tabs="body">
