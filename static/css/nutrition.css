@@ -243,6 +243,14 @@
   color: var(--muted); font-size: 15px; line-height: 1; transition: color .2s ease;
 }
 .nutrition-screen .nh-undo:hover { color: var(--red); }
+.nutrition-screen .nh-del {
+  background: none; border: none; cursor: pointer; padding: 0 2px;
+  color: var(--muted); font-size: 13px; line-height: 1; opacity: .6;
+  transition: opacity .2s ease, color .2s ease;
+}
+.nutrition-screen .nh-del:hover { opacity: 1; color: var(--red); }
+.nutrition-screen .nh-del-actions { display: flex; gap: 8px; margin-top: 18px; }
+.nutrition-screen .nh-del-actions .btn { flex: 1; }
 
 /* ── Footer actions ───────────────────────────────────────────────────────── */
 .nutrition-screen .nh-actions {
