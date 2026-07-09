@@ -1187,9 +1187,10 @@ async function nutritionLogManual() {
 
 // ── Nutrition Hub (Tier 7 redesign — search-first fuel log) ──────────────────────
 // A second, richer nutrition surface on the FUEL tab. Reads the same meals store
-// via /api/nutrition/*. "Search" here is over the LOCAL food cache (previously
-// logged foods + time-of-day patterns) plus barcode lookup — there is no live
-// USDA/FDC text-search endpoint on the backend; the cache is the search corpus.
+// via /api/nutrition/*. Search layers three sources into one dropdown: instant
+// LOCAL matches (previously logged foods + time-of-day patterns) shown first,
+// then live USDA/FDC whole-food results (per-100g) via /api/nutrition/search.
+// Barcode lookup (Open Food Facts) covers packaged goods on its own pane.
 const NH = {
   date: null,      // YYYY-MM-DD currently viewed
   goals: null,     // {protein_goal, carbs_goal, fat_goal, calorie_goal}
@@ -1352,14 +1353,18 @@ function nhSuggestions(query) {
   return out.slice(0, 8);
 }
 
-function nhRenderSuggest(query) {
+// Paint a ready list of suggestion items into the dropdown. Items carry their
+// own `mode` so the picker knows how to scale (previous foods = one serving,
+// USDA = per-100g). Kept separate from nhRenderSuggest so the async USDA merge
+// can repaint the same box without re-deriving the local half.
+function nhPaintSuggest(items) {
   const box = document.getElementById("nh-suggest");
   const input = document.getElementById("nh-search");
   if (!box) return;
-  const items = nhSuggestions(query);
   if (!items.length) { box.hidden = true; box.innerHTML = ""; if (input) input.setAttribute("aria-expanded", "false"); return; }
   box.innerHTML = items.map((it, i) => {
-    const macros = `${nhNum(it.protein)}P · ${nhNum(it.carbs)}C · ${nhNum(it.fat)}F`;
+    const suffix = it.mode === "per100" ? "/100g" : "";
+    const macros = `${nhNum(it.protein)}P · ${nhNum(it.carbs)}C · ${nhNum(it.fat)}F${suffix}`;
     const badge = it.badge ? `<span class="nh-sug-badge">${esc(it.badge)}</span>` : "";
     return `<li class="nh-sug" role="option" data-nh-idx="${i}">` +
       `<span class="nh-sug-name">${esc(it.food_name)}${badge}</span>` +
@@ -1368,6 +1373,47 @@ function nhRenderSuggest(query) {
   box._items = items;
   box.hidden = false;
   if (input) input.setAttribute("aria-expanded", "true");
+}
+
+// Merge USDA search hits (per-100g) after the instant local suggestions,
+// deduping by name so a food already in the user's history isn't repeated.
+function nhMergeUsda(local, usda) {
+  const seen = new Set(local.map((it) => it.food_name.toLowerCase()));
+  const out = local.slice();
+  (Array.isArray(usda) ? usda : []).forEach((u) => {
+    const name = (u.food_name || "").trim();
+    if (!name || seen.has(name.toLowerCase())) return;
+    seen.add(name.toLowerCase());
+    out.push({
+      food_name: name,
+      protein: Number(u.protein_per_100g) || 0,
+      carbs: Number(u.carbs_per_100g) || 0,
+      fat: Number(u.fat_per_100g) || 0,
+      badge: "USDA",
+      mode: "per100",
+    });
+  });
+  return out.slice(0, 12);
+}
+
+// Monotonic token so a slow USDA response for an old query can't clobber a
+// newer one (last-write-wins on the input, not on network arrival order).
+let nhSearchSeq = 0;
+
+function nhRenderSuggest(query) {
+  const local = nhSuggestions(query);   // instant: previous foods + usuals
+  nhPaintSuggest(local);
+  const q = (query || "").trim();
+  if (q.length < 2) return;             // too short to hit USDA
+  const seq = ++nhSearchSeq;
+  apiGet(`/api/nutrition/search?q=${encodeURIComponent(q)}`)
+    .then((usda) => {
+      if (seq !== nhSearchSeq) return;  // a newer query superseded this one
+      const input = document.getElementById("nh-search");
+      if (!input || input.value.trim().toLowerCase() !== q.toLowerCase()) return;
+      nhPaintSuggest(nhMergeUsda(nhSuggestions(query), usda));
+    })
+    .catch(() => { /* fail soft: keep the local suggestions already shown */ });
 }
 
 function nhHideSuggest() {
@@ -1655,8 +1701,9 @@ function wireNutritionHub() {
     if (!it) return;
     nhHideSuggest();
     if (search) search.value = it.food_name;
-    // Previous-food macros are absolute for one serving → serving mode.
-    nhShowPicked(it, "serving");
+    // Previous-food macros are absolute for one serving (serving mode); USDA
+    // hits are per-100g and carry mode:"per100" so grams scale correctly.
+    nhShowPicked(it, it.mode || "serving");
   });
   // Dismiss suggestions when focus leaves the search area.
   document.addEventListener("click", (e) => {

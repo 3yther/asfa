@@ -614,6 +614,17 @@ def api_nutrition_lookup_barcode():
     return jsonify({"ok": True, **product})
 
 
+@app.route("/api/nutrition/search")
+def api_nutrition_search():
+    # Live whole-food text search via USDA FoodData Central. Returns up to 10
+    # foods with per-100g macros; fails soft to [] (never blanks the search UI).
+    from services import nutrition
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return jsonify([])
+    return jsonify(nutrition.search_foods(q))
+
+
 @app.route("/api/nutrition/log", methods=["POST"])
 def api_nutrition_log():
     data = request.get_json(force=True) or {}
