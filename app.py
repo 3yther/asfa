@@ -352,6 +352,11 @@ def gym_photos():
     return render_template("gym-photos.html", active="gym")
 
 
+@app.route("/nutrition")
+def nutrition():
+    return render_template("nutrition.html", active="nutrition")
+
+
 @app.route("/fragrances")
 def fragrances():
     return render_template("fragrances.html", active="fragrances")

@@ -1,0 +1,175 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   nutrition.css — standalone /nutrition page (Fuel log).
+   Mirrors the gym page's shell (own screen + head), then houses the Cal-AI-
+   style fuel dashboard: calories-left readout, macro cards, search / quick-add,
+   time-bucketed meal sections, goals + copy-yesterday modals.
+   Design tokens only (--panel, --cyan, --text, --mono, .readout-l, .progress,
+   .hud-label, .btn-grad, .btn-ghost) — no hardcoded hex.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Page shell (mirrors .gym-screen / .gym-head) ─────────────────────────── */
+.nutrition-screen {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 18px 16px 120px;
+  color: var(--text);
+}
+.nutrition-head { text-align: center; margin-bottom: 18px; position: relative; }
+.nutrition-head .screen-title {
+  font-size: 1.7rem; font-weight: 800; letter-spacing: .5px; color: var(--text);
+}
+.nutrition-head .screen-sub { color: var(--muted); font-size: .82rem; letter-spacing: 1px; }
+
+.nutrition-layout { display: grid; gap: 16px; }
+@media (min-width: 860px) {
+  .nutrition-layout { grid-template-columns: 1fr 1fr; align-items: start; }
+  .nh-dash { grid-column: 1 / -1; }         /* headline dashboard spans the top */
+}
+.nutrition-screen .card { padding: 20px; }
+
+/* ── Date navigation ──────────────────────────────────────────────────────── */
+.nutrition-screen .nh-datenav {
+  display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 6px;
+}
+.nutrition-screen .nh-arrow { padding: 2px 12px; font-size: 17px; line-height: 1; min-width: 0; }
+.nutrition-screen .nh-date {
+  font: 600 12px var(--mono); letter-spacing: .06em; color: var(--text-dim);
+  min-width: 82px; text-align: center;
+}
+
+/* ── Calories-left headline ───────────────────────────────────────────────── */
+.nutrition-screen .nh-cals { text-align: center; margin: 8px 0 18px; }
+.nutrition-screen .nh-cals .readout-l { font-size: 46px; color: var(--cyan); line-height: 1.05; }
+.nutrition-screen .nh-cals .hud-label { margin-top: 2px; }
+.nutrition-screen .nh-cals .progress { max-width: 280px; margin: 10px auto 0; }
+
+/* ── Protein / carbs / fat remaining ──────────────────────────────────────── */
+.nutrition-screen .nh-macros-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+}
+.nutrition-screen .nh-macro {
+  text-align: center; padding: 12px 8px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.nutrition-screen .nh-macro-val { margin: 4px 0 8px; }
+.nutrition-screen .nh-macro-val b { font: 600 22px var(--mono); color: var(--text); }
+.nutrition-screen .nh-macro-val .hud-label { display: inline; margin-left: 4px; }
+
+/* ── Entry: SEARCH / QUICK-ADD tabs ───────────────────────────────────────── */
+.nutrition-screen .nh-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.nutrition-screen .nh-tab {
+  flex: 1; padding: 8px 0; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md);
+  color: var(--muted); font: 600 10px var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  transition: color .2s ease, border-color .2s ease;
+}
+.nutrition-screen .nh-tab:hover { color: var(--text); border-color: var(--cyan); }
+.nutrition-screen .nh-tab.active {
+  color: var(--cyan); border-color: var(--cyan); box-shadow: 0 0 12px var(--cyan-glow);
+}
+.nutrition-screen .nh-pane { display: flex; flex-direction: column; gap: 10px; }
+
+.nutrition-screen .nh-search-row { display: flex; gap: 6px; }
+.nutrition-screen .nh-search-row .nutri-input { flex: 1; }
+.nutrition-screen .nh-icon-btn { padding: 0 12px; font-size: 15px; line-height: 1; }
+
+/* Autocomplete dropdown */
+.nutrition-screen .nh-suggest {
+  list-style: none; margin: 0; padding: 4px; display: flex; flex-direction: column; gap: 2px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md);
+  max-height: 260px; overflow-y: auto;
+}
+.nutrition-screen .nh-sug {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 7px 8px; cursor: pointer; border-radius: 4px;
+  font: 500 12px var(--mono); letter-spacing: .03em;
+}
+.nutrition-screen .nh-sug:hover { background: var(--panel-3); }
+.nutrition-screen .nh-sug-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nutrition-screen .nh-sug-macros { color: var(--text-dim); white-space: nowrap; }
+.nutrition-screen .nh-sug-badge {
+  margin-left: 6px; padding: 1px 5px; border-radius: var(--r-pill);
+  font-size: 8px; letter-spacing: .1em; color: var(--void); background: var(--online);
+}
+
+.nutrition-screen .nh-barcode-box { margin-top: 2px; }
+
+/* Picked-food portion box */
+.nutrition-screen .nh-picked {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.nutrition-screen .nh-portion-row { display: flex; gap: 6px; }
+.nutrition-screen .nh-portion-row .nutri-input { flex: 1; }
+
+/* Quick-add optional macros */
+.nutrition-screen .nh-q-macros summary {
+  cursor: pointer; font: 500 10px var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); padding: 4px 0; list-style: none;
+}
+.nutrition-screen .nh-q-macros summary::-webkit-details-marker { display: none; }
+.nutrition-screen .nh-q-macros summary:hover { color: var(--cyan); }
+.nutrition-screen .nh-q-macros .nutri-macros {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px;
+}
+
+/* ── Meal sections ────────────────────────────────────────────────────────── */
+.nutrition-screen .nh-meals { margin-top: 4px; display: flex; flex-direction: column; gap: 14px; }
+.nutrition-screen .nh-meal-group { display: flex; flex-direction: column; gap: 6px; }
+.nutrition-screen .nh-group-head { color: var(--cyan); padding-bottom: 2px; border-bottom: 1px solid rgba(140,170,200,.10); }
+.nutrition-screen .nh-meal {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  font: 500 12px var(--mono); letter-spacing: .03em;
+}
+.nutrition-screen .nh-meal .nm-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.nutrition-screen .nh-meal .nm-macros { color: var(--text-dim); white-space: nowrap; }
+.nutrition-screen .nh-undo {
+  background: none; border: none; cursor: pointer; padding: 0 2px;
+  color: var(--muted); font-size: 15px; line-height: 1; transition: color .2s ease;
+}
+.nutrition-screen .nh-undo:hover { color: var(--red); }
+
+/* ── Footer actions ───────────────────────────────────────────────────────── */
+.nutrition-screen .nh-actions {
+  display: flex; gap: 8px; margin-top: 16px; padding-top: 14px;
+  border-top: 1px solid rgba(140,170,200,.10);
+}
+.nutrition-screen .nh-actions .btn { flex: 1; }
+
+/* ── Modals (copy-yesterday, goals) ───────────────────────────────────────── */
+.nutrition-screen .nh-modal-overlay {
+  display: none; position: fixed; inset: 0; z-index: 60;
+  background: rgba(3,6,11,.72); backdrop-filter: blur(4px);
+  align-items: center; justify-content: center; padding: 20px;
+}
+.nutrition-screen .nh-modal-overlay.open { display: flex; }
+.nutrition-screen .nh-modal {
+  position: relative; width: 100%; max-width: 360px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 22px; box-shadow: 0 10px 38px rgba(0,0,0,.5), 0 0 32px var(--cyan-glow);
+  display: flex; flex-direction: column; gap: 10px; max-height: 80vh; overflow-y: auto;
+}
+.nutrition-screen .nh-modal-close {
+  position: absolute; top: 10px; right: 12px; background: none; border: none;
+  color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer;
+}
+.nutrition-screen .nh-modal-close:hover { color: var(--cyan); }
+.nutrition-screen .nh-modal-title {
+  color: var(--cyan); font: 600 13px var(--mono); letter-spacing: .1em; text-transform: uppercase;
+}
+.nutrition-screen .nh-modal-sub { color: var(--text-dim); font: 500 11px var(--mono); letter-spacing: .04em; }
+.nutrition-screen .nh-copy-list { list-style: none; margin: 4px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.nutrition-screen .nh-copy-item label {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  font: 500 12px var(--mono); letter-spacing: .03em;
+}
+.nutrition-screen .nh-copy-item .nm-name { color: var(--text); flex: 1; }
+.nutrition-screen .nh-copy-item .nm-macros { color: var(--text-dim); white-space: nowrap; }
+.nutrition-screen .nh-goal-field { display: flex; flex-direction: column; gap: 4px; }
+.nutrition-screen .nh-goal-field .hud-label { text-align: left; }
+
+@media (max-width: 560px) {
+  .nutrition-screen { padding: 14px 12px 120px; }
+  .nutrition-screen .nh-cals .readout-l { font-size: 40px; }
+  .nutrition-screen .nh-macro-val b { font-size: 19px; }
+}
