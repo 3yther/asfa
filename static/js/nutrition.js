@@ -49,6 +49,10 @@ const NH = {
   prev: [],        // previous foods [{food_name, count, protein, carbs, fat, calories}]
   freq: [],        // frequent-at-hour [{food_name, count}]
   picked: null,    // {food_name, protein, carbs, fat, mode:"per100"|"serving"}
+  favorites: [],   // [{food_name, count, protein, carbs, fat, calories}] averaged
+  templates: [],   // [{id, name, items, item_count, totals}]
+  meals: [],       // this day's meal rows (for the save-as-template modal)
+  charts: {},      // Chart.js instances, created once then updated (no leak)
 };
 
 function nhToday() {
@@ -81,6 +85,17 @@ function nhBucket(time) {
 const NH_BUCKETS = ["Breakfast", "Lunch", "Dinner", "Snack"];
 const nhNum = (v) => (v == null ? 0 : Math.round(Number(v) * 10) / 10);
 
+// Drive an SVG progress ring: pct 0-100 maps to stroke-dashoffset. Circumference
+// is derived from the circle's own r so markup and script never drift.
+function setRing(el, pct) {
+  if (!el) return;
+  const r = Number(el.getAttribute("r")) || 0;
+  const c = 2 * Math.PI * r;
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  el.style.strokeDasharray = String(c);
+  el.style.strokeDashoffset = String(c * (1 - p / 100));
+}
+
 function nhRenderReadouts(totals, goals) {
   const g = goals || {};
   const t = totals || {};
@@ -90,17 +105,17 @@ function nhRenderReadouts(totals, goals) {
     const gg = Number(goal) || 0; if (gg <= 0) return 0;
     return Math.max(0, Math.min(100, Math.round((Number(used) || 0) / gg * 100)));
   };
-  set("nh-cals-left", left(g.calorie_goal, t.total_calories) + " kcal");
+  // Centre readouts: calories keep the "kcal" suffix; macros are bare grams-left.
+  set("nh-cals-left", left(g.calorie_goal, t.total_calories));
   set("nh-protein-left", left(g.protein_goal, t.total_protein));
   set("nh-carbs-left", left(g.carbs_goal, t.total_carbs));
   set("nh-fat-left", left(g.fat_goal, t.total_fat));
-  const bar = (id, used, goal) => {
-    const el = document.getElementById(id); if (el) el.style.width = pct(used, goal) + "%";
-  };
-  bar("nh-cals-bar", t.total_calories, g.calorie_goal);
-  bar("nh-protein-bar", t.total_protein, g.protein_goal);
-  bar("nh-carbs-bar", t.total_carbs, g.carbs_goal);
-  bar("nh-fat-bar", t.total_fat, g.fat_goal);
+  // Rings fill toward consumed/goal (capped 100%).
+  const ring = (id, used, goal) => setRing(document.getElementById(id), pct(used, goal));
+  ring("nh-cals-ring", t.total_calories, g.calorie_goal);
+  ring("nh-protein-ring", t.total_protein, g.protein_goal);
+  ring("nh-carbs-ring", t.total_carbs, g.carbs_goal);
+  ring("nh-fat-ring", t.total_fat, g.fat_goal);
 }
 
 function nhRenderMeals(meals) {
@@ -124,7 +139,11 @@ function nhRenderMeals(meals) {
   NH_BUCKETS.forEach((b) => {
     const rows = groups[b];
     if (!rows.length) return;                       // collapse empty sections
-    html += `<div class="nh-meal-group"><div class="hud-label nh-group-head">${b}</div>`;
+    // The save-as-template icon pre-checks this section's meals in the modal.
+    html += `<div class="nh-meal-group"><div class="hud-label nh-group-head">` +
+      `<span>${b}</span>` +
+      `<button type="button" class="nh-save-tpl" data-nh-save-tpl="${b}" ` +
+      `title="Save ${b} as template" aria-label="Save ${b} as template">▾ SAVE</button></div>`;
     rows.forEach((m) => {
       const macros = `${nhNum(m.protein)}P · ${nhNum(m.carbs)}C · ${nhNum(m.fat)}F`;
       const undo = Number(m.id) === lastId
@@ -142,42 +161,347 @@ function nhRenderMeals(meals) {
 function nhRenderDay(day) {
   if (!day) return;
   NH.goals = day.goals || NH.goals;
+  NH.meals = Array.isArray(day.meals) ? day.meals : [];
   nhRenderReadouts(day.totals, NH.goals);
   nhRenderMeals(day.meals);
   const label = document.getElementById("nh-date");
   if (label) { label.textContent = nhDateLabel(NH.date); label.dataset.date = NH.date; }
 }
 
+// Sunday (Mon–Sun week) of the viewed date — anchors the week-strip window so
+// trends(7, end=Sunday) returns Monday…Sunday of that week.
+function nhWeekEndSunday(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const day = new Date(y, m - 1, d).getDay();   // 0=Sun … 6=Sat
+  const iso = day === 0 ? 7 : day;              // 1=Mon … 7=Sun
+  return nhShiftDate(dateStr, 7 - iso);
+}
+
+// Full page load / refresh. Every widget fetch is independent (allSettled) and
+// renders in its own guarded path, so one failing endpoint shows a placeholder
+// rather than blanking the page. Called on init, on date change, and after any
+// log/undo so totals · rings · week strip · score all move together.
 async function fetchNutritionHub() {
-  const card = document.getElementById("nutrition-hub");
-  if (!card) return;
+  const root = document.getElementById("nutrition-screen");
+  if (!root) return;
   if (!NH.date) NH.date = nhToday();
   const hour = new Date().getHours();
-  const [goals, day, prev, freq] = await Promise.allSettled([
-    apiGet("/api/nutrition/goals"),
-    apiGet(`/api/nutrition/date/${NH.date}`),
-    apiGet("/api/nutrition/previous-foods?limit=50"),
-    apiGet(`/api/nutrition/frequent-at-hour?hour=${hour}&limit=5`),
-  ]);
+  const weekEnd = nhWeekEndSunday(NH.date);
+  const [goals, day, prev, freq, trends7, trends30, score, favorites, templates, insights] =
+    await Promise.allSettled([
+      apiGet("/api/nutrition/goals"),
+      apiGet(`/api/nutrition/date/${NH.date}`),
+      apiGet("/api/nutrition/previous-foods?limit=50"),
+      apiGet(`/api/nutrition/frequent-at-hour?hour=${hour}&limit=5`),
+      apiGet(`/api/nutrition/trends?days=7&end=${weekEnd}`),
+      apiGet("/api/nutrition/trends?days=30"),
+      apiGet(`/api/nutrition/score?date=${NH.date}`),
+      apiGet("/api/nutrition/favorites?limit=6"),
+      apiGet("/api/nutrition/templates"),
+      apiGet("/api/nutrition/insights"),
+    ]);
+
   if (goals.status === "fulfilled") NH.goals = goals.value;
   if (prev.status === "fulfilled" && Array.isArray(prev.value)) NH.prev = prev.value;
   if (freq.status === "fulfilled" && Array.isArray(freq.value)) NH.freq = freq.value;
+
   if (day.status === "fulfilled") {
     nhRenderDay(day.value);
   } else {
-    // Never blank: show goals with zero consumed as a fallback.
-    nhRenderReadouts({}, NH.goals);
+    nhRenderReadouts({}, NH.goals);   // never blank: goals with zero consumed
     nhRenderMeals([]);
     const label = document.getElementById("nh-date");
     if (label) label.textContent = nhDateLabel(NH.date);
   }
+
+  if (trends7.status === "fulfilled") nhRenderWeek(trends7.value);
+  else nhWidgetError("nh-week", "week unavailable");
+  if (trends7.status === "fulfilled") nhRenderTrendsChart(trends7.value);
+  if (trends30.status === "fulfilled") nhRenderBalanceChart(trends30.value);
+  if (score.status === "fulfilled") nhRenderScore(score.value);
+  else nhWidgetError("nh-score-sub", "score unavailable");
+  if (favorites.status === "fulfilled") nhRenderFavorites(favorites.value);
+  if (templates.status === "fulfilled") nhRenderTemplates(templates.value);
+  if (insights.status === "fulfilled") nhRenderInsights(insights.value);
+  else nhRenderInsights(null);
 }
 
-async function nhReloadDay() {
+// Single unified refresh so every day-derived widget moves together after a log,
+// undo, template log, or goal change. (Alias kept expressive at call sites.)
+const refreshDay = fetchNutritionHub;
+
+function nhWidgetError(id, msg) {
+  const el = document.getElementById(id);
+  if (el && el.tagName === "DIV" && !el.children.length) el.textContent = msg;
+}
+
+// ── Week strip ───────────────────────────────────────────────────────────────
+function nhRenderWeek(trends) {
+  const wrap = document.getElementById("nh-week");
+  if (!wrap || !trends) return;
+  const dates = trends.dates || [];
+  const g = trends.goals || {};
+  const cap = (v, goal) => {
+    const gg = Number(goal) || 0; if (gg <= 0) return 0;
+    return Math.max(0, Math.min(100, (Number(v) || 0) / gg * 100));
+  };
+  const bars = (i) => [
+    ["nh-wbar-1", cap(trends.kcal[i], g.calorie_goal)],
+    ["nh-wbar-2", cap(trends.protein[i], g.protein_goal)],
+    ["nh-wbar-3", cap(trends.carbs[i], g.carbs_goal)],
+    ["nh-wbar-4", cap(trends.fat[i], g.fat_goal)],
+  ].map(([cls, pct]) =>
+    `<span class="nh-wbar ${cls}"><i style="height:${pct.toFixed(1)}%"></i></span>`).join("");
+  const dow = (ds) => {
+    const [y, m, d] = ds.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString("en-GB", { weekday: "short" });
+  };
+  wrap.innerHTML = dates.map((ds, i) =>
+    `<div class="nh-week-col${ds === NH.date ? " current" : ""}" data-nh-day="${ds}" ` +
+    `role="button" tabindex="0" aria-label="${ds}">` +
+    `<span class="nh-week-day">${dow(ds)[0]}</span>` +
+    `<span class="nh-week-bars">${bars(i)}</span></div>`).join("");
+}
+
+// ── Day score + streak ───────────────────────────────────────────────────────
+function nhRenderScore(s) {
+  if (!s) return;
+  const grade = document.getElementById("nh-grade");
+  const sub = document.getElementById("nh-score-sub");
+  const streak = document.getElementById("nh-streak");
+  if (grade) { grade.textContent = s.grade || "–"; grade.dataset.grade = s.logged ? (s.grade || "") : ""; }
+  if (sub) {
+    if (!s.logged) sub.textContent = "No meals logged yet.";
+    else if (!s.misses || !s.misses.length) sub.textContent = `${s.hits}/4 goals met — nailed it.`;
+    else sub.textContent = `${s.hits}/4 goals met — ${s.misses.join(", ")} off.`;
+  }
+  if (streak) streak.textContent = s.streak > 0 ? `${s.streak}-day A/B streak` : "";
+}
+
+// ── Charts (created once, then updated — never recreated per navigation) ──────
+function nhChartReady() { return typeof Chart !== "undefined"; }
+const NH_GRID = "rgba(140,170,200,.10)";
+const NH_TICK = "#8296A5";
+function nhCssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function nhRenderTrendsChart(trends) {
+  const cv = document.getElementById("nh-trends-chart");
+  if (!cv || !nhChartReady() || !trends) return;
+  const g = trends.goals || {};
+  const line = (data, color) => ({
+    data, borderColor: color, backgroundColor: color, tension: .3,
+    pointRadius: 2, borderWidth: 2, fill: false,
+  });
+  const goalLine = (val, color) => ({
+    data: trends.dates.map(() => val), borderColor: color, borderDash: [4, 4],
+    borderWidth: 1, pointRadius: 0, fill: false,
+  });
+  const labels = trends.dates.map((d) => d.slice(5));  // MM-DD
+  const s1 = nhCssVar("--series-1"), s2 = nhCssVar("--series-2"), s3 = nhCssVar("--series-3");
+  const datasets = [
+    { label: "Protein", ...line(trends.protein, s1) },
+    { label: "Carbs", ...line(trends.carbs, s2) },
+    { label: "Fat", ...line(trends.fat, s3) },
+    { label: "P goal", ...goalLine(g.protein_goal, s1) },
+    { label: "C goal", ...goalLine(g.carbs_goal, s2) },
+    { label: "F goal", ...goalLine(g.fat_goal, s3) },
+  ];
+  if (NH.charts.trends) {
+    NH.charts.trends.data.labels = labels;
+    NH.charts.trends.data.datasets.forEach((ds, i) => { ds.data = datasets[i].data; });
+    NH.charts.trends.update();
+    return;
+  }
+  NH.charts.trends = new Chart(cv, {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { labels: { color: NH_TICK, font: { size: 9 }, filter: (l) => !l.text.includes("goal") } },
+        tooltip: { mode: "index", intersect: false },
+      },
+      scales: {
+        x: { grid: { color: NH_GRID }, ticks: { color: NH_TICK, font: { size: 9 } } },
+        y: { grid: { color: NH_GRID }, ticks: { color: NH_TICK, font: { size: 9 } }, beginAtZero: true },
+      },
+    },
+  });
+}
+
+function nhRenderBalanceChart(trends) {
+  const cv = document.getElementById("nh-balance-chart");
+  if (!cv || !nhChartReady() || !trends) return;
+  const goal = Number((trends.goals || {}).calorie_goal) || 0;
+  const labels = trends.dates.map((d) => d.slice(5));
+  const bars = trends.kcal;
+  const deep = nhCssVar("--cyan-deep"), warn = nhCssVar("--warn");
+  if (NH.charts.balance) {
+    NH.charts.balance.data.labels = labels;
+    NH.charts.balance.data.datasets[0].data = bars;
+    NH.charts.balance.data.datasets[1].data = labels.map(() => goal);
+    NH.charts.balance.update();
+    return;
+  }
+  NH.charts.balance = new Chart(cv, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        { type: "bar", label: "Intake", data: bars, backgroundColor: deep, borderRadius: 2, barPercentage: .9 },
+        { type: "line", label: "Goal", data: labels.map(() => goal), borderColor: warn,
+          borderDash: [5, 4], borderWidth: 1.5, pointRadius: 0, fill: false },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: NH_TICK, font: { size: 8 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 } },
+        y: { grid: { color: NH_GRID }, ticks: { color: NH_TICK, font: { size: 9 } }, beginAtZero: true },
+      },
+    },
+  });
+}
+
+// ── One-tap pill rows ─────────────────────────────────────────────────────────
+function nhRenderFavorites(favs) {
+  const wrap = document.getElementById("nh-favorites");
+  if (!wrap) return;
+  const list = Array.isArray(favs) ? favs.slice(0, 6) : [];
+  wrap.innerHTML = list.map((f) =>
+    `<button type="button" class="nh-pill" data-nh-fav="${esc(f.food_name)}">` +
+    `${esc(f.food_name)}<span class="nh-pill-meta">×${f.count}</span></button>`).join("");
+}
+
+function nhRenderTemplates(tpls) {
+  const wrap = document.getElementById("nh-templates");
+  if (!wrap) return;
+  NH.templates = Array.isArray(tpls) ? tpls : [];
+  const pills = NH.templates.map((t) =>
+    `<button type="button" class="nh-pill nh-pill-tpl" data-nh-tpl="${t.id}">` +
+    `${esc(t.name)}<span class="nh-pill-meta">· ${Math.round((t.totals || {}).kcal || 0)} kcal</span>` +
+    `</button>`).join("");
+  wrap.innerHTML = pills +
+    `<button type="button" class="nh-pill nh-pill-new" id="nh-new-template">+ new template</button>`;
+}
+
+function nhRenderInsights(lines) {
+  const wrap = document.getElementById("nh-insights");
+  if (!wrap) return;
+  const list = Array.isArray(lines) ? lines : [];
+  if (!list.length) {
+    wrap.innerHTML = `<li class="nh-insights-empty">Insights unavailable right now.</li>`;
+    return;
+  }
+  wrap.innerHTML = list.map((s) => `<li>${esc(s)}</li>`).join("");
+}
+
+// Navigate the whole page to a specific date (week-strip column click).
+function goToDate(dateStr) {
+  if (!dateStr || dateStr === NH.date) return;
+  NH.date = dateStr;
+  fetchNutritionHub();
+}
+
+// ── Favorites: one-tap re-log using averaged macros ──────────────────────────
+async function nhLogFavorite(name) {
+  if (!name) return;
   try {
-    const day = await apiGet(`/api/nutrition/date/${NH.date}`);
-    nhRenderDay(day);
-  } catch { /* keep current view */ }
+    await apiPost("/api/nutrition/log-favorite", { food_name: name, date: NH.date });
+    toast("LOGGED " + name.toUpperCase());
+    await refreshDay();
+  } catch { toast("LOG FAILED"); }
+}
+
+// ── Templates: log an existing one (with a confirm), or build a new one ───────
+let nhPendingTpl = null;
+
+function nhConfirmLogTemplate(tplId) {
+  const tpl = NH.templates.find((t) => String(t.id) === String(tplId));
+  if (!tpl) return;
+  nhPendingTpl = tpl.id;
+  const sub = document.getElementById("nh-tpl-confirm-sub");
+  if (sub) sub.textContent =
+    `Log ${tpl.item_count} item${tpl.item_count === 1 ? "" : "s"} from “${tpl.name}”?`;
+  nhModal("nh-tpl-confirm-modal", true);
+}
+
+async function nhDoLogTemplate() {
+  if (nhPendingTpl == null) return;
+  const btn = document.getElementById("nh-tpl-confirm-ok");
+  if (btn) btn.disabled = true;
+  try {
+    const d = await apiPost("/api/nutrition/log-template",
+      { template_id: nhPendingTpl, date: NH.date });
+    nhModal("nh-tpl-confirm-modal", false);
+    toast(`LOGGED ${d.meals_logged || 0} ITEM${d.meals_logged === 1 ? "" : "S"}`);
+    nhPendingTpl = null;
+    await refreshDay();
+  } catch {
+    toast("LOG FAILED");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Build the new-template modal from the day's meals. `preselect` (a bucket name)
+// pre-checks that section's meals when opened from a meal-section save icon.
+function nhOpenTemplateModal(preselect) {
+  const list = document.getElementById("nh-template-list");
+  const name = document.getElementById("nh-template-name");
+  const err = document.getElementById("nh-template-err");
+  if (err) err.textContent = "";
+  const meals = NH.meals || [];
+  if (!meals.length) { toast("NO MEALS TO SAVE ON THIS DAY"); return; }
+  if (name) name.value = preselect || "";
+  if (list) {
+    list.innerHTML = meals.map((m) => {
+      const checked = !preselect || nhBucket(m.time) === preselect ? "checked" : "";
+      return `<li class="nh-copy-item"><label>` +
+        `<input type="checkbox" data-nh-tpl-meal="${m.id}" ${checked}> ` +
+        `<span class="nm-name">${esc(m.food_name)}</span>` +
+        `<span class="nm-macros">${nhNum(m.protein)}P · ${nhNum(m.carbs)}C · ${nhNum(m.fat)}F</span>` +
+        `</label></li>`;
+    }).join("");
+  }
+  nhModal("nh-template-modal", true);
+}
+
+async function nhSaveTemplate() {
+  const err = document.getElementById("nh-template-err");
+  const setErr = (m) => { if (err) err.textContent = m || ""; };
+  setErr("");
+  const name = (document.getElementById("nh-template-name")?.value || "").trim();
+  if (!name) { setErr("NAME THE TEMPLATE"); return; }
+  const ids = [...document.querySelectorAll("[data-nh-tpl-meal]")]
+    .filter((cb) => cb.checked).map((cb) => parseInt(cb.dataset.nhTplMeal, 10))
+    .filter((n) => !isNaN(n));
+  if (!ids.length) { setErr("PICK AT LEAST ONE MEAL"); return; }
+  const btn = document.getElementById("nh-template-save");
+  if (btn) btn.disabled = true;
+  try {
+    await apiPost("/api/nutrition/template", { name, meal_ids: ids });
+    nhModal("nh-template-modal", false);
+    toast("TEMPLATE SAVED");
+    await refreshDay();
+  } catch {
+    setErr("SAVE FAILED — TRY AGAIN");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ── Hero carousel (Today rings / Balance chart) ──────────────────────────────
+function nhSwitchHero(view) {
+  document.querySelectorAll(".nh-dot").forEach((d) =>
+    d.classList.toggle("active", d.dataset.heroView === view));
+  document.querySelectorAll(".nh-hero-view").forEach((v) =>
+    { v.hidden = v.dataset.heroView !== view; });
+  // The balance chart may have been drawn while hidden (0-width canvas); resize.
+  if (view === "balance" && NH.charts.balance) NH.charts.balance.resize();
 }
 
 // ── Autocomplete ────────────────────────────────────────────────────────────────
@@ -498,7 +822,7 @@ async function nhSaveGoals() {
     NH.goals = d.goals || NH.goals;
     toast("GOALS SAVED");
     nhModal("nh-goals-modal", false);
-    await nhReloadDay();
+    await refreshDay();
   } catch {
     setErr("SAVE FAILED — TRY AGAIN");
   } finally {
@@ -521,15 +845,53 @@ function nhSwitchPane(name) {
 }
 
 function wireNutritionHub() {
-  const card = document.getElementById("nutrition-hub");
-  if (!card) return;
+  const root = document.getElementById("nutrition-screen");
+  if (!root) return;
   NH.date = nhToday();
 
-  // Date navigation
+  // Date navigation — full refresh so week strip · rings · score · charts move.
   const prev = document.getElementById("nh-date-prev");
   const next = document.getElementById("nh-date-next");
-  if (prev) prev.addEventListener("click", () => { NH.date = nhShiftDate(NH.date, -1); nhReloadDay(); });
-  if (next) next.addEventListener("click", () => { NH.date = nhShiftDate(NH.date, 1); nhReloadDay(); });
+  if (prev) prev.addEventListener("click", () => { NH.date = nhShiftDate(NH.date, -1); fetchNutritionHub(); });
+  if (next) next.addEventListener("click", () => { NH.date = nhShiftDate(NH.date, 1); fetchNutritionHub(); });
+
+  // Hero carousel dots
+  document.querySelectorAll(".nh-dot").forEach((d) =>
+    d.addEventListener("click", () => nhSwitchHero(d.dataset.heroView)));
+
+  // Week strip — column click/enter navigates the whole page to that day.
+  const week = document.getElementById("nh-week");
+  if (week) {
+    const nav = (e) => {
+      const col = e.target.closest("[data-nh-day]"); if (!col) return;
+      goToDate(col.dataset.nhDay);
+    };
+    week.addEventListener("click", nav);
+    week.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); nav(e); } });
+  }
+
+  // Favorites pills — one-tap re-log (delegated; row is re-rendered each refresh).
+  const favs = document.getElementById("nh-favorites");
+  if (favs) favs.addEventListener("click", (e) => {
+    const pill = e.target.closest("[data-nh-fav]"); if (pill) nhLogFavorite(pill.dataset.nhFav);
+  });
+
+  // Templates row — log an existing template (confirm) or open the new-template modal.
+  const tpls = document.getElementById("nh-templates");
+  if (tpls) tpls.addEventListener("click", (e) => {
+    if (e.target.closest("#nh-new-template")) { nhOpenTemplateModal(null); return; }
+    const pill = e.target.closest("[data-nh-tpl]"); if (pill) nhConfirmLogTemplate(pill.dataset.nhTpl);
+  });
+
+  // Template modal save + close; log-template confirm.
+  const tplSave = document.getElementById("nh-template-save");
+  if (tplSave) tplSave.addEventListener("click", nhSaveTemplate);
+  const tplClose = document.getElementById("nh-template-close");
+  if (tplClose) tplClose.addEventListener("click", () => nhModal("nh-template-modal", false));
+  const tplOk = document.getElementById("nh-tpl-confirm-ok");
+  if (tplOk) tplOk.addEventListener("click", nhDoLogTemplate);
+  const tplCfClose = document.getElementById("nh-tpl-confirm-close");
+  if (tplCfClose) tplCfClose.addEventListener("click", () => { nhPendingTpl = null; nhModal("nh-tpl-confirm-modal", false); });
 
   // Entry tabs
   document.querySelectorAll(".nh-tab").forEach((t) =>
@@ -579,10 +941,12 @@ function wireNutritionHub() {
   const qLog = document.getElementById("nh-q-log");
   if (qLog) qLog.addEventListener("click", nhQuickAdd);
 
-  // Undo (delegated on the meal list)
+  // Undo + save-as-template (delegated on the meal list)
   const meals = document.getElementById("nh-meals");
   if (meals) meals.addEventListener("click", (e) => {
-    if (e.target.closest("[data-nh-undo]")) nhUndo();
+    if (e.target.closest("[data-nh-undo]")) { nhUndo(); return; }
+    const save = e.target.closest("[data-nh-save-tpl]");
+    if (save) nhOpenTemplateModal(save.dataset.nhSaveTpl);
   });
 
   // Quick actions
@@ -600,8 +964,8 @@ function wireNutritionHub() {
   const goalsClose = document.getElementById("nh-goals-close");
   if (goalsClose) goalsClose.addEventListener("click", () => nhModal("nh-goals-modal", false));
 
-  // Click the dim backdrop to close either modal.
-  ["nh-copy-modal", "nh-goals-modal"].forEach((id) => {
+  // Click the dim backdrop to close any modal.
+  ["nh-copy-modal", "nh-goals-modal", "nh-template-modal", "nh-tpl-confirm-modal"].forEach((id) => {
     const ov = document.getElementById(id);
     if (ov) ov.addEventListener("click", (e) => { if (e.target === ov) nhModal(id, false); });
   });

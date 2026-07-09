@@ -899,7 +899,12 @@ def api_nutrition_trends():
     except (TypeError, ValueError):
         days = 7
     days = max(1, min(90, days))
-    return jsonify(db.get_nutrition_trends(days))
+    # Optional `end` anchors the window (e.g. the Sunday of the viewed week); it
+    # defaults to today. An invalid end is ignored rather than erroring the widget.
+    end = (request.args.get("end") or "").strip() or None
+    if end is not None and not _valid_date(end):
+        end = None
+    return jsonify(db.get_nutrition_trends(days, end_date=end))
 
 
 @app.route("/api/nutrition/score")
