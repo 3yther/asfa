@@ -149,9 +149,12 @@ function nhRenderMeals(meals) {
       const undo = Number(m.id) === lastId
         ? `<button type="button" class="nh-undo" data-nh-undo aria-label="Undo last meal" title="Undo last">↶</button>`
         : "";
+      // Every row gets a delete icon so any meal can be removed, not just the last.
+      const del = `<button type="button" class="nh-del" data-nh-del="${m.id}" ` +
+        `data-nh-food="${esc(m.food_name)}" aria-label="Delete meal" title="Delete">🗑</button>`;
       html += `<div class="nh-meal">` +
         `<span class="nm-name">${esc(m.food_name)}</span>` +
-        `<span class="nm-macros">${esc(macros)}</span>${undo}</div>`;
+        `<span class="nm-macros">${esc(macros)}</span>${undo}${del}</div>`;
     });
     html += `</div>`;
   });
@@ -746,6 +749,32 @@ async function nhUndo() {
   } catch { toast("UNDO FAILED"); }
 }
 
+// ── Delete any single meal (confirm modal → delete-meal → refresh) ────────────────
+let nhPendingDel = null;
+
+function nhConfirmDelete(mealId, foodName) {
+  nhPendingDel = mealId;
+  const sub = document.getElementById("nh-del-sub");
+  if (sub) sub.textContent = `Delete ${foodName || "this meal"}? This can't be undone.`;
+  nhModal("nh-del-modal", true);
+}
+
+async function nhDoDelete() {
+  if (nhPendingDel == null) return;
+  const btn = document.getElementById("nh-del-ok");
+  if (btn) btn.disabled = true;
+  try {
+    await apiPost("/api/nutrition/delete-meal", { meal_id: nhPendingDel });
+    nhModal("nh-del-modal", false);
+    nhPendingDel = null;
+    await refreshDay();   // totals · rings · week strip · score all move together
+  } catch {
+    toast("DELETE FAILED");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ── Copy yesterday (relative to the viewed date) ─────────────────────────────────
 async function nhOpenCopy() {
   const prevDate = nhShiftDate(NH.date, -1);
@@ -944,6 +973,8 @@ function wireNutritionHub() {
   // Undo + save-as-template (delegated on the meal list)
   const meals = document.getElementById("nh-meals");
   if (meals) meals.addEventListener("click", (e) => {
+    const del = e.target.closest("[data-nh-del]");
+    if (del) { nhConfirmDelete(del.dataset.nhDel, del.dataset.nhFood); return; }
     if (e.target.closest("[data-nh-undo]")) { nhUndo(); return; }
     const save = e.target.closest("[data-nh-save-tpl]");
     if (save) nhOpenTemplateModal(save.dataset.nhSaveTpl);
@@ -964,8 +995,17 @@ function wireNutritionHub() {
   const goalsClose = document.getElementById("nh-goals-close");
   if (goalsClose) goalsClose.addEventListener("click", () => nhModal("nh-goals-modal", false));
 
+  // Delete-meal confirm modal
+  const delOk = document.getElementById("nh-del-ok");
+  if (delOk) delOk.addEventListener("click", nhDoDelete);
+  const closeDel = () => { nhPendingDel = null; nhModal("nh-del-modal", false); };
+  const delCancel = document.getElementById("nh-del-cancel");
+  if (delCancel) delCancel.addEventListener("click", closeDel);
+  const delClose = document.getElementById("nh-del-close");
+  if (delClose) delClose.addEventListener("click", closeDel);
+
   // Click the dim backdrop to close any modal.
-  ["nh-copy-modal", "nh-goals-modal", "nh-template-modal", "nh-tpl-confirm-modal"].forEach((id) => {
+  ["nh-copy-modal", "nh-goals-modal", "nh-template-modal", "nh-tpl-confirm-modal", "nh-del-modal"].forEach((id) => {
     const ov = document.getElementById(id);
     if (ov) ov.addEventListener("click", (e) => { if (e.target === ov) nhModal(id, false); });
   });

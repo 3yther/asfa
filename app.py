@@ -823,6 +823,26 @@ def api_nutrition_undo():
     })
 
 
+@app.route("/api/nutrition/delete-meal", methods=["POST"])
+def api_nutrition_delete_meal():
+    """Delete any single meal by id (not just the most recent). Returns the
+    refreshed day totals so the client can update rings/score/week strip."""
+    data = request.get_json(silent=True) or {}
+    meal_id = data.get("meal_id")
+    try:
+        meal_id = int(meal_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "meal_id is required"}), 400
+    meal = db.get_meal(meal_id)
+    if not meal:
+        return jsonify({"error": "meal not found"}), 400
+    db.delete_meal(meal_id)
+    return jsonify({
+        "ok": True,
+        "updated_totals": db.get_daily_macros(meal["date"]),
+    })
+
+
 # ── Nutrition depth (Tier 9a): templates · trends · score · favorites · insights ─
 # Analytical layer over the same meals/goals store. All auth-gated + CSRF like the
 # rest of /api/nutrition. Widgets fail soft on the client, so these stay strict.

@@ -245,6 +245,19 @@
       <button type="button" class="btn btn-grad" id="nh-tpl-confirm-ok">Log items</button>
     </div>
   </div>
+
+  <!-- ── Delete-meal confirm ────────────────────────────────────────────── -->
+  <div class="nh-modal-overlay" id="nh-del-modal" aria-hidden="true">
+    <div class="nh-modal" role="dialog" aria-modal="true" aria-labelledby="nh-del-title">
+      <button type="button" class="nh-modal-close" id="nh-del-close" aria-label="Close">×</button>
+      <div class="nh-modal-title" id="nh-del-title">Delete meal</div>
+      <div class="nh-modal-sub" id="nh-del-sub">Delete this meal? This can't be undone.</div>
+      <div class="nh-del-actions">
+        <button type="button" class="btn btn-ghost" id="nh-del-cancel">Cancel</button>
+        <button type="button" class="btn btn-grad" id="nh-del-ok">Delete</button>
+      </div>
+    </div>
+  </div>
 </main>
 
 <div class="toast hidden" id="toast"></div>
