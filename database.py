@@ -1230,7 +1230,7 @@ def get_nutrition_history(days: int = 14) -> list:
 # Sources a meal may be logged under. The original card allowed only barcode/manual;
 # the hub adds search (picked from USDA/OFF/previous) and quick-add (macros typed
 # straight in). Kept here so database + endpoint validation share one source list.
-MEAL_SOURCES = ("barcode", "manual", "search", "quick-add")
+MEAL_SOURCES = ("barcode", "manual", "search", "quick-add", "template", "favorite")
 
 # Daily macro defaults surfaced until the user sets their own goals.
 DEFAULT_NUTRITION_GOALS = {
@@ -1408,6 +1408,359 @@ def get_unique_foods(limit: int = 50) -> list:
     """Distinct food_name values ordered by frequency (thin projection of
     get_previous_foods, names only)."""
     return [f["food_name"] for f in get_previous_foods(limit)]
+
+
+# ── Nutrition depth (Tier 9a): templates · trends · score · favorites · insights ─
+# All built on the SAME meals + nutrition_goals stores — no duplicated truth. Meal
+# templates are the one new table: named snapshots of item macros the user can
+# re-log in one tap. Trends/score/favorites/insights are pure aggregates.
+
+_MEAL_TEMPLATES_READY = False
+
+
+def _ensure_meal_templates_table():
+    global _MEAL_TEMPLATES_READY
+    if _MEAL_TEMPLATES_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS meal_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        items TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"""
+    if USE_POSTGRES:
+        stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    with get_db() as conn:
+        conn.cursor().execute(stmt)
+    _MEAL_TEMPLATES_READY = True
+
+
+def _template_item(m: dict) -> dict:
+    """Snapshot one meal row into a template item — copies the values so a later
+    edit/delete of the source meal never mutates the template."""
+    kcal = m.get("calories")
+    if kcal is None:
+        kcal = compute_calories(m.get("protein", 0), m.get("carbs", 0), m.get("fat", 0))
+    return {
+        "food_name": m.get("food_name") or "",
+        "protein": round(float(m.get("protein") or 0), 1),
+        "carbs": round(float(m.get("carbs") or 0), 1),
+        "fat": round(float(m.get("fat") or 0), 1),
+        "kcal": round(float(kcal), 1),
+        "grams": m.get("grams"),   # meals don't store grams; kept for shape
+    }
+
+
+def _template_totals(items: list) -> dict:
+    """Sum the macros across a template's items."""
+    return {
+        "protein": round(sum(float(i.get("protein") or 0) for i in items), 1),
+        "carbs": round(sum(float(i.get("carbs") or 0) for i in items), 1),
+        "fat": round(sum(float(i.get("fat") or 0) for i in items), 1),
+        "kcal": round(sum(float(i.get("kcal") or 0) for i in items), 1),
+    }
+
+
+def _template_row(r: dict) -> dict:
+    """Public projection of a meal_templates row with computed totals."""
+    try:
+        items = json.loads(r["items"]) if r.get("items") else []
+    except (ValueError, TypeError):
+        items = []
+    return {
+        "id": r.get("id"),
+        "name": r.get("name"),
+        "items": items,
+        "item_count": len(items),
+        "totals": _template_totals(items),
+        "created_at": r.get("created_at"),
+    }
+
+
+def create_meal_template(name, meal_ids) -> tuple:
+    """Snapshot the given meals into a named template. Copies each meal's macros
+    into items JSON (values, not row references). Returns (template_dict, None) or
+    (None, error_str) on a blank name or no valid meals."""
+    _ensure_meal_templates_table()
+    _ensure_meals_table()
+    name = (name or "").strip()
+    if not name:
+        return (None, "name is required")
+    ids = [i for i in (meal_ids or []) if i is not None]
+    if not ids:
+        return (None, "at least one meal is required")
+    items = []
+    for mid in ids:
+        m = get_meal(mid)
+        if m:
+            items.append(_template_item(m))
+    if not items:
+        return (None, "no valid meals to snapshot")
+
+    ph = "%s" if USE_POSTGRES else "?"
+    payload = json.dumps(items)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO meal_templates (name, items) VALUES ({ph},{ph})",
+            (name, payload))
+        if USE_POSTGRES:
+            cur.execute("SELECT lastval() AS id")
+        else:
+            cur.execute("SELECT last_insert_rowid() AS id")
+        new_id = cur.fetchone()["id"]
+    return (get_meal_template(new_id), None)
+
+
+def get_meal_template(template_id) -> dict:
+    """One template with computed totals, or None if it doesn't exist."""
+    _ensure_meal_templates_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM meal_templates WHERE id = {ph}", (template_id,))
+        row = cur.fetchone()
+    return _template_row(dict(row)) if row else None
+
+
+def get_meal_templates() -> list:
+    """All saved templates, newest first, each with computed macro totals."""
+    _ensure_meal_templates_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM meal_templates ORDER BY id DESC")
+        return [_template_row(dict(r)) for r in cur.fetchall()]
+
+
+def log_meal_template(template_id, date, time=None) -> tuple:
+    """Log every item in a template as a meal on `date` (source="template").
+    Returns (meals_logged, updated_totals) or (None, None) if the template is
+    missing."""
+    tpl = get_meal_template(template_id)
+    if not tpl:
+        return (None, None)
+    logged = 0
+    for it in tpl["items"]:
+        meal, err = log_meal(
+            date, it.get("food_name") or tpl["name"],
+            it.get("protein") or 0, it.get("carbs") or 0, it.get("fat") or 0,
+            time=time, calories=it.get("kcal"), source="template")
+        if not err:
+            logged += 1
+    return (logged, get_daily_macros(date))
+
+
+def delete_meal_template(template_id) -> bool:
+    """Delete one template by id. Returns True if a row was removed."""
+    _ensure_meal_templates_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM meal_templates WHERE id = {ph}", (template_id,))
+        return cur.rowcount > 0
+
+
+# ── Trends ───────────────────────────────────────────────────────────────────────
+
+def get_nutrition_trends(days: int = 7, end_date: str = None) -> dict:
+    """Per-day macro series for the last `days` ending at `end_date` (today by
+    default), ZERO-FILLED for unlogged days so gaps stay visible on the chart.
+    Shape: {dates:[], protein:[], carbs:[], fat:[], kcal:[], goals:{...}}. Same
+    code path powers 7-day trends and the 30-day energy-balance view."""
+    days = max(1, min(90, int(days)))
+    if end_date is None:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+    dates = [(end - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
+             for i in range(days)]
+    # Pull the logged totals for the window in one grouped query, index by date.
+    _ensure_meals_table()
+    start = dates[0]
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT date, SUM(protein) AS protein, SUM(carbs) AS carbs, "
+            "SUM(fat) AS fat, SUM(calories) AS calories FROM meals "
+            f"WHERE date >= {ph} AND date <= {ph} GROUP BY date",
+            (start, end_date))
+        by_date = {r["date"]: r for r in cur.fetchall()}
+    protein, carbs, fat, kcal = [], [], [], []
+    for d in dates:
+        r = by_date.get(d)
+        protein.append(round(float(r["protein"]), 1) if r else 0)
+        carbs.append(round(float(r["carbs"]), 1) if r else 0)
+        fat.append(round(float(r["fat"]), 1) if r else 0)
+        kcal.append(round(float(r["calories"]), 1) if r and r["calories"] is not None else 0)
+    return {
+        "dates": dates,
+        "protein": protein,
+        "carbs": carbs,
+        "fat": fat,
+        "kcal": kcal,
+        "goals": get_nutrition_goals(),
+    }
+
+
+# ── Daily score + streak ─────────────────────────────────────────────────────────
+
+# Macro keys scored each day and how each is judged a "hit". Kept as one table so
+# score + insights share the same rules and can never drift.
+_SCORE_GRADES = ("A", "B", "C", "D")
+
+
+def score_nutrition_day(date, totals=None, goals=None) -> dict:
+    """Pure day grade from totals vs goals — mirrors score_readiness. Four checks:
+      calories · within ±10% of goal
+      protein  · >= 90% of goal (overshoot is fine)
+      carbs    · within ±10% of goal
+      fat      · within ±10% of goal
+    A goal of 0 is treated as met (no target set). Grade: A=4/4 · B=3/4 · C=2/4 ·
+    D=<2. Returns {date, grade, hits, misses, logged}. `misses` names the checks
+    that failed, e.g. ["carbs"]. Worked checks (goals 160/200/70/2500):
+      totals 160/200/70/2500 -> A (4/4) · 120/200/70/2500 -> B (protein short)."""
+    if totals is None:
+        totals = get_daily_macros(date)
+    if goals is None:
+        goals = get_nutrition_goals()
+    checks = [
+        ("calories", float(totals.get("total_calories") or 0), float(goals.get("calorie_goal") or 0), "band"),
+        ("protein", float(totals.get("total_protein") or 0), float(goals.get("protein_goal") or 0), "floor"),
+        ("carbs", float(totals.get("total_carbs") or 0), float(goals.get("carbs_goal") or 0), "band"),
+        ("fat", float(totals.get("total_fat") or 0), float(goals.get("fat_goal") or 0), "band"),
+    ]
+    hits, misses = 0, []
+    for name, got, goal, mode in checks:
+        if goal <= 0:
+            hit = True
+        elif mode == "floor":
+            hit = got >= 0.9 * goal
+        else:  # band: within ±10%
+            hit = 0.9 * goal <= got <= 1.1 * goal
+        if hit:
+            hits += 1
+        else:
+            misses.append(name)
+    grade = "A" if hits == 4 else "B" if hits == 3 else "C" if hits == 2 else "D"
+    return {
+        "date": date,
+        "grade": grade,
+        "hits": hits,
+        "misses": misses,
+        "logged": int(totals.get("meal_count") or 0) > 0,
+    }
+
+
+def get_nutrition_streak(date=None) -> int:
+    """Consecutive days graded A or B ending at `date` (today by default). Breaks
+    on the first C/D or unlogged day. An unlogged end date yields 0."""
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+    streak = 0
+    cur = datetime.strptime(date, "%Y-%m-%d")
+    # Cap the walk-back so a pathological call can't scan forever.
+    for _ in range(366):
+        ds = cur.strftime("%Y-%m-%d")
+        s = score_nutrition_day(ds)
+        if not s["logged"] or s["grade"] not in ("A", "B"):
+            break
+        streak += 1
+        cur -= timedelta(days=1)
+    return streak
+
+
+# ── Favorites (averaged, for one-tap re-log) ─────────────────────────────────────
+
+def get_favorite_foods(limit: int = 10) -> list:
+    """Top foods by log count, each with its AVERAGE macros across all its logs —
+    so a one-tap re-log uses the user's typical portion, not a per-100g figure.
+    Returns [{food_name, count, protein, carbs, fat, calories}]."""
+    _ensure_meals_table()
+    limit = max(1, min(50, int(limit)))
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT food_name, COUNT(*) AS n, AVG(protein) AS protein, "
+            "AVG(carbs) AS carbs, AVG(fat) AS fat, AVG(calories) AS calories, "
+            "MAX(id) AS last_id FROM meals GROUP BY food_name "
+            f"ORDER BY n DESC, last_id DESC LIMIT {ph}", (limit,))
+        rows = cur.fetchall()
+    return [{
+        "food_name": r["food_name"],
+        "count": int(r["n"]),
+        "protein": round(float(r["protein"]), 1),
+        "carbs": round(float(r["carbs"]), 1),
+        "fat": round(float(r["fat"]), 1),
+        "calories": round(float(r["calories"]), 1) if r["calories"] is not None else 0,
+    } for r in rows]
+
+
+def log_favorite_food(food_name, date, time=None) -> tuple:
+    """Log one entry of `food_name` using its averaged macros (source="favorite").
+    Returns (meal_dict, None) or (None, error_str) when the food has no history."""
+    name = (food_name or "").strip()
+    if not name:
+        return (None, "food_name is required")
+    match = None
+    for f in get_favorite_foods(50):
+        if f["food_name"].lower() == name.lower():
+            match = f
+            break
+    if not match:
+        return (None, "no history for this food")
+    return log_meal(
+        date, match["food_name"], match["protein"], match["carbs"], match["fat"],
+        time=time, calories=match["calories"], source="favorite")
+
+
+# ── Insights (rule-based, honest, no AI call) ────────────────────────────────────
+
+def _fmt_int(n) -> str:
+    """Thousands-separated integer for readouts ("2,340")."""
+    return f"{int(round(n)):,}"
+
+
+def get_nutrition_insights(end_date=None) -> list:
+    """2–4 plain-English observations from the last 7 days — honest, not
+    motivational. Returns a single "not enough data" line when fewer than 3 days
+    have any meals logged."""
+    trends = get_nutrition_trends(7, end_date=end_date)
+    goals = trends["goals"]
+    kcal = trends["kcal"]
+    protein = trends["protein"]
+    logged_flags = [k > 0 or p > 0 for k, p in zip(kcal, protein)]
+    logged_days = sum(1 for f in logged_flags if f)
+    if logged_days < 3:
+        return ["Not enough data yet — log a few more days."]
+
+    out = []
+    p_goal = float(goals.get("protein_goal") or 0)
+    if p_goal > 0:
+        p_hits = sum(1 for i, p in enumerate(protein) if logged_flags[i] and p >= 0.9 * p_goal)
+        out.append(f"Protein target hit {p_hits}/{logged_days} logged days.")
+
+    logged_kcal = [k for i, k in enumerate(kcal) if logged_flags[i]]
+    if logged_kcal:
+        avg_kcal = sum(logged_kcal) / len(logged_kcal)
+        c_goal = float(goals.get("calorie_goal") or 0)
+        if c_goal > 0:
+            out.append(f"Avg {_fmt_int(avg_kcal)} kcal vs {_fmt_int(c_goal)} goal.")
+        else:
+            out.append(f"Avg {_fmt_int(avg_kcal)} kcal over {len(logged_kcal)} days.")
+
+    unlogged = 7 - logged_days
+    if unlogged > 0:
+        out.append(f"No meals logged {unlogged} of the last 7 days.")
+
+    # Fill toward the 2–4 range with a grade-consistency line when there's room.
+    if len(out) < 4:
+        ab_days = 0
+        for i, d in enumerate(trends["dates"]):
+            if logged_flags[i] and score_nutrition_day(d)["grade"] in ("A", "B"):
+                ab_days += 1
+        out.append(f"Grade A/B on {ab_days}/{logged_days} logged days.")
+    return out[:4]
 
 
 # ── Briefing cache ─────────────────────────────────────────────────────────────
