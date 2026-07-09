@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>ASFA // NUTRITION</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="mask-icon" href="{{ url_for('static', filename='favicon.svg') }}" color="#00d9ff">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/nutrition.css') }}">
+<script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/sounds.js') }}" defer></script>
+</head>
+<body class="nutrition-body">
+<canvas id="starfield-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;"></canvas>
+
+{% include "nav.html" with context %}
+
+<main class="nutrition-screen">
+  <header class="nutrition-head">
+    <h1 class="screen-title" data-decode>Nutrition</h1>
+    <p class="screen-sub">Fuel • Log • Hit your macros</p>
+  </header>
+
+  <div class="nutrition-layout">
+    <!-- ── Dashboard: date nav + calories left + macros ─────────────────── -->
+    <section class="card sci-fi-panel nh-dash">
+      <div class="nh-datenav">
+        <button type="button" class="btn btn-ghost nh-arrow" id="nh-date-prev" aria-label="Previous day">‹</button>
+        <span class="nh-date" id="nh-date" data-date="">Today</span>
+        <button type="button" class="btn btn-ghost nh-arrow" id="nh-date-next" aria-label="Next day">›</button>
+      </div>
+
+      <div class="nh-cals">
+        <div class="readout-l val-live" id="nh-cals-left">0</div>
+        <div class="hud-label">KCAL LEFT</div>
+        <div class="progress"><div class="progress-fill" id="nh-cals-bar" style="width:0%"></div></div>
+      </div>
+
+      <div class="nh-macros-grid" role="group" aria-label="Macros remaining">
+        <div class="nh-macro">
+          <div class="hud-label">PROTEIN</div>
+          <div class="nh-macro-val"><b id="nh-protein-left">0</b><span class="hud-label">G LEFT</span></div>
+          <div class="progress"><div class="progress-fill" id="nh-protein-bar" style="width:0%"></div></div>
+        </div>
+        <div class="nh-macro">
+          <div class="hud-label">CARBS</div>
+          <div class="nh-macro-val"><b id="nh-carbs-left">0</b><span class="hud-label">G LEFT</span></div>
+          <div class="progress"><div class="progress-fill" id="nh-carbs-bar" style="width:0%"></div></div>
+        </div>
+        <div class="nh-macro">
+          <div class="hud-label">FAT</div>
+          <div class="nh-macro-val"><b id="nh-fat-left">0</b><span class="hud-label">G LEFT</span></div>
+          <div class="progress"><div class="progress-fill" id="nh-fat-bar" style="width:0%"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Entry: SEARCH / QUICK-ADD ────────────────────────────────────── -->
+    <section class="card sci-fi-panel nh-entry-panel">
+      <div class="nh-entry">
+        <div class="nh-tabs" role="tablist">
+          <button type="button" class="nh-tab active" data-nh-tab="search" role="tab">SEARCH</button>
+          <button type="button" class="nh-tab" data-nh-tab="quick" role="tab">QUICK-ADD</button>
+        </div>
+
+        <!-- SEARCH pane -->
+        <div class="nh-pane" data-nh-pane="search">
+          <div class="nh-search-row">
+            <input type="text" class="nutri-input" id="nh-search" placeholder="FIND A FOOD" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="nh-suggest">
+            <button type="button" class="btn btn-ghost nh-icon-btn" id="nh-barcode-btn" title="Scan barcode" aria-label="Scan barcode">⊞</button>
+          </div>
+          <ul class="nh-suggest" id="nh-suggest" role="listbox" hidden></ul>
+
+          <!-- Barcode inline (revealed by the barcode button) -->
+          <div class="nh-barcode-box" id="nh-barcode-box" hidden>
+            <div class="nh-search-row">
+              <input type="text" class="nutri-input" id="nh-barcode-input" inputmode="numeric" placeholder="SCAN OR TYPE BARCODE">
+              <button type="button" class="btn btn-ghost" id="nh-barcode-lookup">Look Up</button>
+            </div>
+          </div>
+
+          <!-- Picked food -->
+          <div class="nh-picked" id="nh-picked" hidden>
+            <div class="nutri-preview" id="nh-picked-name"></div>
+            <div class="nh-portion-row">
+              <input type="number" class="nutri-input" id="nh-grams" min="0" step="1" value="100" placeholder="HOW MANY GRAMS?">
+              <input type="time" class="nutri-input" id="nh-time">
+            </div>
+            <div class="nutri-preview" id="nh-picked-preview"></div>
+            <button type="button" class="btn btn-grad" id="nh-search-log">Log</button>
+          </div>
+          <div class="nutri-hint" id="nh-search-hint" role="status"></div>
+        </div>
+
+        <!-- QUICK-ADD pane -->
+        <div class="nh-pane" data-nh-pane="quick" hidden>
+          <input type="text" class="nutri-input" id="nh-q-name" maxlength="120" placeholder="WHAT DID YOU EAT?">
+          <input type="number" class="nutri-input" id="nh-q-cals" min="0" step="1" placeholder="CALORIES">
+          <details class="nh-q-macros">
+            <summary>Add macros (optional)</summary>
+            <div class="nutri-macros">
+              <input type="number" class="nutri-input" id="nh-q-protein" min="0" step="0.1" placeholder="PROTEIN G">
+              <input type="number" class="nutri-input" id="nh-q-carbs" min="0" step="0.1" placeholder="CARBS G">
+              <input type="number" class="nutri-input" id="nh-q-fat" min="0" step="0.1" placeholder="FAT G">
+            </div>
+          </details>
+          <input type="time" class="nutri-input" id="nh-q-time">
+          <button type="button" class="btn btn-grad" id="nh-q-log">Log</button>
+          <div class="nutri-err" id="nh-q-err" role="alert"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Meal log: Breakfast / Lunch / Dinner / Snack ─────────────────── -->
+    <section class="card sci-fi-panel nh-log-panel">
+      <div class="card-head"><h2 data-decode>Today's Log</h2></div>
+      <div class="nh-meals" id="nh-meals"></div>
+      <div class="nutri-empty" id="nh-empty">No meals logged.</div>
+
+      <div class="nh-actions">
+        <button type="button" class="btn btn-ghost" id="nh-copy-yday">Copy yesterday</button>
+        <button type="button" class="btn btn-ghost" id="nh-goals-btn">Adjust goals</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- ── Copy-yesterday modal ───────────────────────────────────────────── -->
+  <div class="nh-modal-overlay" id="nh-copy-modal" aria-hidden="true">
+    <div class="nh-modal" role="dialog" aria-modal="true" aria-labelledby="nh-copy-title">
+      <button type="button" class="nh-modal-close" id="nh-copy-close" aria-label="Close">×</button>
+      <div class="nh-modal-title" id="nh-copy-title">Copy yesterday</div>
+      <div class="nh-modal-sub" id="nh-copy-sub">Choose which meals to log for this day.</div>
+      <ul class="nh-copy-list" id="nh-copy-list"></ul>
+      <button type="button" class="btn btn-grad" id="nh-copy-confirm">Log selected</button>
+    </div>
+  </div>
+
+  <!-- ── Goals modal ────────────────────────────────────────────────────── -->
+  <div class="nh-modal-overlay" id="nh-goals-modal" aria-hidden="true">
+    <div class="nh-modal" role="dialog" aria-modal="true" aria-labelledby="nh-goals-title">
+      <button type="button" class="nh-modal-close" id="nh-goals-close" aria-label="Close">×</button>
+      <div class="nh-modal-title" id="nh-goals-title">Daily goals</div>
+      <label class="nh-goal-field"><span class="hud-label">PROTEIN (G)</span><input type="number" class="nutri-input" id="nh-goal-protein" min="0" step="1"></label>
+      <label class="nh-goal-field"><span class="hud-label">CARBS (G)</span><input type="number" class="nutri-input" id="nh-goal-carbs" min="0" step="1"></label>
+      <label class="nh-goal-field"><span class="hud-label">FAT (G)</span><input type="number" class="nutri-input" id="nh-goal-fat" min="0" step="1"></label>
+      <label class="nh-goal-field"><span class="hud-label">CALORIES</span><input type="number" class="nutri-input" id="nh-goal-cals" min="0" step="1"></label>
+      <button type="button" class="btn btn-grad" id="nh-goals-save">Save goals</button>
+      <div class="nutri-err" id="nh-goals-err" role="alert"></div>
+    </div>
+  </div>
+</main>
+
+<div class="toast hidden" id="toast"></div>
+
+<script>
+  // Add bracket corners to all sci-fi panels (matches other ASFA screens).
+  document.querySelectorAll('.sci-fi-panel').forEach(el => {
+    ['corner-bl', 'corner-br'].forEach(cls => {
+      const div = document.createElement('div');
+      div.className = cls;
+      el.appendChild(div);
+    });
+  });
+</script>
+<script src="{{ url_for('static', filename='js/nutrition.js') }}" defer></script>
+<script src="/static/js/starfield.js" defer></script>
+</body>
+</html>
