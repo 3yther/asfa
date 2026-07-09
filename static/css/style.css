@@ -859,7 +859,7 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
   #briefing-card, #score-card, #bots-card,
   #scout-card, #scout-pipeline-card, #calendar-card, #inbox-card, #news-card,
   #water-card, #sleep-card, #bodyweight-card,
-  #pbs-card, #reflection-card,
+  #pbs-card, #reflection-card, #nutrition-hub,
   #goals-card, #chat-card, #supplements-card { grid-column: span 1; }
 
   .header { padding: 12px 16px; }
@@ -877,11 +877,12 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
   .briefing-sysinfo { width: 100%; }
   .news-headlines { grid-template-columns: 1fr; }
 
-  body[data-tab="home"]   .card:not([data-tabs~="home"]),
-  body[data-tab="habits"] .card:not([data-tabs~="habits"]),
-  body[data-tab="body"]   .card:not([data-tabs~="body"]),
-  body[data-tab="money"]  .card:not([data-tabs~="money"]),
-  body[data-tab="chat"]   .card:not([data-tabs~="chat"]) { display: none; }
+  body[data-tab="home"]      .card:not([data-tabs~="home"]),
+  body[data-tab="habits"]    .card:not([data-tabs~="habits"]),
+  body[data-tab="nutrition"] .card:not([data-tabs~="nutrition"]),
+  body[data-tab="body"]      .card:not([data-tabs~="body"]),
+  body[data-tab="money"]     .card:not([data-tabs~="money"]),
+  body[data-tab="chat"]      .card:not([data-tabs~="chat"]) { display: none; }
 }
 @media (min-width: 761px) and (max-width: 1100px) {
   .grid { grid-template-columns: repeat(6,1fr); }
@@ -889,7 +890,7 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
   #bots-card  { grid-column: span 4; }
   #scout-card, #scout-pipeline-card, #calendar-card, #inbox-card { grid-column: span 2; }
   #water-card, #sleep-card, #bodyweight-card { grid-column: span 2; }
-  #pbs-card, #reflection-card { grid-column: span 2; }
+  #pbs-card, #reflection-card, #nutrition-hub { grid-column: span 2; }
   #supplements-card { grid-column: span 6; }
   #chat-card { grid-column: span 6; }
 }
@@ -1104,6 +1105,149 @@ body.locked-in #main-grid .card:hover { opacity: .9; }
   .think-text { animation: none; opacity: .8; }
   .think-mode { transition: opacity .25s; }
 }
+
+/* ── Nutrition Hub (Tier 7 redesign) ──────────────────────────────────────────── */
+#nutrition-hub { grid-column: span 4; }
+
+/* Date navigation in the header */
+#nutrition-hub .nh-datenav { display: flex; align-items: center; gap: 8px; }
+#nutrition-hub .nh-arrow {
+  padding: 2px 10px; font-size: 16px; line-height: 1; min-width: 0;
+}
+#nutrition-hub .nh-date {
+  font: 600 11px var(--mono); letter-spacing: .06em; color: var(--text-dim);
+  min-width: 74px; text-align: center;
+}
+
+/* Calories-left headline */
+#nutrition-hub .nh-cals { text-align: center; margin: 12px 0 14px; }
+#nutrition-hub .nh-cals .readout-l { font-size: 34px; color: var(--cyan); }
+#nutrition-hub .nh-cals .progress { max-width: 220px; margin: 8px auto 0; }
+
+/* Protein / carbs / fat remaining */
+#nutrition-hub .nh-macros-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px;
+}
+#nutrition-hub .nh-macro { text-align: center; }
+#nutrition-hub .nh-macro-val { margin: 2px 0; }
+#nutrition-hub .nh-macro-val b { font: 600 20px var(--mono); color: var(--text); }
+#nutrition-hub .nh-macro-val .hud-label { display: inline; margin-left: 4px; }
+
+/* Entry: SEARCH / QUICK-ADD tabs */
+#nutrition-hub .nh-entry {
+  padding-top: 14px; border-top: 1px solid rgba(140,170,200,.10);
+}
+#nutrition-hub .nh-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+#nutrition-hub .nh-tab {
+  flex: 1; padding: 7px 0; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md);
+  color: var(--muted); font: 600 10px var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  transition: color .2s ease, border-color .2s ease;
+}
+#nutrition-hub .nh-tab:hover { color: var(--text); border-color: var(--cyan); }
+#nutrition-hub .nh-tab.active {
+  color: var(--cyan); border-color: var(--cyan); box-shadow: 0 0 12px var(--cyan-glow);
+}
+#nutrition-hub .nh-pane { display: flex; flex-direction: column; gap: 10px; }
+
+#nutrition-hub .nh-search-row { display: flex; gap: 6px; }
+#nutrition-hub .nh-search-row .nutri-input { flex: 1; }
+#nutrition-hub .nh-icon-btn { padding: 0 12px; font-size: 15px; line-height: 1; }
+
+/* Autocomplete dropdown */
+#nutrition-hub .nh-suggest {
+  list-style: none; margin: 0; padding: 4px; display: flex; flex-direction: column; gap: 2px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md);
+  max-height: 240px; overflow-y: auto;
+}
+#nutrition-hub .nh-sug {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 7px 8px; cursor: pointer; border-radius: 4px;
+  font: 500 12px var(--mono); letter-spacing: .03em;
+}
+#nutrition-hub .nh-sug:hover { background: var(--panel-3); }
+#nutrition-hub .nh-sug-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#nutrition-hub .nh-sug-macros { color: var(--text-dim); white-space: nowrap; }
+#nutrition-hub .nh-sug-badge {
+  margin-left: 6px; padding: 1px 5px; border-radius: var(--r-pill);
+  font-size: 8px; letter-spacing: .1em; color: var(--void); background: var(--online);
+}
+
+#nutrition-hub .nh-barcode-box { margin-top: 2px; }
+
+/* Picked-food portion box */
+#nutrition-hub .nh-picked {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+#nutrition-hub .nh-portion-row { display: flex; gap: 6px; }
+#nutrition-hub .nh-portion-row .nutri-input { flex: 1; }
+
+/* Quick-add optional macros */
+#nutrition-hub .nh-q-macros summary {
+  cursor: pointer; font: 500 10px var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); padding: 4px 0; list-style: none;
+}
+#nutrition-hub .nh-q-macros summary::-webkit-details-marker { display: none; }
+#nutrition-hub .nh-q-macros summary:hover { color: var(--cyan); }
+#nutrition-hub .nh-q-macros .nutri-macros {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px;
+}
+
+/* Meal sections */
+#nutrition-hub .nh-meals { margin-top: 14px; display: flex; flex-direction: column; gap: 14px; }
+#nutrition-hub .nh-meal-group { display: flex; flex-direction: column; gap: 6px; }
+#nutrition-hub .nh-group-head { color: var(--cyan); padding-bottom: 2px; border-bottom: 1px solid rgba(140,170,200,.10); }
+#nutrition-hub .nh-meal {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  font: 500 12px var(--mono); letter-spacing: .03em;
+}
+#nutrition-hub .nh-meal .nm-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+#nutrition-hub .nh-meal .nm-macros { color: var(--text-dim); white-space: nowrap; }
+#nutrition-hub .nh-undo {
+  background: none; border: none; cursor: pointer; padding: 0 2px;
+  color: var(--muted); font-size: 15px; line-height: 1; transition: color .2s ease;
+}
+#nutrition-hub .nh-undo:hover { color: var(--red); }
+
+/* Quick actions */
+#nutrition-hub .nh-actions {
+  display: flex; gap: 8px; margin-top: 16px; padding-top: 14px;
+  border-top: 1px solid rgba(140,170,200,.10);
+}
+#nutrition-hub .nh-actions .btn { flex: 1; }
+
+/* Modals (copy-yesterday, goals) */
+#nutrition-hub .nh-modal-overlay {
+  display: none; position: fixed; inset: 0; z-index: 60;
+  background: rgba(3,6,11,.72); backdrop-filter: blur(4px);
+  align-items: center; justify-content: center; padding: 20px;
+}
+#nutrition-hub .nh-modal-overlay.open { display: flex; }
+#nutrition-hub .nh-modal {
+  position: relative; width: 100%; max-width: 360px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 22px; box-shadow: 0 10px 38px rgba(0,0,0,.5), 0 0 32px var(--cyan-glow);
+  display: flex; flex-direction: column; gap: 10px; max-height: 80vh; overflow-y: auto;
+}
+#nutrition-hub .nh-modal-close {
+  position: absolute; top: 10px; right: 12px; background: none; border: none;
+  color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer;
+}
+#nutrition-hub .nh-modal-close:hover { color: var(--cyan); }
+#nutrition-hub .nh-modal-title {
+  color: var(--cyan); font: 600 13px var(--mono); letter-spacing: .1em; text-transform: uppercase;
+}
+#nutrition-hub .nh-modal-sub { color: var(--text-dim); font: 500 11px var(--mono); letter-spacing: .04em; }
+#nutrition-hub .nh-copy-list { list-style: none; margin: 4px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+#nutrition-hub .nh-copy-item label {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  font: 500 12px var(--mono); letter-spacing: .03em;
+}
+#nutrition-hub .nh-copy-item .nm-name { color: var(--text); flex: 1; }
+#nutrition-hub .nh-copy-item .nm-macros { color: var(--text-dim); white-space: nowrap; }
+#nutrition-hub .nh-goal-field { display: flex; flex-direction: column; gap: 4px; }
+#nutrition-hub .nh-goal-field .hud-label { text-align: left; }
 
 /* ── Market session · Trading systems · Validation cards ───────────────────────── */
 #market-card     { grid-column: span 4; }
