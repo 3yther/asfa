@@ -11,6 +11,7 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/nutrition.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" defer></script>
 <script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/sounds.js') }}" defer></script>
 </head>
@@ -19,49 +20,112 @@
 
 {% include "nav.html" with context %}
 
-<main class="nutrition-screen">
+<main class="nutrition-screen" id="nutrition-screen">
   <header class="nutrition-head">
     <h1 class="screen-title" data-decode>Nutrition</h1>
     <p class="screen-sub">Fuel • Log • Hit your macros</p>
   </header>
 
+  <!-- ── Date navigation (drives the whole page) ────────────────────────── -->
+  <div class="nh-datenav">
+    <button type="button" class="btn btn-ghost nh-arrow" id="nh-date-prev" aria-label="Previous day">‹</button>
+    <span class="nh-date" id="nh-date" data-date="">Today</span>
+    <button type="button" class="btn btn-ghost nh-arrow" id="nh-date-next" aria-label="Next day">›</button>
+  </div>
+
   <div class="nutrition-layout">
-    <!-- ── Dashboard: date nav + calories left + macros ─────────────────── -->
-    <section class="card sci-fi-panel nh-dash">
-      <div class="nh-datenav">
-        <button type="button" class="btn btn-ghost nh-arrow" id="nh-date-prev" aria-label="Previous day">‹</button>
-        <span class="nh-date" id="nh-date" data-date="">Today</span>
-        <button type="button" class="btn btn-ghost nh-arrow" id="nh-date-next" aria-label="Next day">›</button>
+    <!-- ── WEEK STRIP: 7 days × 4 mini-bars (kcal/P/C/F vs goal) ─────────── -->
+    <section class="card sci-fi-panel nh-week-panel">
+      <div class="hud-label nh-section-label">THIS WEEK</div>
+      <div class="nh-week" id="nh-week" role="group" aria-label="Week overview"></div>
+      <div class="nh-week-legend">
+        <span class="nh-lg nh-lg-1">KCAL</span><span class="nh-lg nh-lg-2">PROTEIN</span>
+        <span class="nh-lg nh-lg-3">CARBS</span><span class="nh-lg nh-lg-4">FAT</span>
       </div>
+    </section>
 
-      <div class="nh-cals">
-        <div class="readout-l val-live" id="nh-cals-left">0</div>
-        <div class="hud-label">KCAL LEFT</div>
-        <div class="progress"><div class="progress-fill" id="nh-cals-bar" style="width:0%"></div></div>
-      </div>
+    <!-- ── HERO CAROUSEL (Today rings / Balance chart) + SCORE card ─────── -->
+    <div class="nh-hero-row">
+      <section class="card sci-fi-panel nh-hero">
+        <div class="nh-hero-tabs" role="tablist" aria-label="Hero view">
+          <button type="button" class="nh-dot active" data-hero-view="today" role="tab" aria-label="Today">●</button>
+          <button type="button" class="nh-dot" data-hero-view="balance" role="tab" aria-label="Energy balance">●</button>
+        </div>
 
-      <div class="nh-macros-grid" role="group" aria-label="Macros remaining">
-        <div class="nh-macro">
-          <div class="hud-label">PROTEIN</div>
-          <div class="nh-macro-val"><b id="nh-protein-left">0</b><span class="hud-label">G LEFT</span></div>
-          <div class="progress"><div class="progress-fill" id="nh-protein-bar" style="width:0%"></div></div>
+        <!-- VIEW 1 — TODAY (rings) -->
+        <div class="nh-hero-view" data-hero-view="today">
+          <div class="nh-ring nh-ring-lg">
+            <svg viewBox="0 0 140 140" aria-hidden="true">
+              <circle class="nh-ring-track" cx="70" cy="70" r="60"></circle>
+              <circle class="nh-ring-fill nh-ring-cals" id="nh-cals-ring" cx="70" cy="70" r="60"></circle>
+            </svg>
+            <div class="nh-ring-center">
+              <div class="readout-l val-live" id="nh-cals-left">0</div>
+              <div class="hud-label">KCAL LEFT</div>
+            </div>
+          </div>
+          <div class="nh-macro-rings" role="group" aria-label="Macros remaining">
+            <div class="nh-ring nh-ring-sm">
+              <svg viewBox="0 0 80 80" aria-hidden="true">
+                <circle class="nh-ring-track" cx="40" cy="40" r="32"></circle>
+                <circle class="nh-ring-fill nh-ring-protein" id="nh-protein-ring" cx="40" cy="40" r="32"></circle>
+              </svg>
+              <div class="nh-ring-center">
+                <b id="nh-protein-left">0</b><span class="hud-label">P LEFT</span>
+              </div>
+            </div>
+            <div class="nh-ring nh-ring-sm">
+              <svg viewBox="0 0 80 80" aria-hidden="true">
+                <circle class="nh-ring-track" cx="40" cy="40" r="32"></circle>
+                <circle class="nh-ring-fill nh-ring-carbs" id="nh-carbs-ring" cx="40" cy="40" r="32"></circle>
+              </svg>
+              <div class="nh-ring-center">
+                <b id="nh-carbs-left">0</b><span class="hud-label">C LEFT</span>
+              </div>
+            </div>
+            <div class="nh-ring nh-ring-sm">
+              <svg viewBox="0 0 80 80" aria-hidden="true">
+                <circle class="nh-ring-track" cx="40" cy="40" r="32"></circle>
+                <circle class="nh-ring-fill nh-ring-fat" id="nh-fat-ring" cx="40" cy="40" r="32"></circle>
+              </svg>
+              <div class="nh-ring-center">
+                <b id="nh-fat-left">0</b><span class="hud-label">F LEFT</span>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="nh-macro">
-          <div class="hud-label">CARBS</div>
-          <div class="nh-macro-val"><b id="nh-carbs-left">0</b><span class="hud-label">G LEFT</span></div>
-          <div class="progress"><div class="progress-fill" id="nh-carbs-bar" style="width:0%"></div></div>
+
+        <!-- VIEW 2 — BALANCE (30-day intake vs goal line) -->
+        <div class="nh-hero-view" data-hero-view="balance" hidden>
+          <div class="hud-label nh-section-label">ENERGY BALANCE · 30D</div>
+          <div class="nh-chart-wrap"><canvas id="nh-balance-chart" height="200"></canvas></div>
         </div>
-        <div class="nh-macro">
-          <div class="hud-label">FAT</div>
-          <div class="nh-macro-val"><b id="nh-fat-left">0</b><span class="hud-label">G LEFT</span></div>
-          <div class="progress"><div class="progress-fill" id="nh-fat-bar" style="width:0%"></div></div>
-        </div>
-      </div>
+      </section>
+
+      <!-- ── SCORE + STREAK ──────────────────────────────────────────────── -->
+      <section class="card sci-fi-panel nh-score">
+        <div class="hud-label nh-section-label">DAY SCORE</div>
+        <div class="nh-grade" id="nh-grade" data-grade="">–</div>
+        <div class="nh-score-sub" id="nh-score-sub">No data yet.</div>
+        <div class="nh-streak" id="nh-streak"></div>
+      </section>
+    </div>
+
+    <!-- ── TRENDS (7-day P/C/F line) ────────────────────────────────────── -->
+    <section class="card sci-fi-panel nh-trends-panel">
+      <div class="hud-label nh-section-label">7-DAY TRENDS</div>
+      <div class="nh-chart-wrap"><canvas id="nh-trends-chart" height="220"></canvas></div>
     </section>
 
     <!-- ── Entry: SEARCH / QUICK-ADD ────────────────────────────────────── -->
     <section class="card sci-fi-panel nh-entry-panel">
       <div class="nh-entry">
+        <!-- One-tap re-log: favorites (averaged) + saved templates -->
+        <div class="nh-pill-row nh-favorites" id="nh-favorites" aria-label="Favorite foods"></div>
+        <div class="nh-pill-row nh-templates" id="nh-templates" aria-label="Meal templates">
+          <button type="button" class="nh-pill nh-pill-new" id="nh-new-template">+ new template</button>
+        </div>
+
         <div class="nh-tabs" role="tablist">
           <button type="button" class="nh-tab active" data-nh-tab="search" role="tab">SEARCH</button>
           <button type="button" class="nh-tab" data-nh-tab="quick" role="tab">QUICK-ADD</button>
@@ -126,6 +190,12 @@
         <button type="button" class="btn btn-ghost" id="nh-goals-btn">Adjust goals</button>
       </div>
     </section>
+
+    <!-- ── INSIGHTS (rule-based, honest) ─────────────────────────────────── -->
+    <section class="card sci-fi-panel nh-insights-panel">
+      <div class="hud-label nh-section-label">INSIGHTS</div>
+      <ul class="nh-insights" id="nh-insights"></ul>
+    </section>
   </div>
 
   <!-- ── Copy-yesterday modal ───────────────────────────────────────────── -->
@@ -150,6 +220,29 @@
       <label class="nh-goal-field"><span class="hud-label">CALORIES</span><input type="number" class="nutri-input" id="nh-goal-cals" min="0" step="1"></label>
       <button type="button" class="btn btn-grad" id="nh-goals-save">Save goals</button>
       <div class="nutri-err" id="nh-goals-err" role="alert"></div>
+    </div>
+  </div>
+
+  <!-- ── New-template modal (checkbox list of the day's meals) ───────────── -->
+  <div class="nh-modal-overlay" id="nh-template-modal" aria-hidden="true">
+    <div class="nh-modal" role="dialog" aria-modal="true" aria-labelledby="nh-template-title">
+      <button type="button" class="nh-modal-close" id="nh-template-close" aria-label="Close">×</button>
+      <div class="nh-modal-title" id="nh-template-title">Save as template</div>
+      <div class="nh-modal-sub">Pick which of today's meals to snapshot.</div>
+      <input type="text" class="nutri-input" id="nh-template-name" maxlength="80" placeholder="TEMPLATE NAME">
+      <ul class="nh-copy-list" id="nh-template-list"></ul>
+      <button type="button" class="btn btn-grad" id="nh-template-save">Save template</button>
+      <div class="nutri-err" id="nh-template-err" role="alert"></div>
+    </div>
+  </div>
+
+  <!-- ── Log-template confirm ───────────────────────────────────────────── -->
+  <div class="nh-modal-overlay" id="nh-tpl-confirm-modal" aria-hidden="true">
+    <div class="nh-modal" role="dialog" aria-modal="true" aria-labelledby="nh-tpl-confirm-title">
+      <button type="button" class="nh-modal-close" id="nh-tpl-confirm-close" aria-label="Close">×</button>
+      <div class="nh-modal-title" id="nh-tpl-confirm-title">Log template</div>
+      <div class="nh-modal-sub" id="nh-tpl-confirm-sub">Log these items?</div>
+      <button type="button" class="btn btn-grad" id="nh-tpl-confirm-ok">Log items</button>
     </div>
   </div>
 </main>

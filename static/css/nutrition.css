@@ -21,39 +21,146 @@
 .nutrition-head .screen-sub { color: var(--muted); font-size: .82rem; letter-spacing: 1px; }
 
 .nutrition-layout { display: grid; gap: 16px; }
-@media (min-width: 860px) {
-  .nutrition-layout { grid-template-columns: 1fr 1fr; align-items: start; }
-  .nh-dash { grid-column: 1 / -1; }         /* headline dashboard spans the top */
-}
 .nutrition-screen .card { padding: 20px; }
+.nutrition-screen .nh-section-label { margin-bottom: 12px; }
 
-/* ── Date navigation ──────────────────────────────────────────────────────── */
+/* ── Date navigation (page-wide driver) ───────────────────────────────────── */
 .nutrition-screen .nh-datenav {
-  display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 6px;
+  display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 16px;
 }
 .nutrition-screen .nh-arrow { padding: 2px 12px; font-size: 17px; line-height: 1; min-width: 0; }
 .nutrition-screen .nh-date {
-  font: 600 12px var(--mono); letter-spacing: .06em; color: var(--text-dim);
-  min-width: 82px; text-align: center;
+  font: 600 13px var(--mono); letter-spacing: .06em; color: var(--text);
+  min-width: 110px; text-align: center;
 }
 
-/* ── Calories-left headline ───────────────────────────────────────────────── */
+/* ── WEEK STRIP: 7 columns × 4 stacked mini-bars ──────────────────────────── */
+.nutrition-screen .nh-week {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px;
+}
+.nutrition-screen .nh-week-col {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 8px 4px; border-radius: var(--r-md); border: 1px solid transparent;
+  cursor: pointer; transition: border-color .2s ease, background .2s ease;
+}
+.nutrition-screen .nh-week-col:hover { background: var(--panel-2); }
+.nutrition-screen .nh-week-col.current {
+  border-color: var(--cyan); box-shadow: 0 0 12px var(--cyan-glow); background: var(--panel-2);
+}
+.nutrition-screen .nh-week-day {
+  font: 600 9px var(--mono); letter-spacing: .1em; color: var(--text-dim); text-transform: uppercase;
+}
+.nutrition-screen .nh-week-col.current .nh-week-day { color: var(--cyan); }
+.nutrition-screen .nh-week-bars { display: flex; gap: 3px; align-items: flex-end; height: 46px; }
+.nutrition-screen .nh-wbar {
+  width: 5px; height: 100%; border-radius: var(--r-pill);
+  background: var(--panel-3); position: relative; overflow: hidden;
+}
+.nutrition-screen .nh-wbar > i {
+  position: absolute; bottom: 0; left: 0; right: 0; display: block; border-radius: var(--r-pill);
+  transition: height .5s var(--ease);
+}
+.nutrition-screen .nh-wbar-1 > i { background: var(--series-1); }
+.nutrition-screen .nh-wbar-2 > i { background: var(--series-2); }
+.nutrition-screen .nh-wbar-3 > i { background: var(--series-3); }
+.nutrition-screen .nh-wbar-4 > i { background: var(--series-4); }
+.nutrition-screen .nh-week-legend {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 12px;
+}
+.nutrition-screen .nh-lg {
+  font: 600 8px var(--mono); letter-spacing: .12em; color: var(--text-dim);
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.nutrition-screen .nh-lg::before {
+  content: ""; width: 8px; height: 8px; border-radius: 2px;
+}
+.nutrition-screen .nh-lg-1::before { background: var(--series-1); }
+.nutrition-screen .nh-lg-2::before { background: var(--series-2); }
+.nutrition-screen .nh-lg-3::before { background: var(--series-3); }
+.nutrition-screen .nh-lg-4::before { background: var(--series-4); }
+
+/* ── HERO ROW: carousel (rings / balance) + score card ────────────────────── */
+.nutrition-screen .nh-hero-row { display: grid; gap: 16px; }
+@media (min-width: 760px) {
+  .nutrition-screen .nh-hero-row { grid-template-columns: 2fr 1fr; align-items: stretch; }
+}
+.nutrition-screen .nh-hero { position: relative; }
+.nutrition-screen .nh-hero-tabs {
+  display: flex; justify-content: center; gap: 8px; margin-bottom: 8px;
+}
+.nutrition-screen .nh-dot {
+  background: none; border: none; cursor: pointer; padding: 2px;
+  font-size: 9px; line-height: 1; color: var(--line-bright); transition: color .2s ease;
+}
+.nutrition-screen .nh-dot:hover { color: var(--text-dim); }
+.nutrition-screen .nh-dot.active { color: var(--cyan); }
+
+/* Rings (inline SVG) */
+.nutrition-screen .nh-hero-view { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.nutrition-screen .nh-ring { position: relative; display: inline-grid; place-items: center; }
+.nutrition-screen .nh-ring svg { display: block; transform: rotate(-90deg); }
+.nutrition-screen .nh-ring-lg svg { width: 190px; height: 190px; }
+.nutrition-screen .nh-ring-sm svg { width: 92px; height: 92px; }
+.nutrition-screen .nh-ring-track { fill: none; stroke: var(--panel-3); stroke-width: 8; }
+.nutrition-screen .nh-ring-fill {
+  fill: none; stroke-width: 8; stroke-linecap: round;
+  stroke-dasharray: 1; stroke-dashoffset: 1;
+  transition: stroke-dashoffset .6s var(--ease);
+}
+.nutrition-screen .nh-ring-cals    { stroke: var(--cyan); filter: drop-shadow(0 0 5px var(--cyan-glow)); }
+.nutrition-screen .nh-ring-protein { stroke: var(--series-2); }
+.nutrition-screen .nh-ring-carbs   { stroke: var(--series-3); }
+.nutrition-screen .nh-ring-fat     { stroke: var(--series-4); }
+.nutrition-screen .nh-ring-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center; pointer-events: none;
+}
+.nutrition-screen .nh-ring-lg .readout-l { font-size: 30px; color: var(--cyan); line-height: 1.02; }
+.nutrition-screen .nh-ring-sm b { font: 600 17px var(--mono); color: var(--text); }
+.nutrition-screen .nh-ring-sm .hud-label { font-size: 7px; margin-top: 1px; }
+.nutrition-screen .nh-macro-rings { display: flex; justify-content: center; gap: 14px; }
+
+/* ── SCORE + STREAK ───────────────────────────────────────────────────────── */
+.nutrition-screen .nh-score { display: flex; flex-direction: column; }
+.nutrition-screen .nh-grade {
+  font: 700 68px var(--mono); line-height: 1; color: var(--text-dim); margin: 6px 0 4px;
+}
+.nutrition-screen .nh-grade[data-grade="A"],
+.nutrition-screen .nh-grade[data-grade="B"] { color: var(--online); text-shadow: 0 0 18px rgba(55,217,160,.4); }
+.nutrition-screen .nh-grade[data-grade="C"] { color: var(--warn); text-shadow: 0 0 18px rgba(243,169,60,.4); }
+.nutrition-screen .nh-grade[data-grade="D"] { color: var(--alert); text-shadow: 0 0 18px rgba(255,77,109,.4); }
+.nutrition-screen .nh-score-sub { font: 500 12px var(--mono); color: var(--text); letter-spacing: .02em; }
+.nutrition-screen .nh-streak {
+  margin-top: auto; padding-top: 10px; font: 600 11px var(--mono);
+  letter-spacing: .04em; color: var(--cyan);
+}
+.nutrition-screen .nh-streak:empty { display: none; }
+
+/* ── Chart wrappers ───────────────────────────────────────────────────────── */
+.nutrition-screen .nh-chart-wrap { position: relative; width: 100%; }
+.nutrition-screen .nh-chart-wrap canvas { max-width: 100%; }
+
+/* ── One-tap pill rows (favorites, templates) ─────────────────────────────── */
+.nutrition-screen .nh-pill-row {
+  display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px;
+  scrollbar-width: thin; -webkit-overflow-scrolling: touch;
+}
+.nutrition-screen .nh-pill-row:empty { display: none; }
+.nutrition-screen .nh-pill {
+  flex: 0 0 auto; cursor: pointer; white-space: nowrap;
+  padding: 6px 12px; border-radius: var(--r-pill);
+  background: var(--panel-2); border: 1px solid var(--line);
+  color: var(--text); font: 500 11px var(--mono); letter-spacing: .03em;
+  transition: border-color .2s ease, color .2s ease;
+}
+.nutrition-screen .nh-pill:hover { border-color: var(--cyan); color: var(--cyan); }
+.nutrition-screen .nh-pill .nh-pill-meta { color: var(--text-dim); margin-left: 4px; }
+.nutrition-screen .nh-pill-new { border-style: dashed; color: var(--text-dim); }
+.nutrition-screen .nh-pill-tpl { border-color: var(--line-bright); }
+
+/* ── Calories-left headline (legacy fallback, kept harmless) ──────────────── */
 .nutrition-screen .nh-cals { text-align: center; margin: 8px 0 18px; }
 .nutrition-screen .nh-cals .readout-l { font-size: 46px; color: var(--cyan); line-height: 1.05; }
-.nutrition-screen .nh-cals .hud-label { margin-top: 2px; }
-.nutrition-screen .nh-cals .progress { max-width: 280px; margin: 10px auto 0; }
-
-/* ── Protein / carbs / fat remaining ──────────────────────────────────────── */
-.nutrition-screen .nh-macros-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
-}
-.nutrition-screen .nh-macro {
-  text-align: center; padding: 12px 8px;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md);
-}
-.nutrition-screen .nh-macro-val { margin: 4px 0 8px; }
-.nutrition-screen .nh-macro-val b { font: 600 22px var(--mono); color: var(--text); }
-.nutrition-screen .nh-macro-val .hud-label { display: inline; margin-left: 4px; }
 
 /* ── Entry: SEARCH / QUICK-ADD tabs ───────────────────────────────────────── */
 .nutrition-screen .nh-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
@@ -116,7 +223,15 @@
 /* ── Meal sections ────────────────────────────────────────────────────────── */
 .nutrition-screen .nh-meals { margin-top: 4px; display: flex; flex-direction: column; gap: 14px; }
 .nutrition-screen .nh-meal-group { display: flex; flex-direction: column; gap: 6px; }
-.nutrition-screen .nh-group-head { color: var(--cyan); padding-bottom: 2px; border-bottom: 1px solid rgba(140,170,200,.10); }
+.nutrition-screen .nh-group-head {
+  color: var(--cyan); padding-bottom: 2px; border-bottom: 1px solid rgba(140,170,200,.10);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.nutrition-screen .nh-save-tpl {
+  background: none; border: none; cursor: pointer; padding: 0 2px;
+  color: var(--text-dim); font-size: 13px; line-height: 1; transition: color .2s ease;
+}
+.nutrition-screen .nh-save-tpl:hover { color: var(--cyan); }
 .nutrition-screen .nh-meal {
   display: flex; justify-content: space-between; align-items: center; gap: 10px;
   font: 500 12px var(--mono); letter-spacing: .03em;
@@ -168,8 +283,32 @@
 .nutrition-screen .nh-goal-field { display: flex; flex-direction: column; gap: 4px; }
 .nutrition-screen .nh-goal-field .hud-label { text-align: left; }
 
+/* ── Insights ─────────────────────────────────────────────────────────────── */
+.nutrition-screen .nh-insights { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.nutrition-screen .nh-insights li {
+  font: 500 12px var(--mono); letter-spacing: .02em; color: var(--text);
+  padding-left: 14px; position: relative;
+}
+.nutrition-screen .nh-insights li::before {
+  content: "›"; position: absolute; left: 0; color: var(--cyan);
+}
+.nutrition-screen .nh-insights li.nh-insights-empty { color: var(--text-dim); }
+.nutrition-screen .nh-insights li.nh-insights-empty::before { color: var(--text-dim); }
+
+/* ── Template modal name input ────────────────────────────────────────────── */
+.nutrition-screen #nh-template-name { margin-bottom: 2px; }
+
 @media (max-width: 560px) {
   .nutrition-screen { padding: 14px 12px 120px; }
   .nutrition-screen .nh-cals .readout-l { font-size: 40px; }
   .nutrition-screen .nh-macro-val b { font-size: 19px; }
+  .nutrition-screen .nh-ring-lg svg { width: 168px; height: 168px; }
+  .nutrition-screen .nh-week-bars { height: 40px; }
+  .nutrition-screen .nh-grade { font-size: 56px; }
+}
+
+/* Respect reduced-motion: no ring/bar sweeps or grade glow pulse. */
+@media (prefers-reduced-motion: reduce) {
+  .nutrition-screen .nh-ring-fill,
+  .nutrition-screen .nh-wbar > i { transition: none; }
 }

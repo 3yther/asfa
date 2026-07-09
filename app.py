@@ -823,6 +823,133 @@ def api_nutrition_undo():
     })
 
 
+# ── Nutrition depth (Tier 9a): templates · trends · score · favorites · insights ─
+# Analytical layer over the same meals/goals store. All auth-gated + CSRF like the
+# rest of /api/nutrition. Widgets fail soft on the client, so these stay strict.
+
+def _valid_date(date_str):
+    """True if date_str is a real YYYY-MM-DD calendar date."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str or ""):
+        return False
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
+@app.route("/api/nutrition/templates")
+def api_nutrition_templates():
+    return jsonify(db.get_meal_templates())
+
+
+@app.route("/api/nutrition/template", methods=["POST"])
+def api_nutrition_template_create():
+    data = request.get_json(force=True) or {}
+    name = (data.get("name") or "").strip()
+    meal_ids = data.get("meal_ids")
+    if not isinstance(meal_ids, list) or not meal_ids:
+        return jsonify({"error": "meal_ids must be a non-empty list"}), 400
+    # Coerce ids to ints, dropping anything non-numeric.
+    ids = []
+    for m in meal_ids:
+        try:
+            ids.append(int(m))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return jsonify({"error": "meal_ids must be numeric"}), 400
+    tpl, err = db.create_meal_template(name, ids)
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({"ok": True, "template": tpl})
+
+
+@app.route("/api/nutrition/log-template", methods=["POST"])
+def api_nutrition_log_template():
+    data = request.get_json(force=True) or {}
+    try:
+        template_id = int(data.get("template_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "template_id is required"}), 400
+    date_str = (data.get("date") or "").strip() or _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    logged, totals = db.log_meal_template(template_id, date_str)
+    if logged is None:
+        return jsonify({"error": "template not found"}), 404
+    return jsonify({"ok": True, "meals_logged": logged, "updated_totals": totals})
+
+
+@app.route("/api/nutrition/template-delete", methods=["POST"])
+def api_nutrition_template_delete():
+    data = request.get_json(force=True) or {}
+    try:
+        template_id = int(data.get("template_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "template_id is required"}), 400
+    ok = db.delete_meal_template(template_id)
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/nutrition/trends")
+def api_nutrition_trends():
+    try:
+        days = int(request.args.get("days", 7))
+    except (TypeError, ValueError):
+        days = 7
+    days = max(1, min(90, days))
+    # Optional `end` anchors the window (e.g. the Sunday of the viewed week); it
+    # defaults to today. An invalid end is ignored rather than erroring the widget.
+    end = (request.args.get("end") or "").strip() or None
+    if end is not None and not _valid_date(end):
+        end = None
+    return jsonify(db.get_nutrition_trends(days, end_date=end))
+
+
+@app.route("/api/nutrition/score")
+def api_nutrition_score():
+    date_str = (request.args.get("date") or "").strip() or _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    s = db.score_nutrition_day(date_str)
+    s["streak"] = db.get_nutrition_streak(date_str)
+    return jsonify(s)
+
+
+@app.route("/api/nutrition/favorites")
+def api_nutrition_favorites():
+    try:
+        limit = int(request.args.get("limit", 10))
+    except (TypeError, ValueError):
+        limit = 10
+    return jsonify(db.get_favorite_foods(limit))
+
+
+@app.route("/api/nutrition/log-favorite", methods=["POST"])
+def api_nutrition_log_favorite():
+    data = request.get_json(force=True) or {}
+    food_name = (data.get("food_name") or "").strip()
+    if not food_name:
+        return jsonify({"error": "food_name is required"}), 400
+    date_str = (data.get("date") or "").strip() or _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    meal, err = db.log_favorite_food(food_name, date_str)
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({
+        "ok": True,
+        "meal": meal,
+        "updated_totals": db.get_daily_macros(date_str),
+    })
+
+
+@app.route("/api/nutrition/insights")
+def api_nutrition_insights():
+    return jsonify(db.get_nutrition_insights())
+
+
 # ── Finance / spending (Tier 8) ─────────────────────────────────────────────────
 # Richer transaction logging layered on the legacy /api/money spending store.
 # /api/money (GET+POST) still works and reads the SAME rows; these endpoints add
