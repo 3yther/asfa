@@ -546,6 +546,131 @@
     <div class="nutri-empty" id="nutri-empty">No meals logged today.</div>
   </section>
 
+  <!-- ── Nutrition Hub (Tier 7 redesign) — search-first fuel log ──────────── -->
+  <section class="card sci-fi-panel" id="nutrition-hub" data-card="nutrition-hub" data-tabs="nutrition">
+    <div class="card-head">
+      <h2 data-decode>Nutrition</h2>
+      <div class="nh-datenav">
+        <button type="button" class="btn btn-ghost nh-arrow" id="nh-date-prev" aria-label="Previous day">‹</button>
+        <span class="nh-date" id="nh-date" data-date="">Today</span>
+        <button type="button" class="btn btn-ghost nh-arrow" id="nh-date-next" aria-label="Next day">›</button>
+      </div>
+    </div>
+
+    <!-- Dashboard readouts -->
+    <div class="nh-cals">
+      <div class="readout-l val-live" id="nh-cals-left">0</div>
+      <div class="hud-label">KCAL LEFT</div>
+      <div class="progress"><div class="progress-fill" id="nh-cals-bar" style="width:0%"></div></div>
+    </div>
+    <div class="nh-macros-grid" role="group" aria-label="Macros remaining">
+      <div class="nh-macro">
+        <div class="hud-label">PROTEIN</div>
+        <div class="nh-macro-val"><b id="nh-protein-left">0</b><span class="hud-label">G LEFT</span></div>
+        <div class="progress"><div class="progress-fill" id="nh-protein-bar" style="width:0%"></div></div>
+      </div>
+      <div class="nh-macro">
+        <div class="hud-label">CARBS</div>
+        <div class="nh-macro-val"><b id="nh-carbs-left">0</b><span class="hud-label">G LEFT</span></div>
+        <div class="progress"><div class="progress-fill" id="nh-carbs-bar" style="width:0%"></div></div>
+      </div>
+      <div class="nh-macro">
+        <div class="hud-label">FAT</div>
+        <div class="nh-macro-val"><b id="nh-fat-left">0</b><span class="hud-label">G LEFT</span></div>
+        <div class="progress"><div class="progress-fill" id="nh-fat-bar" style="width:0%"></div></div>
+      </div>
+    </div>
+
+    <!-- Search + entry -->
+    <div class="nh-entry">
+      <div class="nh-tabs" role="tablist">
+        <button type="button" class="nh-tab active" data-nh-tab="search" role="tab">SEARCH</button>
+        <button type="button" class="nh-tab" data-nh-tab="quick" role="tab">QUICK-ADD</button>
+      </div>
+
+      <!-- SEARCH pane -->
+      <div class="nh-pane" data-nh-pane="search">
+        <div class="nh-search-row">
+          <input type="text" class="nutri-input" id="nh-search" placeholder="FIND A FOOD" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="nh-suggest">
+          <button type="button" class="btn btn-ghost nh-icon-btn" id="nh-barcode-btn" title="Scan barcode" aria-label="Scan barcode">⊞</button>
+        </div>
+        <ul class="nh-suggest" id="nh-suggest" role="listbox" hidden></ul>
+
+        <!-- Barcode inline (revealed by the barcode button) -->
+        <div class="nh-barcode-box" id="nh-barcode-box" hidden>
+          <div class="nh-search-row">
+            <input type="text" class="nutri-input" id="nh-barcode-input" inputmode="numeric" placeholder="SCAN OR TYPE BARCODE">
+            <button type="button" class="btn btn-ghost" id="nh-barcode-lookup">Look Up</button>
+          </div>
+        </div>
+
+        <!-- Picked food -->
+        <div class="nh-picked" id="nh-picked" hidden>
+          <div class="nutri-preview" id="nh-picked-name"></div>
+          <div class="nh-portion-row">
+            <input type="number" class="nutri-input" id="nh-grams" min="0" step="1" value="100" placeholder="HOW MANY GRAMS?">
+            <input type="time" class="nutri-input" id="nh-time">
+          </div>
+          <div class="nutri-preview" id="nh-picked-preview"></div>
+          <button type="button" class="btn btn-grad" id="nh-search-log">Log</button>
+        </div>
+        <div class="nutri-hint" id="nh-search-hint" role="status"></div>
+      </div>
+
+      <!-- QUICK-ADD pane -->
+      <div class="nh-pane" data-nh-pane="quick" hidden>
+        <input type="text" class="nutri-input" id="nh-q-name" maxlength="120" placeholder="WHAT DID YOU EAT?">
+        <input type="number" class="nutri-input" id="nh-q-cals" min="0" step="1" placeholder="CALORIES">
+        <details class="nh-q-macros">
+          <summary>Add macros (optional)</summary>
+          <div class="nutri-macros">
+            <input type="number" class="nutri-input" id="nh-q-protein" min="0" step="0.1" placeholder="PROTEIN G">
+            <input type="number" class="nutri-input" id="nh-q-carbs" min="0" step="0.1" placeholder="CARBS G">
+            <input type="number" class="nutri-input" id="nh-q-fat" min="0" step="0.1" placeholder="FAT G">
+          </div>
+        </details>
+        <input type="time" class="nutri-input" id="nh-q-time">
+        <button type="button" class="btn btn-grad" id="nh-q-log">Log</button>
+        <div class="nutri-err" id="nh-q-err" role="alert"></div>
+      </div>
+    </div>
+
+    <!-- Meal sections (rendered by JS: Breakfast / Lunch / Dinner / Snack) -->
+    <div class="nh-meals" id="nh-meals"></div>
+    <div class="nutri-empty" id="nh-empty">No meals logged.</div>
+
+    <!-- Quick actions -->
+    <div class="nh-actions">
+      <button type="button" class="btn btn-ghost" id="nh-copy-yday">Copy yesterday</button>
+      <button type="button" class="btn btn-ghost" id="nh-goals-btn">Adjust goals</button>
+    </div>
+
+    <!-- Copy-yesterday modal -->
+    <div class="nh-modal-overlay" id="nh-copy-modal" aria-hidden="true">
+      <div class="nh-modal" role="dialog" aria-modal="true" aria-labelledby="nh-copy-title">
+        <button type="button" class="nh-modal-close" id="nh-copy-close" aria-label="Close">×</button>
+        <div class="nh-modal-title" id="nh-copy-title">Copy yesterday</div>
+        <div class="nh-modal-sub" id="nh-copy-sub">Choose which meals to log for this day.</div>
+        <ul class="nh-copy-list" id="nh-copy-list"></ul>
+        <button type="button" class="btn btn-grad" id="nh-copy-confirm">Log selected</button>
+      </div>
+    </div>
+
+    <!-- Goals modal -->
+    <div class="nh-modal-overlay" id="nh-goals-modal" aria-hidden="true">
+      <div class="nh-modal" role="dialog" aria-modal="true" aria-labelledby="nh-goals-title">
+        <button type="button" class="nh-modal-close" id="nh-goals-close" aria-label="Close">×</button>
+        <div class="nh-modal-title" id="nh-goals-title">Daily goals</div>
+        <label class="nh-goal-field"><span class="hud-label">PROTEIN (G)</span><input type="number" class="nutri-input" id="nh-goal-protein" min="0" step="1"></label>
+        <label class="nh-goal-field"><span class="hud-label">CARBS (G)</span><input type="number" class="nutri-input" id="nh-goal-carbs" min="0" step="1"></label>
+        <label class="nh-goal-field"><span class="hud-label">FAT (G)</span><input type="number" class="nutri-input" id="nh-goal-fat" min="0" step="1"></label>
+        <label class="nh-goal-field"><span class="hud-label">CALORIES</span><input type="number" class="nutri-input" id="nh-goal-cals" min="0" step="1"></label>
+        <button type="button" class="btn btn-grad" id="nh-goals-save">Save goals</button>
+        <div class="nutri-err" id="nh-goals-err" role="alert"></div>
+      </div>
+    </div>
+  </section>
+
   <section class="card sci-fi-panel" id="bodyweight-card" data-tabs="body">
     <div class="card-head"><h2 data-decode>Biometrics // Mass</h2></div>
     <form id="weight-form" class="inline-form">
@@ -835,6 +960,7 @@
   <div class="nav-pill" id="nav-pill"></div>
   <button class="nav-btn active" data-tab="home">⬡<span>HOME</span></button>
   <button class="nav-btn" data-tab="habits">◎<span>HABITS</span></button>
+  <button class="nav-btn" data-tab="nutrition">◍<span>FUEL</span></button>
   <button class="nav-btn" data-tab="body">⬜<span>BODY</span></button>
   <button class="nav-btn" data-tab="money">◈<span>FUNDS</span></button>
   <button class="nav-btn" data-tab="chat">▷<span>CMD</span></button>
