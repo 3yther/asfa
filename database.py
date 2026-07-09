@@ -1128,8 +1128,8 @@ def log_meal(date, food_name, protein, carbs, fat, time=None, calories=None,
     not supplied. Returns (row_dict, None) on success or (None, error_str) on a
     validation failure (bad source, negative macro, blank name)."""
     _ensure_meals_table()
-    if source not in ("barcode", "manual"):
-        return (None, "source must be 'barcode' or 'manual'")
+    if source not in MEAL_SOURCES:
+        return (None, f"source must be one of {', '.join(MEAL_SOURCES)}")
     if not (food_name or "").strip():
         return (None, "food_name is required")
     try:
@@ -1220,6 +1220,194 @@ def get_nutrition_history(days: int = 14) -> list:
              "fat": round(float(r["fat"]), 1),
              "calories": round(float(r["calories"]), 1)}
             for r in rows]
+
+
+# ── Nutrition hub (Tier 7 redesign) ─────────────────────────────────────────────
+# Search-first logging built on the SAME meals table. No per-food table: previous
+# foods and time-of-day suggestions are derived by aggregating meals.food_name.
+# A single-row nutrition_goals table holds the user's daily macro targets.
+
+# Sources a meal may be logged under. The original card allowed only barcode/manual;
+# the hub adds search (picked from USDA/OFF/previous) and quick-add (macros typed
+# straight in). Kept here so database + endpoint validation share one source list.
+MEAL_SOURCES = ("barcode", "manual", "search", "quick-add")
+
+# Daily macro defaults surfaced until the user sets their own goals.
+DEFAULT_NUTRITION_GOALS = {
+    "protein_goal": 160, "carbs_goal": 200, "fat_goal": 70, "calorie_goal": 2500,
+}
+
+_NUTRITION_GOALS_READY = False
+
+
+def _ensure_nutrition_goals_table():
+    global _NUTRITION_GOALS_READY
+    if _NUTRITION_GOALS_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS nutrition_goals (
+        id INTEGER PRIMARY KEY,
+        protein_goal REAL NOT NULL,
+        carbs_goal REAL NOT NULL,
+        fat_goal REAL NOT NULL,
+        calorie_goal REAL NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"""
+    with get_db() as conn:
+        conn.cursor().execute(stmt)
+    _NUTRITION_GOALS_READY = True
+
+
+def get_nutrition_goals() -> dict:
+    """The user's daily macro targets, falling back to DEFAULT_NUTRITION_GOALS
+    when none have been set. Always returns all four keys as numbers."""
+    _ensure_nutrition_goals_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT protein_goal, carbs_goal, fat_goal, calorie_goal "
+                    "FROM nutrition_goals WHERE id = 1")
+        row = cur.fetchone()
+    if not row:
+        return dict(DEFAULT_NUTRITION_GOALS)
+    return {
+        "protein_goal": round(float(row["protein_goal"]), 1),
+        "carbs_goal": round(float(row["carbs_goal"]), 1),
+        "fat_goal": round(float(row["fat_goal"]), 1),
+        "calorie_goal": round(float(row["calorie_goal"]), 1),
+    }
+
+
+def set_nutrition_goals(protein, carbs, fat, calories) -> dict:
+    """Upsert the single goals row. Returns the stored goals dict. Raises
+    ValueError on a non-numeric or negative target."""
+    _ensure_nutrition_goals_table()
+    try:
+        protein, carbs, fat, calories = (
+            float(protein), float(carbs), float(fat), float(calories))
+    except (TypeError, ValueError):
+        raise ValueError("goals must be numbers")
+    if min(protein, carbs, fat, calories) < 0:
+        raise ValueError("goals must be >= 0")
+
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO nutrition_goals "
+                "(id, protein_goal, carbs_goal, fat_goal, calorie_goal, updated_at) "
+                f"VALUES (1,{ph},{ph},{ph},{ph},NOW()) "
+                "ON CONFLICT (id) DO UPDATE SET "
+                "protein_goal=EXCLUDED.protein_goal, carbs_goal=EXCLUDED.carbs_goal, "
+                "fat_goal=EXCLUDED.fat_goal, calorie_goal=EXCLUDED.calorie_goal, "
+                "updated_at=NOW()",
+                (protein, carbs, fat, calories))
+        else:
+            cur.execute(
+                "INSERT INTO nutrition_goals "
+                "(id, protein_goal, carbs_goal, fat_goal, calorie_goal, updated_at) "
+                f"VALUES (1,{ph},{ph},{ph},{ph},CURRENT_TIMESTAMP) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "protein_goal=excluded.protein_goal, carbs_goal=excluded.carbs_goal, "
+                "fat_goal=excluded.fat_goal, calorie_goal=excluded.calorie_goal, "
+                "updated_at=CURRENT_TIMESTAMP",
+                (protein, carbs, fat, calories))
+    return get_nutrition_goals()
+
+
+def get_meals_for_date(date) -> list:
+    """Full meal rows for `date` (used by the date picker and copy-yesterday).
+    Thin wrapper over get_meals so callers read intent."""
+    return get_meals(date)
+
+
+def get_last_meal(date):
+    """Most recently inserted meal on `date`, or None. Drives the undo action."""
+    _ensure_meals_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM meals WHERE date = {ph} "
+                    f"ORDER BY id DESC LIMIT 1", (date,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def delete_meal(meal_id) -> bool:
+    """Delete one meal by id. Returns True if a row was removed."""
+    _ensure_meals_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM meals WHERE id = {ph}", (meal_id,))
+        return cur.rowcount > 0
+
+
+def get_frequent_foods_at_hour(hour: int, limit: int = 5) -> list:
+    """Foods most often logged in the given clock hour over the last 30 days,
+    sorted by frequency. `hour` is 0-23; meals with no time are ignored. Returns
+    [{food_name, count}]. Powers time-of-day (breakfast/lunch/dinner) suggestions."""
+    _ensure_meals_table()
+    hour = max(0, min(23, int(hour)))
+    hh = f"{hour:02d}"
+    limit = max(1, min(20, int(limit)))
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "SELECT food_name, COUNT(*) AS n FROM meals "
+                "WHERE time IS NOT NULL AND SUBSTR(time,1,2) = %s "
+                "AND CAST(date AS TIMESTAMP) >= NOW() - INTERVAL '30 days' "
+                "GROUP BY food_name ORDER BY n DESC, MAX(id) DESC LIMIT %s",
+                (hh, limit))
+        else:
+            cur.execute(
+                "SELECT food_name, COUNT(*) AS n FROM meals "
+                "WHERE time IS NOT NULL AND SUBSTR(time,1,2) = ? "
+                "AND date >= date('now','-30 days') "
+                "GROUP BY food_name ORDER BY n DESC, MAX(id) DESC LIMIT ?",
+                (hh, limit))
+        rows = cur.fetchall()
+    return [{"food_name": r["food_name"], "count": int(r["n"])} for r in rows]
+
+
+def get_previous_foods(limit: int = 50) -> list:
+    """Distinct foods the user has logged, most-frequent first (recency breaks
+    ties), each carrying its most-recently logged macros so the UI can prefill a
+    re-pick. Returns [{food_name, count, protein, carbs, fat, calories}]. This is
+    the local "food cache" — no extra table, just an aggregate over meals."""
+    _ensure_meals_table()
+    limit = max(1, min(200, int(limit)))
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT food_name, COUNT(*) AS n, MAX(id) AS last_id "
+            "FROM meals GROUP BY food_name "
+            "ORDER BY n DESC, last_id DESC LIMIT "
+            + ("%s" if USE_POSTGRES else "?"),
+            (limit,))
+        rows = [dict(r) for r in cur.fetchall()]
+        out = []
+        ph = "%s" if USE_POSTGRES else "?"
+        for r in rows:
+            cur.execute(
+                f"SELECT protein, carbs, fat, calories FROM meals WHERE id = {ph}",
+                (r["last_id"],))
+            m = cur.fetchone()
+            out.append({
+                "food_name": r["food_name"],
+                "count": int(r["n"]),
+                "protein": round(float(m["protein"]), 1) if m else 0,
+                "carbs": round(float(m["carbs"]), 1) if m else 0,
+                "fat": round(float(m["fat"]), 1) if m else 0,
+                "calories": round(float(m["calories"]), 1) if m and m["calories"] is not None else 0,
+            })
+    return out
+
+
+def get_unique_foods(limit: int = 50) -> list:
+    """Distinct food_name values ordered by frequency (thin projection of
+    get_previous_foods, names only)."""
+    return [f["food_name"] for f in get_previous_foods(limit)]
 
 
 # ── Briefing cache ─────────────────────────────────────────────────────────────

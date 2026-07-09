@@ -597,7 +597,7 @@ def api_sleep_history():
 # Open Food Facts (per-100g); the client scales macros to the portion eaten and
 # posts the final grams to /api/nutrition/log. Everything falls back to manual.
 
-_MEAL_SOURCES = ("barcode", "manual")
+_MEAL_SOURCES = db.MEAL_SOURCES
 
 
 @app.route("/api/nutrition/lookup-barcode", methods=["POST"])
@@ -696,6 +696,115 @@ def api_nutrition_history():
         days = 14
     days = max(1, min(90, days))
     return jsonify(db.get_nutrition_history(days))
+
+
+# ── Nutrition hub (Tier 7 redesign) ─────────────────────────────────────────────
+# Search-first hub layered on the same meals store: macro goals, per-date lookups,
+# time-of-day + previous-food suggestions, and single-tap undo. All auth-gated.
+
+def _meal_row(m):
+    """Public projection of a meal row for the hub (id lets the client undo it)."""
+    return {
+        "id": m.get("id"),
+        "time": m.get("time"),
+        "food_name": m.get("food_name"),
+        "protein": m.get("protein"),
+        "carbs": m.get("carbs"),
+        "fat": m.get("fat"),
+        "calories": m.get("calories"),
+        "source": m.get("source"),
+    }
+
+
+def _nutrition_day(date_str):
+    """{date, totals, meals, goals} for one day — the hub's per-date payload."""
+    totals = db.get_daily_macros(date_str)
+    return {
+        "date": date_str,
+        "totals": totals,
+        "meals": [_meal_row(m) for m in db.get_meals_for_date(date_str)],
+        "goals": db.get_nutrition_goals(),
+    }
+
+
+@app.route("/api/nutrition/goals", methods=["GET"])
+def api_nutrition_goals_get():
+    return jsonify(db.get_nutrition_goals())
+
+
+@app.route("/api/nutrition/goals", methods=["POST"])
+def api_nutrition_goals_set():
+    data = request.get_json(force=True) or {}
+    current = db.get_nutrition_goals()
+    try:
+        goals = db.set_nutrition_goals(
+            data.get("protein_goal", current["protein_goal"]),
+            data.get("carbs_goal", current["carbs_goal"]),
+            data.get("fat_goal", current["fat_goal"]),
+            data.get("calorie_goal", current["calorie_goal"]),
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True, "goals": goals})
+
+
+@app.route("/api/nutrition/date/<date_str>")
+def api_nutrition_date(date_str):
+    if date_str == "today":
+        date_str = _today()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"error": "date must be a real calendar date"}), 400
+    return jsonify(_nutrition_day(date_str))
+
+
+@app.route("/api/nutrition/yesterday")
+def api_nutrition_yesterday():
+    y = (datetime.strptime(_today(), "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    return jsonify(_nutrition_day(y))
+
+
+@app.route("/api/nutrition/frequent-at-hour")
+def api_nutrition_frequent_at_hour():
+    try:
+        hour = int(request.args.get("hour", datetime.now().hour))
+    except (TypeError, ValueError):
+        hour = datetime.now().hour
+    try:
+        limit = int(request.args.get("limit", 5))
+    except (TypeError, ValueError):
+        limit = 5
+    return jsonify(db.get_frequent_foods_at_hour(hour, limit))
+
+
+@app.route("/api/nutrition/previous-foods")
+def api_nutrition_previous_foods():
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        limit = 50
+    return jsonify(db.get_previous_foods(limit))
+
+
+@app.route("/api/nutrition/undo", methods=["POST"])
+def api_nutrition_undo():
+    data = request.get_json(silent=True) or {}
+    date_str = (data.get("date") or "").strip() or _today()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    last = db.get_last_meal(date_str)
+    if not last:
+        return jsonify({"ok": False, "message": "No meals to undo",
+                        "updated_totals": db.get_daily_macros(date_str)}), 200
+    db.delete_meal(last["id"])
+    return jsonify({
+        "ok": True,
+        "last_meal_id": last["id"],
+        "updated_totals": db.get_daily_macros(date_str),
+    })
 
 
 # ── Finance / spending (Tier 8) ─────────────────────────────────────────────────
