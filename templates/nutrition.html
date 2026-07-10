@@ -151,9 +151,11 @@
           <div class="nh-picked" id="nh-picked" hidden>
             <div class="nutri-preview" id="nh-picked-name"></div>
             <div class="nh-portion-row">
-              <input type="number" class="nutri-input" id="nh-grams" min="0" step="1" value="100" placeholder="HOW MANY GRAMS?">
+              <input type="number" class="nutri-input nh-amount" id="nh-amount" min="0" step="any" value="100" placeholder="AMOUNT">
+              <select class="nutri-input nh-unit" id="nh-unit" aria-label="Serving unit" hidden></select>
               <input type="time" class="nutri-input" id="nh-time">
             </div>
+            <div class="nh-grams-readout" id="nh-grams-readout" hidden></div>
             <div class="nutri-preview" id="nh-picked-preview"></div>
             <button type="button" class="btn btn-grad" id="nh-search-log">Log</button>
           </div>

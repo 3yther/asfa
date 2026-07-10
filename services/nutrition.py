@@ -147,7 +147,160 @@ def _parse_fdc_food(food: dict):
         "carbs_per_100g": round(carbs, 1),
         "fat_per_100g": round(fat, 1),
         "kcal_per_100g": round(kcal, 1),
+        # USDA household portions when present (Survey/FNDDS foods) — the UI
+        # surfaces these as the most-accurate unit options for this food.
+        "portions": _fdc_portions(food),
     }
+
+
+# ── Serving-size units (Tier 9b) ────────────────────────────────────────────────
+# Grams-only entry is friction — nobody weighs honey or a splash of milk. This
+# layer converts household measures (cups, tbsp, ml, pieces…) to grams so the
+# EXISTING per-100g scaling can consume the result unchanged. Two hard cases:
+#   • solids — 1 cup of oats (~80g) ≠ 1 cup of honey (~340g), so volume→grams
+#     needs a per-food density (g/ml), not a universal factor.
+#   • liquids — ml→g is also density, just closer to 1.0.
+# When USDA carries real portion weights for a food (Survey/FNDDS foods do; SR
+# Legacy / Foundation mostly don't) those are preferred over this table — see
+# _fdc_portions() and the `portions` field folded into search results.
+
+# Volume → millilitres (exact, universal — independent of what's in the spoon).
+VOLUME_TO_ML = {
+    "tsp": 4.93, "tbsp": 14.79, "cup": 240.0,   # US legal cup
+    "fl_oz": 29.57, "ml": 1.0, "l": 1000.0,
+}
+# Mass → grams (also exact/universal).
+MASS_TO_G = {"g": 1.0, "kg": 1000.0, "oz": 28.35, "lb": 453.6}
+# Count-based units resolved via PIECE_WEIGHTS below. `scoop` is a fixed 30g
+# alias (a standard protein scoop) rather than a per-food lookup.
+_COUNT_UNITS = {"piece", "scoop"}
+VALID_UNITS = set(VOLUME_TO_ML) | set(MASS_TO_G) | _COUNT_UNITS
+
+# Fallback density (g/ml) when a food matches nothing below. 0.6 is a middling
+# dry-good; convert_to_grams flags estimated=True whenever it is used so the UI
+# can show "~estimated". Real densities beat this — expand the table over guesses.
+DEFAULT_DENSITY = 0.6
+
+# Density table (g per ml), keyed by lowercase food-name SUBSTRING. Ordered
+# most-specific-first: "peanut butter" must win before "butter", "brown sugar"
+# before "sugar", "coconut milk" before "milk", "cooked rice" before "rice".
+# First matching keyword wins. Values are typical/curated (USDA + cooking refs);
+# judgment calls noted in the build report.
+_DENSITY_TABLE = [
+    # liquids (near water, spec-provided)
+    ("coconut milk", 0.97), ("almond milk", 1.03), ("milk", 1.03), ("water", 1.03),
+    ("orange juice", 1.05), ("juice", 1.05),
+    ("olive oil", 0.92), ("coconut oil", 0.92), ("oil", 0.92),
+    ("honey", 1.42), ("maple syrup", 1.37), ("syrup", 1.37),
+    ("heavy cream", 1.01), ("cream", 1.01),
+    ("greek yogurt", 1.04), ("yoghurt", 1.04), ("yogurt", 1.04),
+    ("soy sauce", 1.15), ("ketchup", 1.14), ("mayonnaise", 0.91), ("mayo", 0.91),
+    ("vinegar", 1.01), ("broth", 1.00), ("stock", 1.00),
+    ("coffee", 1.00), ("tea", 1.00), ("soda", 1.04), ("wine", 0.99), ("beer", 1.01),
+    # dry / semi-solid (spec-provided anchors + common extras)
+    ("peanut butter", 1.08), ("almond butter", 1.08), ("nut butter", 1.08),
+    ("butter", 0.96),
+    ("rolled oats", 0.34), ("oatmeal", 0.34), ("oats", 0.34),
+    ("bread flour", 0.53), ("almond flour", 0.45), ("flour", 0.53),
+    ("brown sugar", 0.90), ("powdered sugar", 0.56), ("sugar", 0.85),
+    ("cooked rice", 0.72), ("rice, cooked", 0.72), ("rice", 0.78),  # bare "rice" = dry
+    ("cooked pasta", 0.60), ("pasta", 0.60), ("spaghetti", 0.60),
+    ("protein powder", 0.42), ("whey", 0.42), ("casein", 0.42),
+    ("grated cheese", 0.38), ("shredded cheese", 0.38), ("parmesan", 0.42), ("cheese", 0.38),
+    ("granola", 0.42), ("cereal", 0.42), ("muesli", 0.38),
+    ("cocoa", 0.41), ("cacao", 0.41),
+    ("peanut", 0.58), ("almond", 0.58), ("cashew", 0.58), ("walnut", 0.51), ("nuts", 0.58),
+    ("couscous", 0.72), ("quinoa", 0.72),  # cooked
+    ("lentils", 0.85), ("chickpeas", 0.80), ("beans", 0.85),  # cooked/canned
+    ("salt", 1.22), ("corn", 0.72),
+]
+
+# Per-piece weights (grams) for count-based ("piece") foods, keyed by substring.
+# Ordered most-specific-first (medium egg before the generic egg). Fallback for
+# an unmatched piece is 100g with estimated=True.
+_PIECE_WEIGHTS = [
+    ("medium egg", 44.0), ("large egg", 50.0), ("egg white", 33.0), ("egg", 50.0),
+    ("banana", 118.0), ("apple", 182.0), ("orange", 131.0),
+    ("slice of bread", 30.0), ("bread", 30.0), ("tortilla", 45.0),
+    ("scoop", 30.0),
+]
+
+
+def _density_for(food_name: str):
+    """Return (density_g_per_ml, used_default). used_default=True means no keyword
+    matched and DEFAULT_DENSITY was substituted (caller flags as estimated)."""
+    lower = (food_name or "").lower()
+    for kw, dens in _DENSITY_TABLE:
+        if kw in lower:
+            return dens, False
+    return DEFAULT_DENSITY, True
+
+
+def _piece_weight_for(food_name: str):
+    """Return (grams_per_piece, matched). matched=False → 100g fallback."""
+    lower = (food_name or "").lower()
+    for kw, grams in _PIECE_WEIGHTS:
+        if kw in lower:
+            return grams, True
+    return 100.0, False
+
+
+def convert_to_grams(food_name: str, amount: float, unit: str):
+    """Convert a household measure to grams.
+
+    Returns (grams: float, estimated: bool), or raises ValueError for a bad
+    amount/unit so the endpoint can answer 400. `estimated` is True only when we
+    fell back to DEFAULT_DENSITY (volume) or the 100g piece fallback — a matched
+    density or an exact mass unit is not flagged.
+    """
+    try:
+        amt = float(amount)
+    except (TypeError, ValueError):
+        raise ValueError("amount must be a number")
+    if amt <= 0:
+        raise ValueError("amount must be > 0")
+
+    u = (unit or "").strip().lower().replace(" ", "_")
+    if u in ("floz", "fluid_ounce", "fluid_ounces"):
+        u = "fl_oz"
+    if u in ("gram", "grams"):
+        u = "g"
+    if u in ("milliliter", "milliliters", "millilitre", "millilitres"):
+        u = "ml"
+
+    if u in MASS_TO_G:                       # exact, food-independent
+        return round(amt * MASS_TO_G[u], 1), False
+    if u == "scoop":                         # fixed 30g alias
+        return round(amt * 30.0, 1), False
+    if u == "piece":
+        grams_each, matched = _piece_weight_for(food_name)
+        return round(amt * grams_each, 1), (not matched)
+    if u in VOLUME_TO_ML:
+        ml = amt * VOLUME_TO_ML[u]
+        density, used_default = _density_for(food_name)
+        return round(ml * density, 1), used_default
+    raise ValueError(f"unknown unit: {unit}")
+
+
+def _fdc_portions(food: dict):
+    """Extract USDA household portions from an FDC search hit as
+    [{label, gram_weight}]. Survey (FNDDS) foods carry these in `foodMeasures`
+    (disseminationText + gramWeight); SR Legacy / Foundation usually don't.
+    Drops noise ("Quantity not specified") and entries without a real weight."""
+    out, seen = [], set()
+    for m in food.get("foodMeasures") or []:
+        label = (m.get("disseminationText") or m.get("measureUnitName") or "").strip()
+        gw = _num(m.get("gramWeight"))
+        if not label or gw is None or gw <= 0:
+            continue
+        low = label.lower()
+        if "not specified" in low or low in seen:
+            continue
+        seen.add(low)
+        out.append({"label": label, "gram_weight": round(gw, 1)})
+        if len(out) >= 6:
+            break
+    return out
 
 
 def search_foods(query: str, limit: int = 10):
