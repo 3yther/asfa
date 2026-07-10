@@ -68,7 +68,7 @@ if not _IS_PROD:
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 import requests
-from flask import Flask, Response, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, g, jsonify, redirect, render_template, request, send_file, session, url_for
 
 import database as db
 from flask_limiter.util import get_remote_address
@@ -324,6 +324,29 @@ def command():
         active="command",
         google_connected=is_authenticated(),
         spotify_connected=spotify.is_connected(),
+    )
+
+
+@app.route("/api/export/all-data", methods=["POST"])
+def export_all_data():
+    """Bundle every user-data module into per-module CSVs inside a single ZIP
+    and return it as a download. Auth is enforced by the global before_request
+    gate; CSRF by _csrf_protect. Empty modules are skipped by export_all_csvs."""
+    import zipfile
+
+    csvs = db.export_all_csvs()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for filename, content in csvs.items():
+            zf.writestr(filename, content)
+    buffer.seek(0)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    return send_file(
+        buffer,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"asfa-export-{today}.zip",
     )
 
 

@@ -46,6 +46,50 @@ function wireControls() {
   wireBodyComp();
   wireSleep();
   wireFinance();
+  wireExport();
+}
+
+// ── Export All Data (zipped CSVs) ────────────────────────────────────────────
+function wireExport() {
+  const btn = document.getElementById("export-btn");
+  if (!btn) return;
+  const label = document.getElementById("export-label");
+  const original = label ? label.textContent : "";
+  btn.addEventListener("click", async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    if (label) label.textContent = "⏳ EXPORTING…";
+    try {
+      // POST goes through the patched window.fetch, which adds X-CSRF-Token.
+      const resp = await fetch("/api/export/all-data", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const blob = await resp.blob();
+      // Pull the server-provided filename from Content-Disposition if present.
+      let filename = "asfa-export.zip";
+      const cd = resp.headers.get("Content-Disposition") || "";
+      const m = cd.match(/filename=([^;]+)/);
+      if (m) filename = m[1].trim().replace(/["']/g, "");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Export failed:", e);
+      if (label) label.textContent = "⚠ FAILED";
+      setTimeout(() => { if (label) label.textContent = original; }, 2500);
+      btn.disabled = false;
+      return;
+    }
+    if (label) label.textContent = original;
+    btn.disabled = false;
+  });
 }
 
 // ── Obsidian sync (manual) ───────────────────────────────────────────────────────
