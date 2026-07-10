@@ -5922,3 +5922,141 @@ def create_fragrance(name, brand, notes=None, concentration=None, vibe=None,
                         (name, brand))
             new_id = dict(cur.fetchone())["id"]
     return get_fragrance(new_id)
+
+
+# ── Data export (one CSV string per module) ──────────────────────────────────
+# Pure read-only serializers used by the "Export All Data" endpoint. Each
+# returns a CSV string (with a single header row) or "" when the module has no
+# rows / the table was never created — the caller skips empty modules so the
+# ZIP only contains files that hold data. Columns map onto the REAL schema; the
+# export spec's requested columns that don't exist (serving_size, readiness,
+# rpe, merchant, dose) are simply omitted.
+import csv as _export_csv
+from io import StringIO as _ExportStringIO
+
+
+def _export_query(sql):
+    """Run a read-only SELECT, return list of dict rows. Returns [] if the
+    table doesn't exist yet or on any read error (module never used)."""
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(sql)
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def _export_rows_to_csv(header, rows, field_fn):
+    """Serialize `rows` to a CSV string. `field_fn(row)` -> list of cells that
+    line up with `header`. Returns "" for zero rows (signals: skip module)."""
+    if not rows:
+        return ""
+    buf = _ExportStringIO()
+    writer = _export_csv.writer(buf)
+    writer.writerow(header)
+    for r in rows:
+        writer.writerow(field_fn(r))
+    return buf.getvalue()
+
+
+def csv_nutrition(user_id=None):
+    """meals table → date,time,food_name,protein_g,carbs_g,fat_g,kcal,notes."""
+    rows = _export_query(
+        "SELECT date, time, food_name, protein, carbs, fat, calories, notes "
+        "FROM meals ORDER BY date DESC, time DESC")
+    return _export_rows_to_csv(
+        ["date", "time", "food_name", "protein_g", "carbs_g", "fat_g", "kcal", "notes"],
+        rows,
+        lambda r: [r.get("date"), r.get("time"), r.get("food_name"),
+                   r.get("protein"), r.get("carbs"), r.get("fat"),
+                   r.get("calories"), r.get("notes")])
+
+
+def csv_sleep(user_id=None):
+    """sleep table → date,duration_hours,quality_1_5,wake_feeling,notes."""
+    rows = _export_query(
+        "SELECT date, duration, quality, wake_feeling, notes "
+        "FROM sleep ORDER BY date DESC")
+    return _export_rows_to_csv(
+        ["date", "duration_hours", "quality_1_5", "wake_feeling", "notes"],
+        rows,
+        lambda r: [r.get("date"), r.get("duration"), r.get("quality"),
+                   r.get("wake_feeling"), r.get("notes")])
+
+
+def csv_gym(user_id=None):
+    """workouts table → date,exercise,weight_kg,reps,sets,muscle_group,pr_flag,notes."""
+    rows = _export_query(
+        "SELECT date, exercise, weight_kg, reps, sets, muscle_group, is_pb, notes "
+        "FROM workouts ORDER BY date DESC")
+    return _export_rows_to_csv(
+        ["date", "exercise", "weight_kg", "reps", "sets", "muscle_group", "pr_flag", "notes"],
+        rows,
+        lambda r: [r.get("date"), r.get("exercise"), r.get("weight_kg"),
+                   r.get("reps"), r.get("sets"), r.get("muscle_group"),
+                   1 if r.get("is_pb") else 0, r.get("notes")])
+
+
+def csv_finance(user_id=None):
+    """spending table → date,amount_gbp,category,notes."""
+    rows = _export_query(
+        "SELECT date, amount, category, note FROM spending ORDER BY date DESC")
+    return _export_rows_to_csv(
+        ["date", "amount_gbp", "category", "notes"],
+        rows,
+        lambda r: [r.get("date"), r.get("amount"), r.get("category"), r.get("note")])
+
+
+def csv_body_comp(user_id=None):
+    """body_composition table → date,weight_kg,body_fat_percent,bmi."""
+    rows = _export_query(
+        "SELECT date_scanned, weight_kg, body_fat_percent, bmi "
+        "FROM body_composition ORDER BY date_scanned DESC")
+    return _export_rows_to_csv(
+        ["date", "weight_kg", "body_fat_percent", "bmi"],
+        rows,
+        lambda r: [r.get("date_scanned"), r.get("weight_kg"),
+                   r.get("body_fat_percent"), r.get("bmi")])
+
+
+def csv_water(user_id=None):
+    """hydration_log table → date,volume_ml,time."""
+    rows = _export_query(
+        "SELECT date, amount_ml, logged_at FROM hydration_log "
+        "ORDER BY date DESC, logged_at DESC")
+    return _export_rows_to_csv(
+        ["date", "volume_ml", "time"],
+        rows,
+        lambda r: [r.get("date"), r.get("amount_ml"), r.get("logged_at")])
+
+
+def csv_supplements(user_id=None):
+    """supplements_log table → date,supplement_name (date derived from taken_at)."""
+    rows = _export_query(
+        "SELECT supplement_name, taken_at FROM supplements_log "
+        "ORDER BY taken_at DESC")
+    return _export_rows_to_csv(
+        ["date", "supplement_name"],
+        rows,
+        lambda r: [(r.get("taken_at") or "")[:10], r.get("supplement_name")])
+
+
+def export_all_csvs():
+    """Return {filename: csv_string} for every module that has data. Modules
+    with zero rows are omitted so the ZIP never contains empty files."""
+    modules = {
+        "nutrition.csv": csv_nutrition,
+        "sleep.csv": csv_sleep,
+        "gym.csv": csv_gym,
+        "finance.csv": csv_finance,
+        "body_comp.csv": csv_body_comp,
+        "water.csv": csv_water,
+        "supplements.csv": csv_supplements,
+    }
+    out = {}
+    for filename, fn in modules.items():
+        content = fn()
+        if content:
+            out[filename] = content
+    return out
