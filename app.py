@@ -630,6 +630,23 @@ def api_nutrition_search():
     return jsonify(nutrition.search_foods(q))
 
 
+@app.route("/api/nutrition/convert")
+def api_nutrition_convert():
+    # Household-measure → grams for the portion box (cups/tbsp/ml/pieces…). The
+    # result feeds the client's existing per-100g scaling unchanged. Auth-gated by
+    # the global before_request hook. estimated=True → density/piece fallback used.
+    from services import nutrition
+    food = (request.args.get("food") or "").strip()
+    if len(food) < 2:
+        return jsonify({"error": "food must be at least 2 characters"}), 400
+    unit = (request.args.get("unit") or "").strip()
+    try:
+        grams, estimated = nutrition.convert_to_grams(food, request.args.get("amount"), unit)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"grams": grams, "estimated": estimated})
+
+
 @app.route("/api/nutrition/log", methods=["POST"])
 def api_nutrition_log():
     data = request.get_json(force=True) or {}
