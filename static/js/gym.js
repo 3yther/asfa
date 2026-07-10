@@ -1795,6 +1795,215 @@ function initExport() {
   });
 }
 
+/* ══ ASFA Steps ═══════════════════════════════════════════════════════════
+   Walking + cardio→step-equivalents at the bottom of the dashboard. The total
+   is the SUM of ASFA's own rows only. Live previews mirror services/steps.py
+   CLIENT-SIDE (convenience only — the server re-validates and wins on log). */
+const STEPS_API = "/api/steps";
+let STEPS_TAB = "manual";
+let STEPS_TERRAIN = "flat";
+const stepsToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const fmtInt = (n) => (Math.max(0, Math.round(+n || 0))).toLocaleString();
+
+/* Client mirrors of the server formulas. Return null when inputs are missing or
+   out of range so no preview shows (the server is the source of truth). */
+function clientTreadmillSteps(minutes, kph, incline) {
+  minutes = +minutes; kph = +kph; incline = +incline || 0;
+  if (!(minutes >= 1 && minutes <= 300) || !(kph >= 1 && kph <= 20)) return null;
+  incline = Math.max(0, Math.min(15, incline));
+  const stride = 0.35 + 0.05 * kph;
+  const distance = kph * 1000 / 60 * minutes;
+  const steps = (distance / stride) * (1 + 0.05 * incline);
+  return Math.max(10, Math.round(steps / 10) * 10);
+}
+function clientBikeSteps(km, kph, terrain) {
+  km = +km; kph = +kph;
+  if (!(km >= 0.1 && km <= 300) || !(kph >= 5 && kph <= 60)) return null;
+  const mult = terrain === "hilly" ? 1.3 : 1.0;
+  const steps = km * (1000 + (kph - 15) * 20) * mult;
+  return Math.max(10, Math.round(steps / 10) * 10);
+}
+
+function entryMeta(e) {
+  const d = e.detail || {};
+  if (e.source === "treadmill") {
+    const parts = [];
+    if (d.minutes != null) parts.push(`${round1(d.minutes)} min`);
+    if (d.kph != null) parts.push(`${round1(d.kph)} km/h`);
+    if (d.incline_pct) parts.push(`${round1(d.incline_pct)}%`);
+    return parts.join(" · ");
+  }
+  if (e.source === "bike") {
+    const parts = [];
+    if (d.distance_km != null) parts.push(`${round1(d.distance_km)} km`);
+    if (d.kph != null) parts.push(`${round1(d.kph)} km/h`);
+    if (d.terrain) parts.push(esc(d.terrain));
+    parts.push("effort-equivalent");
+    return parts.join(" · ");
+  }
+  return "walking";
+}
+
+function renderStepsDay(day) {
+  const total = day.total || 0, goal = day.goal || 10000;
+  const totalEl = $("#gs-total"); if (totalEl) totalEl.textContent = fmtInt(total);
+  const bar = $("#gs-bar"); if (bar) bar.style.width = Math.min(100, goal ? (total / goal) * 100 : 0) + "%";
+  const gt = $("#gs-goaltext"); if (gt) gt.textContent = `${fmtInt(total)} / ${fmtInt(goal)}`;
+  // Bike double-counting disclosure — a disclosure, not a calculation.
+  const hasBike = (day.entries || []).some(e => e.source === "bike");
+  const disc = $("#gs-disclosure"); if (disc) disc.hidden = !hasBike;
+
+  // Entries list
+  const list = $("#gs-entries");
+  if (list) {
+    list.innerHTML = "";
+    const entries = day.entries || [];
+    if (!entries.length) { list.appendChild(el("div", "gs-empty", "No steps logged today.")); }
+    else {
+      entries.forEach(e => {
+        const row = el("div", "gs-entry");
+        row.appendChild(el("span", "gs-e-src", esc(e.source)));
+        row.appendChild(el("span", "gs-e-steps", fmtInt(e.steps)));
+        row.appendChild(el("span", "gs-e-meta", entryMeta(e)));
+        const del = el("button", "gs-e-del", "🗑");
+        del.setAttribute("aria-label", "Delete entry");
+        del.addEventListener("click", () => deleteStep(e.id));
+        row.appendChild(del);
+        list.appendChild(row);
+      });
+    }
+  }
+}
+
+function renderStepsWeek(week) {
+  const wrap = $("#gs-week"); if (!wrap) return;
+  wrap.innerHTML = "";
+  const days = week.days || [];
+  const goal = week.goal || 10000;
+  const maxVal = Math.max(goal, 1, ...days.map(d => d.total || 0));
+  const today = stepsToday();
+  days.forEach(d => {
+    const col = el("div", "gs-wcol");
+    if (d.date === today) col.classList.add("today");
+    const bar = el("div", "gs-wbar");
+    const fill = el("i");
+    const pct = Math.min(100, ((d.total || 0) / maxVal) * 100);
+    fill.style.height = pct + "%";
+    bar.appendChild(fill);
+    col.appendChild(bar);
+    const dow = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"][new Date(d.date + "T00:00:00").getDay()];
+    col.appendChild(el("div", "gs-wday", dow));
+    col.title = `${d.date}: ${fmtInt(d.total || 0)} steps`;
+    wrap.appendChild(col);
+  });
+}
+
+async function refreshSteps() {
+  const date = stepsToday();
+  const dateEl = $("#gs-date"); if (dateEl) dateEl.textContent = date;
+  try {
+    const [day, week] = await Promise.all([
+      apiGet(`${STEPS_API}/date/${date}`),
+      apiGet(`${STEPS_API}/week?end=${date}`),
+    ]);
+    renderStepsDay(day);
+    renderStepsWeek(week);
+  } catch (e) {
+    console.error("steps refresh failed", e);
+    // Leave whatever is on screen — never blank the section on a transient error.
+  }
+}
+
+async function deleteStep(id) {
+  try {
+    await apiPost(`${STEPS_API}/delete`, { entry_id: id });
+    toast("Entry removed");
+    await refreshSteps();
+  } catch (e) { toast("Could not delete entry"); }
+}
+
+function updateStepsPreview() {
+  if (STEPS_TAB === "treadmill") {
+    const s = clientTreadmillSteps($("#gs-tread-min").value, $("#gs-tread-kph").value, $("#gs-tread-incline").value);
+    $("#gs-tread-preview").innerHTML = s == null ? "" : `≈ ${fmtInt(s)} steps`;
+  } else if (STEPS_TAB === "bike") {
+    const s = clientBikeSteps($("#gs-bike-km").value, $("#gs-bike-kph").value, STEPS_TERRAIN);
+    $("#gs-bike-preview").innerHTML = s == null ? "" : `≈ ${fmtInt(s)} steps <span class="gs-eff">· effort-equivalent</span>`;
+  }
+}
+
+async function logManualSteps() {
+  const steps = parseInt($("#gs-manual-steps").value, 10);
+  if (!(steps >= 1 && steps <= 100000)) { toast("Enter 1–100,000 steps"); return; }
+  try {
+    await apiPost(`${STEPS_API}/log`, { date: stepsToday(), source: "manual", steps });
+    $("#gs-manual-steps").value = "";
+    toast("Steps logged");
+    await refreshSteps();
+  } catch (e) { toast("Could not log steps"); }
+}
+
+async function logTreadmill() {
+  const minutes = $("#gs-tread-min").value, kph = $("#gs-tread-kph").value;
+  const incline_pct = $("#gs-tread-incline").value || 0;
+  if (clientTreadmillSteps(minutes, kph, incline_pct) == null) { toast("Enter minutes (1–300) and speed (1–20 km/h)"); return; }
+  try {
+    await apiPost(`${STEPS_API}/log`, { date: stepsToday(), source: "treadmill", minutes, kph, incline_pct });
+    $("#gs-tread-min").value = ""; $("#gs-tread-kph").value = ""; $("#gs-tread-incline").value = "";
+    $("#gs-tread-preview").innerHTML = "";
+    toast("Treadmill logged");
+    await refreshSteps();
+  } catch (e) { toast("Could not log — check the values"); }
+}
+
+async function logBike() {
+  const distance_km = $("#gs-bike-km").value, kph = $("#gs-bike-kph").value;
+  if (clientBikeSteps(distance_km, kph, STEPS_TERRAIN) == null) { toast("Enter distance (0.1–300 km) and speed (5–60 km/h)"); return; }
+  try {
+    await apiPost(`${STEPS_API}/log`, { date: stepsToday(), source: "bike", distance_km, kph, terrain: STEPS_TERRAIN });
+    $("#gs-bike-km").value = ""; $("#gs-bike-kph").value = "";
+    $("#gs-bike-preview").innerHTML = "";
+    toast("Bike ride logged");
+    await refreshSteps();
+  } catch (e) { toast("Could not log — check the values"); }
+}
+
+function wireSteps() {
+  const section = $("#gym-steps"); if (!section) return;
+  // Tab switching — local state only, no network.
+  $$(".gs-tab", section).forEach(tab => tab.addEventListener("click", () => {
+    STEPS_TAB = tab.dataset.gstab;
+    $$(".gs-tab", section).forEach(t => t.classList.toggle("active", t === tab));
+    $$(".gs-form", section).forEach(f => { f.hidden = f.dataset.gsform !== STEPS_TAB; });
+    updateStepsPreview();
+  }));
+  // Terrain toggle (bike)
+  $$(".gs-terr", section).forEach(btn => btn.addEventListener("click", () => {
+    STEPS_TERRAIN = btn.dataset.terrain;
+    $$(".gs-terr", section).forEach(b => {
+      const on = b === btn;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-checked", on ? "true" : "false");
+    });
+    updateStepsPreview();
+  }));
+  // Debounced live preview (150ms; pure client-side math, no fetch).
+  let previewTimer = null;
+  const debouncedPreview = () => { clearTimeout(previewTimer); previewTimer = setTimeout(updateStepsPreview, 150); };
+  ["gs-tread-min", "gs-tread-kph", "gs-tread-incline", "gs-bike-km", "gs-bike-kph"]
+    .forEach(id => { const inp = $("#" + id); if (inp) inp.addEventListener("input", debouncedPreview); });
+  // Log buttons
+  const bind = (id, fn) => { const b = $("#" + id); if (b) b.addEventListener("click", fn); };
+  bind("gs-manual-log", logManualSteps);
+  bind("gs-tread-log", logTreadmill);
+  bind("gs-bike-log", logBike);
+}
+
+function initSteps() { wireSteps(); refreshSteps(); }
+
 /* ── Boot ── */
 async function boot() {
   try {
@@ -1805,6 +2014,7 @@ async function boot() {
   initSettings();
   initTrainer();
   initExport();
+  initSteps();
   // restore in-memory session from localStorage if present
   const saved = localStorage.getItem(LS_KEY);
   if (saved) { try { S = JSON.parse(saved); } catch (e) { S = null; } }
