@@ -74,6 +74,7 @@ import database as db
 from flask_limiter.util import get_remote_address
 
 from services import ai
+from services import steps as steps_svc
 from services import telegram_bot
 from services.bots import get_bots_health, get_bots_status, get_trading_activity
 from services.briefing import AI_BRIEFING_SUMMARY_KEY, build_briefing
@@ -890,6 +891,17 @@ def api_nutrition_delete_meal():
 # Analytical layer over the same meals/goals store. All auth-gated + CSRF like the
 # rest of /api/nutrition. Widgets fail soft on the client, so these stay strict.
 
+def _num_or_none(value):
+    """Best-effort float for storing raw log inputs in `detail`; None if blank
+    or non-numeric. Rejects bools so True never becomes 1.0."""
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _valid_date(date_str):
     """True if date_str is a real YYYY-MM-DD calendar date."""
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str or ""):
@@ -1548,6 +1560,131 @@ def api_gym_trainer():
 @limiter.request_filter
 def _exempt_gym_api():
     return request.path.startswith("/api/gym") and bool(session.get("authed"))
+
+
+# ── Steps (walking + cardio→step-equivalents) ───────────────────────────────────
+# Lives at the bottom of the gym page. Manual walking counts are stored verbatim;
+# treadmill/bike sessions convert to step-equivalents via services/steps.py (the
+# server is the source of truth — the client preview is a convenience). The daily
+# total is a SUM of ASFA's own rows only; it never reads a phone/health step
+# count, so there is nothing to double-count inside ASFA. Auth + CSRF are handled
+# by the global before_request hooks — no decorators here.
+
+def _steps_day_payload(date_str):
+    """{date, total, goal, entries} — the per-date readout the UI renders."""
+    entries = db.get_steps_for_date(date_str)
+    # Re-attach the honest bike/treadmill note so the list can show it.
+    for e in entries:
+        e["note"] = ("effort-equivalent, not measured"
+                     if e["source"] == "bike" else "")
+    return {
+        "date": date_str,
+        "total": db.get_steps_day_total(date_str),
+        "goal": db.get_steps_goal(),
+        "entries": entries,
+    }
+
+
+@app.route("/api/steps/log", methods=["POST"])
+def api_steps_log():
+    data = request.get_json(force=True) or {}
+    date_str = (data.get("date") or "").strip() or _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+
+    source = (data.get("source") or "").strip()
+    if source not in db.STEP_SOURCES:
+        return jsonify({"error": f"source must be one of {', '.join(db.STEP_SOURCES)}"}), 400
+
+    note = ""
+    if source == "manual":
+        raw = data.get("steps")
+        if isinstance(raw, bool):
+            return jsonify({"error": "steps must be an integer 1–100000"}), 400
+        try:
+            steps = int(raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "steps must be an integer 1–100000"}), 400
+        if steps < 1 or steps > 100000:
+            return jsonify({"error": "steps must be between 1 and 100000"}), 400
+        detail = {"steps": steps}
+    elif source == "treadmill":
+        try:
+            steps, note = steps_svc.treadmill_to_steps(
+                data.get("minutes"), data.get("kph"), data.get("incline_pct", 0))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        detail = {"minutes": _num_or_none(data.get("minutes")),
+                  "kph": _num_or_none(data.get("kph")),
+                  "incline_pct": _num_or_none(data.get("incline_pct", 0)) or 0}
+    else:  # bike
+        try:
+            steps, note = steps_svc.bike_to_steps(
+                data.get("distance_km"), data.get("kph"), data.get("terrain"))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        detail = {"distance_km": _num_or_none(data.get("distance_km")),
+                  "kph": _num_or_none(data.get("kph")),
+                  "terrain": (data.get("terrain") or "").strip().lower()}
+
+    entry = db.add_step_entry(date_str, source, steps, detail)
+    entry["note"] = note
+    return jsonify({
+        "ok": True,
+        "entry": entry,
+        "day_total": db.get_steps_day_total(date_str),
+        "goal": db.get_steps_goal(),
+    })
+
+
+@app.route("/api/steps/date/<date_str>")
+def api_steps_date(date_str):
+    if date_str == "today":
+        date_str = _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    return jsonify(_steps_day_payload(date_str))
+
+
+@app.route("/api/steps/week")
+def api_steps_week():
+    end = (request.args.get("end") or "").strip() or None
+    if end is not None and not _valid_date(end):
+        end = None
+    week = db.get_steps_week(end_date=end)
+    return jsonify({"days": [{"date": d, "total": t}
+                             for d, t in zip(week["dates"], week["totals"])],
+                    "goal": week["goal"]})
+
+
+@app.route("/api/steps/delete", methods=["POST"])
+def api_steps_delete():
+    data = request.get_json(force=True) or {}
+    entry_id = data.get("entry_id")
+    try:
+        entry_id = int(entry_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "entry_id is required"}), 400
+    date_str = db.delete_step_entry(entry_id)
+    if date_str is None:
+        return jsonify({"error": "entry not found"}), 404
+    return jsonify({"ok": True, "day_total": db.get_steps_day_total(date_str),
+                    "date": date_str})
+
+
+@app.route("/api/steps/goal", methods=["GET"])
+def api_steps_goal_get():
+    return jsonify({"steps_goal": db.get_steps_goal()})
+
+
+@app.route("/api/steps/goal", methods=["POST"])
+def api_steps_goal_set():
+    data = request.get_json(force=True) or {}
+    try:
+        goal = db.set_steps_goal(data.get("steps_goal"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True, "steps_goal": goal})
 
 
 # ── Scent Vault ────────────────────────────────────────────────────────────────

@@ -5924,6 +5924,187 @@ def create_fragrance(name, brand, notes=None, concentration=None, vibe=None,
     return get_fragrance(new_id)
 
 
+# ── Steps (manual walking + cardio→step-equivalents) ─────────────────────────
+# The `steps` table holds ONE row per logged session (multiple per date), so a
+# day's total is a SUM — a day can hold "3,000 manual + 4,200 treadmill" and any
+# single entry can be deleted without losing the rest. `detail` stores the raw
+# inputs as a JSON string (e.g. {"minutes":30,"kph":6.5,"incline":2}). Mirrors
+# the meals/nutrition_goals shape: lazy table creation + a single-row goal.
+DEFAULT_STEPS_GOAL = 10000
+STEP_SOURCES = ("manual", "treadmill", "bike")
+_STEPS_READY = False
+
+
+def _ensure_steps_tables():
+    global _STEPS_READY
+    if _STEPS_READY:
+        return
+    entries = """CREATE TABLE IF NOT EXISTS steps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        source TEXT NOT NULL,
+        steps INTEGER NOT NULL,
+        detail TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"""
+    goal = """CREATE TABLE IF NOT EXISTS steps_goal (
+        id INTEGER PRIMARY KEY,
+        steps_goal INTEGER NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"""
+    if USE_POSTGRES:
+        entries = entries.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(entries)
+        cur.execute(goal)
+    _STEPS_READY = True
+
+
+def get_steps_goal() -> int:
+    """The user's daily step target, defaulting to DEFAULT_STEPS_GOAL until set."""
+    _ensure_steps_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT steps_goal FROM steps_goal WHERE id = 1")
+        row = cur.fetchone()
+    if not row:
+        return DEFAULT_STEPS_GOAL
+    return int(row["steps_goal"])
+
+
+def set_steps_goal(steps_goal) -> int:
+    """Upsert the single step-goal row. Returns the stored goal. Raises
+    ValueError on a non-integer or non-positive target."""
+    _ensure_steps_tables()
+    if isinstance(steps_goal, bool):
+        raise ValueError("steps_goal must be a positive integer")
+    try:
+        goal = int(steps_goal)
+    except (TypeError, ValueError):
+        raise ValueError("steps_goal must be a positive integer")
+    if goal < 1 or goal > 100000:
+        raise ValueError("steps_goal must be between 1 and 100000")
+
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO steps_goal (id, steps_goal, updated_at) "
+                f"VALUES (1,{ph},NOW()) "
+                "ON CONFLICT (id) DO UPDATE SET "
+                "steps_goal=EXCLUDED.steps_goal, updated_at=NOW()",
+                (goal,))
+        else:
+            cur.execute(
+                "INSERT INTO steps_goal (id, steps_goal, updated_at) "
+                f"VALUES (1,{ph},CURRENT_TIMESTAMP) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "steps_goal=excluded.steps_goal, updated_at=CURRENT_TIMESTAMP",
+                (goal,))
+    return get_steps_goal()
+
+
+def _steps_row(row) -> dict:
+    """Public projection of a steps row — parses the JSON detail back to a dict."""
+    d = dict(row)
+    raw = d.get("detail")
+    try:
+        detail = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        detail = {}
+    return {
+        "id": d.get("id"),
+        "date": d.get("date"),
+        "source": d.get("source"),
+        "steps": int(d.get("steps") or 0),
+        "detail": detail,
+    }
+
+
+def add_step_entry(date_str, source, steps, detail=None) -> dict:
+    """Insert one step session. `steps` is the final (already-converted) count;
+    `detail` is a dict of the raw inputs, stored as JSON. Returns the new row."""
+    _ensure_steps_tables()
+    detail_json = json.dumps(detail) if detail else None
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO steps (date, source, steps, detail) VALUES ({ph},{ph},{ph},{ph})",
+            (date_str, source, int(steps), detail_json))
+        new_id = cur.lastrowid if not USE_POSTGRES else None
+        if USE_POSTGRES:
+            cur.execute("SELECT MAX(id) AS id FROM steps WHERE date = %s AND source = %s",
+                        (date_str, source))
+            new_id = dict(cur.fetchone())["id"]
+    return {"id": new_id, "date": date_str, "source": source,
+            "steps": int(steps), "detail": detail or {}}
+
+
+def get_steps_for_date(date_str) -> list:
+    """All step sessions for `date_str`, oldest first. Each is a _steps_row dict."""
+    _ensure_steps_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM steps WHERE date = {ph} ORDER BY id ASC", (date_str,))
+        return [_steps_row(r) for r in cur.fetchall()]
+
+
+def get_steps_day_total(date_str) -> int:
+    """SUM of every step session on `date_str` (0 if none)."""
+    _ensure_steps_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT COALESCE(SUM(steps),0) AS total FROM steps WHERE date = {ph}",
+                    (date_str,))
+        row = cur.fetchone()
+    return int(row["total"] or 0)
+
+
+def delete_step_entry(entry_id) -> str:
+    """Delete one step session by id. Returns the deleted row's date (so the
+    caller can recompute that day's total), or None if nothing was removed."""
+    _ensure_steps_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT date FROM steps WHERE id = {ph}", (entry_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        date_str = dict(row)["date"]
+        cur.execute(f"DELETE FROM steps WHERE id = {ph}", (entry_id,))
+    return date_str
+
+
+def get_steps_week(end_date=None) -> dict:
+    """7-day {dates:[], totals:[], goal} strip ending at `end_date` (today by
+    default), ZERO-FILLED for unlogged days so gaps show as empty bars — same
+    shape as the nutrition week trends."""
+    _ensure_steps_tables()
+    if end_date is None:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+    dates = [(end - timedelta(days=6 - i)).strftime("%Y-%m-%d") for i in range(7)]
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT date, SUM(steps) AS total FROM steps "
+            f"WHERE date >= {ph} AND date <= {ph} GROUP BY date",
+            (dates[0], end_date))
+        by_date = {r["date"]: int(r["total"] or 0) for r in cur.fetchall()}
+    return {
+        "dates": dates,
+        "totals": [by_date.get(d, 0) for d in dates],
+        "goal": get_steps_goal(),
+    }
+
+
 # ── Data export (one CSV string per module) ──────────────────────────────────
 # Pure read-only serializers used by the "Export All Data" endpoint. Each
 # returns a CSV string (with a single header row) or "" when the module has no
@@ -6042,6 +6223,17 @@ def csv_supplements(user_id=None):
         lambda r: [(r.get("taken_at") or "")[:10], r.get("supplement_name")])
 
 
+def csv_steps(user_id=None):
+    """steps table → date,source,steps,detail_json (sorted date DESC)."""
+    rows = _export_query(
+        "SELECT date, source, steps, detail FROM steps ORDER BY date DESC, id DESC")
+    return _export_rows_to_csv(
+        ["date", "source", "steps", "detail_json"],
+        rows,
+        lambda r: [r.get("date"), r.get("source"), r.get("steps"),
+                   r.get("detail") or ""])
+
+
 def export_all_csvs():
     """Return {filename: csv_string} for every module that has data. Modules
     with zero rows are omitted so the ZIP never contains empty files."""
@@ -6053,6 +6245,7 @@ def export_all_csvs():
         "body_comp.csv": csv_body_comp,
         "water.csv": csv_water,
         "supplements.csv": csv_supplements,
+        "steps.csv": csv_steps,
     }
     out = {}
     for filename, fn in modules.items():

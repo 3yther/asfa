@@ -139,6 +139,71 @@
       </div>
       <div class="muted-sub">Leave dates blank to export everything.</div>
     </div>
+
+    <!-- ══ ASFA STEPS — walking + cardio→step-equivalents ══════════════ -->
+    <!-- Bottom of the page. The total is the SUM of ASFA's own rows only; it
+         never reads a phone/health count, so "ASFA STEPS" (not "STEPS"). -->
+    <section class="gym-steps card sci-fi-panel" id="gym-steps">
+      <div class="gs-head">
+        <span class="hud-label">ASFA Steps</span>
+        <span class="gs-date" id="gs-date"></span>
+      </div>
+
+      <!-- Daily readout -->
+      <div class="gs-readout">
+        <div class="gs-total"><span id="gs-total">0</span></div>
+        <div class="progress"><div class="progress-fill" id="gs-bar"></div></div>
+        <div class="gs-goaltext" id="gs-goaltext">0 / 10,000</div>
+        <div class="gs-disclosure" id="gs-disclosure" hidden>
+          Bike sessions logged — your phone may also have counted these as steps.
+        </div>
+      </div>
+
+      <!-- 7-day strip (display only) -->
+      <div class="gs-week" id="gs-week" aria-label="Last 7 days"></div>
+
+      <!-- Log row: three tabs -->
+      <div class="gs-log">
+        <div class="gs-tabs" role="tablist" aria-label="Step entry type">
+          <button class="gs-tab active" data-gstab="manual" role="tab">Manual</button>
+          <button class="gs-tab" data-gstab="treadmill" role="tab">Treadmill</button>
+          <button class="gs-tab" data-gstab="bike" role="tab">Bike</button>
+        </div>
+
+        <div class="gs-form" data-gsform="manual">
+          <input type="number" id="gs-manual-steps" class="gs-input" inputmode="numeric"
+                 min="1" max="100000" placeholder="steps" autocomplete="off">
+          <button class="btn btn-ghost gs-btn" id="gs-manual-log">Log</button>
+        </div>
+
+        <div class="gs-form" data-gsform="treadmill" hidden>
+          <input type="number" id="gs-tread-min" class="gs-input" inputmode="numeric"
+                 min="1" max="300" placeholder="minutes" autocomplete="off">
+          <input type="number" id="gs-tread-kph" class="gs-input" inputmode="decimal"
+                 step="0.1" min="1" max="20" placeholder="km/h" autocomplete="off">
+          <input type="number" id="gs-tread-incline" class="gs-input" inputmode="decimal"
+                 step="0.5" min="0" max="15" placeholder="incline %" autocomplete="off">
+          <span class="gs-preview" id="gs-tread-preview"></span>
+          <button class="btn btn-ghost gs-btn" id="gs-tread-log">Log</button>
+        </div>
+
+        <div class="gs-form" data-gsform="bike" hidden>
+          <input type="number" id="gs-bike-km" class="gs-input" inputmode="decimal"
+                 step="0.1" min="0.1" max="300" placeholder="km" autocomplete="off">
+          <input type="number" id="gs-bike-kph" class="gs-input" inputmode="decimal"
+                 step="0.1" min="5" max="60" placeholder="km/h" autocomplete="off">
+          <div class="gs-terrain" role="radiogroup" aria-label="Terrain">
+            <button class="gs-terr active" data-terrain="flat" role="radio" aria-checked="true">Flat</button>
+            <button class="gs-terr" data-terrain="hilly" role="radio" aria-checked="false">Hilly</button>
+          </div>
+          <span class="gs-preview" id="gs-bike-preview"></span>
+          <button class="btn btn-ghost gs-btn" id="gs-bike-log">Log</button>
+        </div>
+      </div>
+
+      <!-- Today's entries -->
+      <div class="gs-entries" id="gs-entries"></div>
+    </section>
   </section>
 
   <!-- ══ TAB 2 — WORKOUT ═══════════════════════════════════════════════ -->

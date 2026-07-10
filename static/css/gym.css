@@ -701,3 +701,114 @@ body.rest-active .exercise-list { padding-bottom: 210px; }
 .nt-chip.rec-hold     { color: var(--gym-amber); background: rgba(245,185,66,.1);  border-color: rgba(245,185,66,.3); }
 .nt-chip.rec-deload   { color: var(--gym-red);   background: rgba(255,77,77,.1);   border-color: rgba(255,77,77,.3); }
 .nt-chip.nt-new       { color: var(--muted); background: rgba(255,255,255,.04); }
+
+/* ── ASFA Steps (bottom of dashboard) ─────────────────────────────────── */
+/* Walking + cardio→step-equivalents. Total = SUM of ASFA rows only; cyan mono
+   readout + progress-to-goal, a 7-day display strip, a 3-tab logger with live
+   client-side previews, and today's entry list. Tokens only, no hardcoded hex. */
+.gym-steps { display: block; }
+.gym-steps .gs-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  margin-bottom: 14px;
+}
+.gym-steps .gs-date { font: 500 .72rem var(--mono); color: var(--text-faint); letter-spacing: .06em; }
+
+.gym-steps .gs-readout { text-align: center; margin-bottom: 18px; }
+.gym-steps .gs-total {
+  font: 700 2.6rem/1 var(--mono); color: var(--cyan); letter-spacing: 1px;
+  text-shadow: 0 0 18px var(--cyan-glow);
+}
+.gym-steps .gs-readout .progress { max-width: 420px; margin: 12px auto 6px; }
+.gym-steps .gs-goaltext { font: 500 .82rem var(--mono); color: var(--text-dim); letter-spacing: .04em; }
+.gym-steps .gs-disclosure {
+  margin-top: 8px; font-size: .74rem; line-height: 1.5; color: var(--text-faint);
+}
+
+/* 7-day strip — seven thin vertical bars, display only (not clickable). */
+.gym-steps .gs-week {
+  display: flex; gap: 6px; align-items: flex-end; justify-content: center;
+  height: 54px; margin-bottom: 20px;
+}
+.gym-steps .gs-wcol {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  width: 26px;
+}
+.gym-steps .gs-wbar {
+  width: 6px; height: 42px; border-radius: 999px;
+  background: rgba(140,170,200,.12); position: relative; overflow: hidden;
+}
+.gym-steps .gs-wbar > i {
+  position: absolute; bottom: 0; left: 0; right: 0; display: block;
+  background: var(--cyan); border-radius: 999px;
+  box-shadow: 0 0 8px var(--cyan-glow); transition: height .5s ease;
+}
+.gym-steps .gs-wcol.today .gs-wbar { outline: 1px solid var(--cyan); }
+.gym-steps .gs-wday { font: 600 .58rem var(--mono); color: var(--text-faint); letter-spacing: .06em; text-transform: uppercase; }
+.gym-steps .gs-wcol.today .gs-wday { color: var(--cyan); }
+
+/* Log row: tabs + per-mode forms */
+.gym-steps .gs-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.gym-steps .gs-tab {
+  flex: 1 0 auto; min-height: 40px; padding: 8px 12px; cursor: pointer;
+  background: rgba(255,255,255,.03); border: 1px solid rgba(140,170,200,.14);
+  border-radius: 9px; color: var(--text-dim);
+  font: 600 .74rem var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  transition: color .2s ease, border-color .2s ease, background .2s ease;
+}
+.gym-steps .gs-tab:hover { color: var(--text); border-color: rgba(0,217,255,.35); }
+.gym-steps .gs-tab.active {
+  color: var(--cyan); border-color: var(--cyan); background: rgba(0,217,255,.08);
+}
+.gym-steps .gs-form {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px;
+}
+.gym-steps .gs-input {
+  min-height: 44px; width: 96px; padding: 8px 10px; border-radius: 9px;
+  background: var(--panel-2); color: var(--text); border: 1px solid rgba(140,170,200,.16);
+  font: 600 .9rem var(--mono);
+}
+.gym-steps .gs-input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 3px var(--cyan-glow); }
+.gym-steps .gs-btn { flex: 0 0 auto; }
+.gym-steps .gs-preview {
+  flex: 1 1 auto; min-width: 120px; font: 600 .8rem var(--mono);
+  color: var(--cyan); letter-spacing: .03em;
+}
+.gym-steps .gs-preview .gs-eff { color: var(--text-faint); font-weight: 500; }
+
+.gym-steps .gs-terrain { display: inline-flex; gap: 4px; }
+.gym-steps .gs-terr {
+  min-height: 44px; padding: 8px 14px; cursor: pointer;
+  background: rgba(255,255,255,.03); border: 1px solid rgba(140,170,200,.16);
+  border-radius: 9px; color: var(--text-dim); font: 600 .8rem 'Inter', sans-serif;
+  transition: color .2s ease, border-color .2s ease, background .2s ease;
+}
+.gym-steps .gs-terr.active { color: var(--cyan); border-color: var(--cyan); background: rgba(0,217,255,.08); }
+
+/* Today's entries */
+.gym-steps .gs-entries { display: flex; flex-direction: column; gap: 8px; }
+.gym-steps .gs-entry {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px;
+  background: rgba(255,255,255,.03); border: 1px solid rgba(140,170,200,.1);
+}
+.gym-steps .gs-entry .gs-e-src {
+  font: 600 .7rem var(--mono); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-dim); min-width: 78px;
+}
+.gym-steps .gs-entry .gs-e-steps { font: 700 .9rem var(--mono); color: var(--cyan); }
+.gym-steps .gs-entry .gs-e-meta { flex: 1 1 auto; font-size: .72rem; color: var(--text-faint); min-width: 0; }
+.gym-steps .gs-entry .gs-e-del {
+  flex: 0 0 auto; min-height: 34px; min-width: 34px; padding: 4px 8px; cursor: pointer;
+  background: transparent; border: 1px solid rgba(140,170,200,.16); border-radius: 8px;
+  color: var(--text-dim); font-size: .9rem; transition: color .2s ease, border-color .2s ease;
+}
+.gym-steps .gs-entry .gs-e-del:hover { color: var(--gym-red); border-color: var(--gym-red); }
+.gym-steps .gs-empty { font-size: .85rem; color: var(--text-faint); text-align: center; padding: 14px 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .gym-steps .gs-wbar > i { transition: none; }
+  .gym-steps .gs-tab, .gym-steps .gs-terr, .gym-steps .gs-e-del { transition: none; }
+}
+@media (max-width: 520px) {
+  .gym-steps .gs-total { font-size: 2.1rem; }
+  .gym-steps .gs-input { width: calc(50% - 4px); }
+}
