@@ -206,8 +206,19 @@
   display: flex; flex-direction: column; gap: 8px;
   padding: 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md);
 }
-.nutrition-screen .nh-portion-row { display: flex; gap: 6px; }
-.nutrition-screen .nh-portion-row .nutri-input { flex: 1; }
+.nutrition-screen .nh-portion-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.nutrition-screen .nh-portion-row .nutri-input { flex: 1; min-width: 0; }
+/* Amount + unit share the top line; the unit select is the widest since USDA
+   portion labels ("1 cup chopped · 160g") need room. Time input drops beside. */
+.nutrition-screen .nh-portion-row .nh-amount { flex: 0 0 84px; }
+.nutrition-screen .nh-portion-row .nh-unit { flex: 1 1 120px; cursor: pointer; }
+.nutrition-screen .nh-portion-row .nh-unit[hidden] { display: none; }
+/* Converted-grams readout: "= 41g" (neutral) or "~41g (estimated)" (--warn). */
+.nutrition-screen .nh-grams-readout {
+  font: 600 11px var(--mono); letter-spacing: .08em; color: var(--cyan);
+  padding: 0 2px; margin-top: -2px;
+}
+.nutrition-screen .nh-grams-readout.nh-grams-est { color: var(--warn); }
 
 /* Quick-add optional macros */
 .nutrition-screen .nh-q-macros summary {
@@ -238,6 +249,10 @@
 }
 .nutrition-screen .nh-meal .nm-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .nutrition-screen .nh-meal .nm-macros { color: var(--text-dim); white-space: nowrap; }
+/* Serving note (e.g. "0.5 cup") — quiet, inline after the food name. */
+.nutrition-screen .nh-meal .nm-serving {
+  color: var(--muted); font: 500 10px var(--mono); margin-left: 6px; white-space: nowrap;
+}
 .nutrition-screen .nh-undo {
   background: none; border: none; cursor: pointer; padding: 0 2px;
   color: var(--muted); font-size: 15px; line-height: 1; transition: color .2s ease;

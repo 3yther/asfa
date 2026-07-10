@@ -152,8 +152,10 @@ function nhRenderMeals(meals) {
       // Every row gets a delete icon so any meal can be removed, not just the last.
       const del = `<button type="button" class="nh-del" data-nh-del="${m.id}" ` +
         `data-nh-food="${esc(m.food_name)}" aria-label="Delete meal" title="Delete">🗑</button>`;
+      // Show the serving note (e.g. "0.5 cup") beside the name when present.
+      const serving = m.notes ? `<span class="nm-serving">${esc(m.notes)}</span>` : "";
       html += `<div class="nh-meal">` +
-        `<span class="nm-name">${esc(m.food_name)}</span>` +
+        `<span class="nm-name">${esc(m.food_name)}${serving}</span>` +
         `<span class="nm-macros">${esc(macros)}</span>${undo}${del}</div>`;
     });
     html += `</div>`;
@@ -568,6 +570,9 @@ function nhMergeUsda(local, usda) {
       protein: Number(u.protein_per_100g) || 0,
       carbs: Number(u.carbs_per_100g) || 0,
       fat: Number(u.fat_per_100g) || 0,
+      // USDA household portions (Survey/FNDDS foods) — exact gram weights we
+      // surface first in the unit dropdown, ahead of the density-table fallback.
+      portions: Array.isArray(u.portions) ? u.portions : [],
       badge: "USDA",
       mode: "per100",
     });
@@ -602,37 +607,156 @@ function nhHideSuggest() {
   if (input) input.setAttribute("aria-expanded", "false");
 }
 
+// ── Serving units (Tier 9b) ──────────────────────────────────────────────────
+// Standard unit menu for per-100g foods, in the order the spec calls for:
+// USDA portions (prepended per food) → g → household measures. `value` is the
+// token the /convert endpoint expects; `label` is what the user sees.
+const NH_UNITS = [
+  { value: "g", label: "g" },
+  { value: "cup", label: "cup" },
+  { value: "tbsp", label: "tbsp" },
+  { value: "tsp", label: "tsp" },
+  { value: "ml", label: "ml" },
+  { value: "fl_oz", label: "fl oz" },
+  { value: "oz", label: "oz" },
+  { value: "piece", label: "piece" },
+  { value: "scoop", label: "scoop" },
+  { value: "kg", label: "kg" },
+  { value: "lb", label: "lb" },
+];
+
+// Build the <select> for the picked food: USDA portions first (value
+// "portion:<i>", exact gram weight baked into the label), then the standard menu.
+function nhFillUnitSelect(portions) {
+  const sel = document.getElementById("nh-unit");
+  if (!sel) return;
+  const opts = [];
+  (portions || []).forEach((p, i) => {
+    opts.push(`<option value="portion:${i}">${esc(p.label)} · ${nhNum(p.gram_weight)}g</option>`);
+  });
+  NH_UNITS.forEach((u) => { opts.push(`<option value="${u.value}">${esc(u.label)}</option>`); });
+  sel.innerHTML = opts.join("");
+}
+
+// Human string for the currently-selected unit, for the meal notes field.
+function nhSelectedUnitLabel() {
+  const sel = document.getElementById("nh-unit");
+  if (!sel) return "";
+  const v = sel.value || "";
+  if (v.startsWith("portion:")) {
+    const p = (NH.picked && NH.picked.portions || [])[parseInt(v.slice(8), 10)];
+    return p ? p.label : "";
+  }
+  const u = NH_UNITS.find((x) => x.value === v);
+  return u ? u.label : "";
+}
+
 // Show the picked-food box and wire the live macro preview.
+// per100 foods get the [amount][unit] pair; previous-foods (serving mode) keep
+// the bare servings input unchanged (their macros are already one-serving).
 function nhShowPicked(food, mode) {
   NH.picked = {
     food_name: food.food_name,
     protein: Number(food.protein) || 0,
     carbs: Number(food.carbs) || 0,
     fat: Number(food.fat) || 0,
+    portions: Array.isArray(food.portions) ? food.portions : [],
     mode: mode || "serving",
   };
+  NH.grams = null;            // resolved grams for per100 mode
+  NH.estimated = false;
   const box = document.getElementById("nh-picked");
   const name = document.getElementById("nh-picked-name");
-  const grams = document.getElementById("nh-grams");
+  const amount = document.getElementById("nh-amount");
+  const unit = document.getElementById("nh-unit");
   if (name) name.innerHTML = `<b>${esc(NH.picked.food_name)}</b>`;
-  if (grams) {
-    if (NH.picked.mode === "per100") { grams.value = "100"; grams.placeholder = "HOW MANY GRAMS?"; }
-    else { grams.value = "1"; grams.placeholder = "SERVINGS"; }
+  if (NH.picked.mode === "per100") {
+    nhFillUnitSelect(NH.picked.portions);
+    if (unit) unit.hidden = false;
+    // Default to the first USDA portion (amount 1) if the food carries any,
+    // else grams (amount 100) — identical to the old grams-only behaviour.
+    if (NH.picked.portions.length) {
+      if (unit) unit.value = "portion:0";
+      if (amount) { amount.value = "1"; amount.placeholder = "AMOUNT"; }
+    } else {
+      if (unit) unit.value = "g";
+      if (amount) { amount.value = "100"; amount.placeholder = "AMOUNT"; }
+    }
+  } else {
+    if (unit) unit.hidden = true;
+    if (amount) { amount.value = "1"; amount.placeholder = "SERVINGS"; }
   }
   if (box) box.hidden = false;
-  nhUpdatePreview();
+  nhResolvePortion();
 }
 
-function nhScale() {
-  const raw = parseFloat(document.getElementById("nh-grams")?.value);
-  if (isNaN(raw) || raw <= 0) return null;
-  return NH.picked && NH.picked.mode === "per100" ? raw / 100 : raw;
+function nhAmount() {
+  const raw = parseFloat(document.getElementById("nh-amount")?.value);
+  return (isNaN(raw) || raw <= 0) ? null : raw;
 }
+
+// Multiplier applied to the food's stored macros. per100: grams/100 (grams come
+// from the resolved conversion); serving: the raw servings number.
+function nhScale() {
+  if (!NH.picked) return null;
+  if (NH.picked.mode === "per100") {
+    return (NH.grams != null && NH.grams > 0) ? NH.grams / 100 : null;
+  }
+  return nhAmount();
+}
+
+// Paint the "= 41g" / "~41g (estimated)" readout beneath the amount row.
+// Hidden for serving mode and for unit=g (no conversion to show).
+function nhPaintGrams() {
+  const el = document.getElementById("nh-grams-readout");
+  if (!el) return;
+  const sel = document.getElementById("nh-unit");
+  const unit = sel ? sel.value : "g";
+  if (!NH.picked || NH.picked.mode !== "per100" || unit === "g" || NH.grams == null) {
+    el.hidden = true; el.textContent = ""; el.classList.remove("nh-grams-est");
+    return;
+  }
+  el.hidden = false;
+  el.textContent = NH.estimated ? `~${nhNum(NH.grams)}g (estimated)` : `= ${nhNum(NH.grams)}g`;
+  el.classList.toggle("nh-grams-est", NH.estimated);
+}
+
+// Resolve the entered amount+unit to grams (per100 mode only), then repaint the
+// gram readout and the macro preview. unit=g and USDA portions resolve locally
+// (no network); every household measure hits /convert. Monotonic seq guards
+// against a slow response for a superseded amount/unit.
+let nhConvSeq = 0;
+function nhResolvePortion() {
+  if (!NH.picked) return;
+  if (NH.picked.mode !== "per100") { nhPaintGrams(); nhUpdatePreview(); return; }
+  const amt = nhAmount();
+  const sel = document.getElementById("nh-unit");
+  const unit = sel ? sel.value : "g";
+  const done = () => { nhPaintGrams(); nhUpdatePreview(); };
+  if (amt == null) { NH.grams = null; NH.estimated = false; done(); return; }
+  if (unit === "g") { NH.grams = amt; NH.estimated = false; done(); return; }
+  if (unit.startsWith("portion:")) {
+    const p = (NH.picked.portions || [])[parseInt(unit.slice(8), 10)];
+    NH.grams = p ? Math.round(p.gram_weight * amt * 10) / 10 : null;
+    NH.estimated = false; done(); return;
+  }
+  const seq = ++nhConvSeq;
+  apiGet(`/api/nutrition/convert?food=${encodeURIComponent(NH.picked.food_name)}` +
+         `&amount=${amt}&unit=${encodeURIComponent(unit)}`)
+    .then((d) => {
+      if (seq !== nhConvSeq) return;          // superseded by a newer edit
+      NH.grams = Number(d.grams);
+      NH.estimated = !!d.estimated;
+      done();
+    })
+    .catch(() => { if (seq === nhConvSeq) { NH.grams = null; NH.estimated = false; done(); } });
+}
+
 function nhUpdatePreview() {
   const prev = document.getElementById("nh-picked-preview");
   if (!prev || !NH.picked) return;
   const s = nhScale();
-  if (s == null) { prev.innerHTML = NH.picked.mode === "per100" ? "ENTER GRAMS" : "ENTER SERVINGS"; return; }
+  if (s == null) { prev.innerHTML = NH.picked.mode === "per100" ? "ENTER AMOUNT" : "ENTER SERVINGS"; return; }
   const r = (v) => Math.round(v * s * 10) / 10;
   const cals = Math.round((r(NH.picked.protein) * 4 + r(NH.picked.carbs) * 4 + r(NH.picked.fat) * 9));
   prev.innerHTML = `<b>${cals}</b> kcal · ${r(NH.picked.protein)}P · ${r(NH.picked.carbs)}C · ${r(NH.picked.fat)}F`;
@@ -644,7 +768,7 @@ async function nhLogPicked() {
   setHint("");
   if (!NH.picked) { setHint("PICK A FOOD FIRST"); return; }
   const s = nhScale();
-  if (s == null) { setHint(NH.picked.mode === "per100" ? "ENTER GRAMS" : "ENTER SERVINGS"); return; }
+  if (s == null) { setHint(NH.picked.mode === "per100" ? "ENTER AMOUNT" : "ENTER SERVINGS"); return; }
   const r = (v) => Math.round(v * s * 10) / 10;
   const payload = {
     date: NH.date,
@@ -654,6 +778,13 @@ async function nhLogPicked() {
     fat: r(NH.picked.fat),
     source: "search",
   };
+  // Remember the household measure that produced these grams (e.g. "0.5 cup") in
+  // the notes field. Grams-direct (unit=g) and serving mode carry nothing extra.
+  if (NH.picked.mode === "per100") {
+    const label = nhSelectedUnitLabel();
+    const amt = nhAmount();
+    if (amt != null && label && label !== "g") payload.notes = `${nhNum(amt)} ${label}`;
+  }
   const time = document.getElementById("nh-time")?.value.trim();
   payload.time = time || nhNowTime();
   const btn = document.getElementById("nh-search-log");
@@ -953,9 +1084,18 @@ function wireNutritionHub() {
     if (!e.target.closest("#nh-search") && !e.target.closest("#nh-suggest")) nhHideSuggest();
   });
 
-  // Portion preview
-  const grams = document.getElementById("nh-grams");
-  if (grams) grams.addEventListener("input", nhUpdatePreview);
+  // Portion preview — amount typing is debounced (250ms) because non-g units hit
+  // /convert; unit change resolves immediately (portions/g are local anyway).
+  const amount = document.getElementById("nh-amount");
+  if (amount) {
+    let adeb = null;
+    amount.addEventListener("input", () => {
+      clearTimeout(adeb);
+      adeb = setTimeout(nhResolvePortion, 250);
+    });
+  }
+  const unitSel = document.getElementById("nh-unit");
+  if (unitSel) unitSel.addEventListener("change", nhResolvePortion);
   const searchLog = document.getElementById("nh-search-log");
   if (searchLog) searchLog.addEventListener("click", nhLogPicked);
 

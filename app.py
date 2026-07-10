@@ -746,6 +746,9 @@ def _meal_row(m):
         "fat": m.get("fat"),
         "calories": m.get("calories"),
         "source": m.get("source"),
+        # Serving note (e.g. "0.5 cup") when the food was logged via a household
+        # measure — lets the row show how it was entered, not just the grams.
+        "notes": m.get("notes"),
     }
 
 
