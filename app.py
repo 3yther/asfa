@@ -1262,7 +1262,10 @@ def _csv_response(fieldnames, rows, filename):
     writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     for r in rows:
-        writer.writerow(r)
+        # Route every cell through the shared sanitizer (db.csv_safe) so a cell
+        # can't smuggle a spreadsheet formula (=/+/-/@/tab/CR). Single source of
+        # truth with the all-data ZIP exporter in database.py.
+        writer.writerow({k: db.csv_safe(r.get(k)) for k in fieldnames})
     return Response(
         buf.getvalue(), mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'})

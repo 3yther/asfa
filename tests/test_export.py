@@ -5,6 +5,7 @@ serializers, with a focus on the steps.csv addition. Self-contained (no pytest):
 
 Uses an ISOLATED temp SQLite DB via ASFA_DB_PATH so it never touches asfa.db.
 """
+import csv as _csv
 import io
 import os
 import sys
@@ -64,9 +65,45 @@ def test_3_zip_contains_steps_csv():
     print(f"  3. export ZIP contains steps.csv; integrity clean ({names})  OK")
 
 
+def test_4_csv_safe_neutralizes_formulas():
+    # Dangerous leading chars → prefixed with a single quote (inert text).
+    for danger in ('=HYPERLINK("http://x")', "+SUM(A1)", "@foo", "-1+1",
+                   "\tTAB", "\rCR"):
+        out = db.csv_safe(danger)
+        assert out == "'" + danger, (danger, out)
+    print("  4. csv_safe neutralizes =/+/@/-formula/tab/CR leads  OK")
+
+
+def test_5_csv_safe_preserves_numbers_and_text():
+    # Plain negatives stay numeric (NOT prefixed); ordinary text untouched.
+    assert db.csv_safe("-12.50") == "-12.50", db.csv_safe("-12.50")
+    assert db.csv_safe(-12.5) == "-12.5", db.csv_safe(-12.5)
+    assert db.csv_safe("-1e3") == "-1e3", db.csv_safe("-1e3")
+    assert db.csv_safe("Chicken, rice") == "Chicken, rice"
+    assert db.csv_safe("") == "" and db.csv_safe(None) == ""
+    print("  5. csv_safe keeps -12.50 numeric + leaves text/empty alone  OK")
+
+
+def test_6_poisoned_food_name_neutralized_in_export():
+    # An attacker-influenceable food_name (e.g. from an Open Food Facts barcode)
+    # must land in nutrition.csv as inert text, and csv.writer must still quote
+    # the embedded comma correctly.
+    payload = '=HYPERLINK("http://evil"),rice'
+    db.log_meal("2026-07-10", payload, 10, 20, 5)
+    csv_text = db.csv_nutrition()
+    # Parse back so quoting is handled — the food_name cell is index 2.
+    rows = list(_csv.reader(io.StringIO(csv_text)))
+    hit = next((r for r in rows[1:] if r[2].startswith("'=HYPERLINK")), None)
+    assert hit is not None, csv_text
+    assert hit[2] == "'" + payload, hit[2]        # neutralized, comma intact
+    print("  6. poisoned food_name exports as inert quoted text  OK")
+
+
 def main():
     tests = [test_1_steps_omitted_when_empty, test_2_csv_steps_content,
-             test_3_zip_contains_steps_csv]
+             test_3_zip_contains_steps_csv, test_4_csv_safe_neutralizes_formulas,
+             test_5_csv_safe_preserves_numbers_and_text,
+             test_6_poisoned_food_name_neutralized_in_export]
     print("Export bundle (steps.csv) tests:")
     passed = 0
     for t in tests:
