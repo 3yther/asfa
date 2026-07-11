@@ -1,0 +1,168 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_POSTGRES",
+      "label": "ASFA Postgres",
+      "description": "The read-only grafana_reader connection to ASFA's Railway Postgres",
+      "type": "datasource",
+      "pluginId": "postgres",
+      "pluginName": "PostgreSQL"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+    { "type": "datasource", "id": "postgres", "name": "PostgreSQL", "version": "1.0.0" }
+  ],
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "tags": ["asfa", "personal-metrics", "observability"],
+  "time": { "from": "now-30d", "to": "now" },
+  "timezone": "browser",
+  "title": "ASFA — Personal Metrics",
+  "uid": "asfa-personal-metrics",
+  "templating": { "list": [] },
+  "panels": [
+    { "type": "row", "title": "NUTRITION", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
+    {
+      "type": "timeseries",
+      "title": "Daily Calories (30d)",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 40 }, "unit": "kcal" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "goal" },
+            "properties": [ { "id": "custom.drawStyle", "value": "line" }, { "id": "custom.lineWidth", "value": 2 }, { "id": "custom.fillOpacity", "value": 0 }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] }
+        ]
+      },
+      "targets": [ { "refId": "A", "format": "time_series", "rawQuery": true, "rawSql": "SELECT m.date::timestamptz AS \"time\",\n       SUM(COALESCE(m.calories, m.protein*4 + m.carbs*4 + m.fat*9)) AS \"kcal\",\n       MAX(g.calorie_goal) AS \"goal\"\nFROM meals m CROSS JOIN nutrition_goals g\nWHERE $__timeFilter(m.date::timestamptz)\nGROUP BY m.date\nORDER BY m.date" } ]
+    },
+    {
+      "type": "bargauge",
+      "title": "Protein Consistency (last 7d)",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": 0 }, { "color": "orange", "value": 50 }, { "color": "green", "value": 80 } ] } } },
+      "options": { "displayMode": "gradient", "orientation": "horizontal" },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true, "rawSql": "WITH daily AS (\n  SELECT date, SUM(protein) AS p\n  FROM meals\n  WHERE date::date >= CURRENT_DATE - INTERVAL '6 days'\n  GROUP BY date\n)\nSELECT ROUND(100.0 * COUNT(*) FILTER (WHERE p >= (SELECT protein_goal FROM nutrition_goals LIMIT 1)) / 7.0, 0) AS \"% days hit protein goal\"\nFROM daily" } ]
+    },
+    {
+      "type": "piechart",
+      "title": "Macro Split (Today)",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "g" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true }, "pieType": "donut", "legend": { "displayMode": "list", "placement": "right", "values": ["value"] } },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true, "rawSql": "SELECT 'Protein' AS metric, COALESCE(SUM(protein),0) AS grams FROM meals WHERE date::date = CURRENT_DATE\nUNION ALL SELECT 'Carbs',   COALESCE(SUM(carbs),0)   FROM meals WHERE date::date = CURRENT_DATE\nUNION ALL SELECT 'Fat',     COALESCE(SUM(fat),0)     FROM meals WHERE date::date = CURRENT_DATE" } ]
+    },
+
+    { "type": "row", "title": "SLEEP & RECOVERY", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 } },
+    {
+      "type": "timeseries",
+      "title": "Sleep Duration & Quality (30d)",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "hours" }, "properties": [ { "id": "unit", "value": "h" }, { "id": "custom.axisPlacement", "value": "left" } ] },
+          { "matcher": { "id": "byName", "options": "quality (1-5)" }, "properties": [ { "id": "custom.axisPlacement", "value": "right" }, { "id": "max", "value": 5 }, { "id": "min", "value": 0 }, { "id": "custom.drawStyle", "value": "bars" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } } ] }
+        ]
+      },
+      "targets": [ { "refId": "A", "format": "time_series", "rawQuery": true, "rawSql": "SELECT date::timestamptz AS \"time\",\n       duration AS \"hours\",\n       quality  AS \"quality (1-5)\"\nFROM sleep\nWHERE $__timeFilter(date::timestamptz)\nORDER BY date" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Readiness Score Trend",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "none", "min": 0, "max": 100, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "lineInterpolation": "smooth" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": 0 }, { "color": "orange", "value": 60 }, { "color": "green", "value": 85 } ] } } },
+      "targets": [ { "refId": "A", "format": "time_series", "rawQuery": true, "rawSql": "-- Mirrors database.score_readiness(): 100 minus duration & quality penalties\nSELECT date::timestamptz AS \"time\",\n       GREATEST(0, LEAST(100,\n         100\n         - CASE WHEN duration < 5.5 THEN 20 WHEN duration > 9.0 THEN 10 ELSE 0 END\n         - CASE WHEN quality <= 3 THEN 15 WHEN quality = 4 THEN 5 ELSE 0 END\n       )) AS \"readiness\"\nFROM sleep\nWHERE $__timeFilter(date::timestamptz)\nORDER BY date" } ]
+    },
+
+    { "type": "row", "title": "GYM & STEPS", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 } },
+    {
+      "type": "barchart",
+      "title": "Training Volume (30d)",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 19 },
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "fillOpacity": 80 } } },
+      "options": { "xTickLabelRotation": -45, "showValue": "never" },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true, "rawSql": "SELECT date AS \"time\",\n       SUM(total_volume_kg) AS \"volume (kg)\"\nFROM gym_sessions\nWHERE $__timeFilter(date::timestamptz)\nGROUP BY date\nORDER BY date" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Daily Steps vs Goal",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 19 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 50 } },
+        "overrides": [ { "matcher": { "id": "byName", "options": "goal" }, "properties": [ { "id": "custom.drawStyle", "value": "line" }, { "id": "custom.lineWidth", "value": 2 }, { "id": "custom.fillOpacity", "value": 0 }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] } ]
+      },
+      "targets": [ { "refId": "A", "format": "time_series", "rawQuery": true, "rawSql": "SELECT s.date::timestamptz AS \"time\",\n       SUM(s.steps) AS \"steps\",\n       (SELECT steps_goal FROM steps_goal ORDER BY id DESC LIMIT 1) AS \"goal\"\nFROM steps s\nWHERE $__timeFilter(s.date::timestamptz)\nGROUP BY s.date\nORDER BY s.date" } ]
+    },
+    {
+      "type": "table",
+      "title": "PR Timeline",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 19 },
+      "options": { "sortBy": [ { "displayName": "date", "desc": true } ] },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true, "rawSql": "SELECT ses.date AS \"date\",\n       e.name AS \"exercise\",\n       gs.weight_kg AS \"weight (kg)\",\n       gs.reps AS \"reps\"\nFROM gym_sets gs\nJOIN gym_exercises e  ON e.id  = gs.exercise_id\nJOIN gym_sessions ses ON ses.id = gs.session_id\nWHERE gs.is_pr = TRUE\nORDER BY ses.date DESC\nLIMIT 100" } ]
+    },
+
+    { "type": "row", "title": "FINANCE & HYDRATION", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 } },
+    {
+      "type": "piechart",
+      "title": "Spending by Category (30d)",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "currencyGBP" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "values": true }, "pieType": "pie", "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] } },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true, "rawSql": "SELECT category AS metric, SUM(amount) AS total\nFROM spending\nWHERE $__timeFilter(date::timestamptz)\nGROUP BY category\nORDER BY total DESC" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Water Intake (30d)",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+      "fieldConfig": {
+        "defaults": { "unit": "none", "custom": { "drawStyle": "bars", "fillOpacity": 50, "axisLabel": "ml" } },
+        "overrides": [ { "matcher": { "id": "byName", "options": "target" }, "properties": [ { "id": "custom.drawStyle", "value": "line" }, { "id": "custom.lineWidth", "value": 2 }, { "id": "custom.fillOpacity", "value": 0 }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ] } ]
+      },
+      "targets": [ { "refId": "A", "format": "time_series", "rawQuery": true, "rawSql": "SELECT date::timestamptz AS \"time\",\n       SUM(amount_ml) AS \"ml\",\n       2500 AS \"target\"\nFROM hydration_log\nWHERE $__timeFilter(date::timestamptz)\nGROUP BY date\nORDER BY date" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Monthly Spending Pace",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "currencyGBP" } },
+      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value_and_name", "orientation": "horizontal" },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true, "rawSql": "SELECT\n  SUM(amount) AS \"month to date\",\n  ROUND(\n    SUM(amount) / EXTRACT(DAY FROM CURRENT_DATE)\n    * EXTRACT(DAY FROM (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month - 1 day'))\n  , 2) AS \"projected month-end\"\nFROM spending\nWHERE date::date >= date_trunc('month', CURRENT_DATE)" } ]
+    },
+
+    { "type": "row", "title": "SYSTEM (observability)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 } },
+    {
+      "type": "timeseries",
+      "title": "Rows Logged per Day (all tables)",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 9, "w": 14, "x": 0, "y": 37 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 80, "stacking": { "mode": "normal", "group": "A" } } } },
+      "targets": [ { "refId": "A", "format": "time_series", "rawQuery": true, "rawSql": "SELECT d::timestamptz AS \"time\", tbl AS \"metric\", cnt AS \"rows\" FROM (\n  SELECT date AS d, 'meals' AS tbl, COUNT(*) cnt FROM meals GROUP BY date\n  UNION ALL SELECT date, 'sleep',           COUNT(*) FROM sleep           GROUP BY date\n  UNION ALL SELECT date, 'spending',        COUNT(*) FROM spending        GROUP BY date\n  UNION ALL SELECT date, 'hydration_log',   COUNT(*) FROM hydration_log   GROUP BY date\n  UNION ALL SELECT substr(taken_at,1,10), 'supplements_log', COUNT(*) FROM supplements_log GROUP BY substr(taken_at,1,10)\n  UNION ALL SELECT date, 'steps',           COUNT(*) FROM steps           GROUP BY date\n  UNION ALL SELECT date, 'gym_sessions',    COUNT(*) FROM gym_sessions    GROUP BY date\n) x\nWHERE $__timeFilter(d::timestamptz)\nORDER BY d" } ]
+    },
+    {
+      "type": "table",
+      "title": "Days Since Last Entry per Module",
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "gridPos": { "h": 9, "w": 10, "x": 14, "y": 37 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [ { "matcher": { "id": "byName", "options": "days_since" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "color-background" } }, { "id": "thresholds", "value": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "orange", "value": 3 }, { "color": "red", "value": 5 } ] } } ] } ]
+      },
+      "options": { "sortBy": [ { "displayName": "days_since", "desc": true } ] },
+      "targets": [ { "refId": "A", "format": "table", "rawQuery": true, "rawSql": "SELECT 'meals' AS module,           MAX(date) AS last_entry, CURRENT_DATE - MAX(date::date) AS days_since FROM meals\nUNION ALL SELECT 'sleep',            MAX(date), CURRENT_DATE - MAX(date::date) FROM sleep\nUNION ALL SELECT 'spending',         MAX(date), CURRENT_DATE - MAX(date::date) FROM spending\nUNION ALL SELECT 'hydration_log',    MAX(date), CURRENT_DATE - MAX(date::date) FROM hydration_log\nUNION ALL SELECT 'supplements_log',  MAX(substr(taken_at,1,10)), CURRENT_DATE - MAX(substr(taken_at,1,10)::date) FROM supplements_log\nUNION ALL SELECT 'steps',            MAX(date), CURRENT_DATE - MAX(date::date) FROM steps\nUNION ALL SELECT 'gym_sessions',     MAX(date), CURRENT_DATE - MAX(date::date) FROM gym_sessions\nUNION ALL SELECT 'body_composition', MAX(date_scanned), CURRENT_DATE - MAX(date_scanned::date) FROM body_composition\nORDER BY days_since DESC NULLS LAST" } ]
+    }
+  ]
+}
