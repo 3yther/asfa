@@ -6116,6 +6116,47 @@ import csv as _export_csv
 from io import StringIO as _ExportStringIO
 
 
+def _looks_numeric(s: str) -> bool:
+    """True if the whole string is a plain number ('-12.50', '1e3', '.5').
+    Used to keep genuine negatives numeric while still guarding formula-ish
+    values that merely start with '-'."""
+    try:
+        float(s)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def csv_safe(value) -> str:
+    """Neutralize CSV / spreadsheet formula injection.
+
+    Excel, Google Sheets and LibreOffice evaluate a cell as a formula when it
+    begins with '=', '+', '-', '@', a tab or a carriage return — so an
+    attacker-influenceable value like ``=HYPERLINK("http://evil")`` (an Open Food
+    Facts product name, a Reed/SerpAPI job title, or a user-typed note) executes
+    on open. We prefix a single quote so the cell is treated as literal text.
+
+    Negative numbers: a leading '-' is only guarded when the value is NOT a bona
+    fide number. This neutralizes real formulas ('-1+1', '-cmd|...') while leaving
+    plain negatives ('-12.50', finance income/refunds) numeric and sortable. (The
+    stricter "always prefix leading '-'" would turn every negative amount into
+    text; the full-number check is safer than a next-char heuristic, which would
+    let '-1+1' — a valid formula — through.)
+
+    csv.writer's own quoting of commas/quotes/newlines is unaffected; empty cells
+    stay empty. Single source of truth: app.py's _csv_response imports this too.
+    """
+    s = "" if value is None else str(value)
+    if not s:
+        return s
+    first = s[0]
+    if first in ("=", "+", "@", "\t", "\r"):
+        return "'" + s
+    if first == "-" and not _looks_numeric(s):
+        return "'" + s
+    return s
+
+
 def _export_query(sql):
     """Run a read-only SELECT, return list of dict rows. Returns [] if the
     table doesn't exist yet or on any read error (module never used)."""
@@ -6137,7 +6178,7 @@ def _export_rows_to_csv(header, rows, field_fn):
     writer = _export_csv.writer(buf)
     writer.writerow(header)
     for r in rows:
-        writer.writerow(field_fn(r))
+        writer.writerow([csv_safe(c) for c in field_fn(r)])
     return buf.getvalue()
 
 
