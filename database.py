@@ -591,6 +591,146 @@ def get_category_history(months=6):
     return [out[b] for b in buckets]
 
 
+# ── Account balances (dual-account net worth) ───────────────────────────────────
+# Point-in-time balance snapshots per account (checking/savings). Independent of
+# the `spending` transaction store above: spending tracks flows, this tracks the
+# standing balance so the dashboard can show current balances and a 30-day trend.
+_ACCOUNT_BALANCES_READY = False
+
+_ACCOUNT_TYPES = ("checking", "savings")
+
+
+def _ensure_account_balances_table():
+    """Create the account_balances table if missing. Safe to call before
+    init_db() (mirrors _ensure_transactions_table). No CHECK constraint — the
+    account_type whitelist is enforced in add_account_balance() so the rule is
+    identical on SQLite and Postgres."""
+    global _ACCOUNT_BALANCES_READY
+    if _ACCOUNT_BALANCES_READY:
+        return
+    create = """CREATE TABLE IF NOT EXISTS account_balances (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_type TEXT NOT NULL,
+        balance REAL NOT NULL,
+        date TEXT NOT NULL,
+        notes TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+    )"""
+    if USE_POSTGRES:
+        create = create.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        create = create.replace("datetime('now')", "NOW()")
+    with get_db() as conn:
+        conn.cursor().execute(create)
+    _ACCOUNT_BALANCES_READY = True
+
+
+def add_account_balance(account_type, balance, date, notes=None):
+    """Insert one balance snapshot. Returns (row_dict, None) on success or
+    (None, error_str) on validation failure. Validates: account_type in the
+    whitelist, balance a finite number >= 0 (bools rejected), date a real
+    YYYY-MM-DD calendar date."""
+    _ensure_account_balances_table()
+    account_type = (account_type or "").strip().lower()
+    if account_type not in _ACCOUNT_TYPES:
+        return (None, "account_type must be 'checking' or 'savings'")
+    if isinstance(balance, bool):
+        return (None, "balance must be a number")
+    try:
+        balance = float(balance)
+    except (TypeError, ValueError):
+        return (None, "balance must be a number")
+    if balance != balance or balance in (float("inf"), float("-inf")):
+        return (None, "balance must be a finite number")
+    if balance < 0:
+        return (None, "balance must be >= 0")
+    if not isinstance(date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
+        return (None, "date must be YYYY-MM-DD")
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return (None, "date must be a real calendar date")
+    notes = (notes or "").strip() or None
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO account_balances (account_type, balance, date, notes) "
+            f"VALUES ({ph},{ph},{ph},{ph})",
+            (account_type, balance, date, notes))
+        if USE_POSTGRES:
+            cur.execute("SELECT lastval() AS id")
+        else:
+            cur.execute("SELECT last_insert_rowid() AS id")
+        new_id = cur.fetchone()["id"]
+        cur.execute(f"SELECT * FROM account_balances WHERE id = {ph}", (new_id,))
+        row = cur.fetchone()
+    return (dict(row) if row else None, None)
+
+
+def _balance_as_of(cur, account_type, on_or_before):
+    """Latest recorded balance for an account on or before `on_or_before`
+    (YYYY-MM-DD), or None if there is no such snapshot. Ordered by date then id
+    so multiple same-day snapshots resolve to the last one entered."""
+    ph = "%s" if USE_POSTGRES else "?"
+    cur.execute(
+        f"SELECT balance FROM account_balances "
+        f"WHERE account_type = {ph} AND date <= {ph} "
+        f"ORDER BY date DESC, id DESC LIMIT 1",
+        (account_type, on_or_before))
+    row = cur.fetchone()
+    return float(row["balance"]) if row else None
+
+
+def _earliest_balance(cur, account_type):
+    """Oldest recorded balance for an account, or None if it has no snapshots.
+    Used as the trend baseline when the account has no snapshot old enough to
+    cover the full 30-day window (so a young account trends from inception
+    rather than from a misleading zero)."""
+    ph = "%s" if USE_POSTGRES else "?"
+    cur.execute(
+        f"SELECT balance FROM account_balances "
+        f"WHERE account_type = {ph} ORDER BY date ASC, id ASC LIMIT 1",
+        (account_type,))
+    row = cur.fetchone()
+    return float(row["balance"]) if row else None
+
+
+def get_accounts_summary():
+    """Current balance and 30-day trend per account, plus aggregate net worth.
+
+    current = latest snapshot for the account. The trend baseline is the latest
+    snapshot on or before 30 days ago; if the account has no snapshot that old,
+    it falls back to the earliest snapshot on record (so an account younger than
+    30 days trends from its first entry, not from a fictitious zero). trend =
+    current - baseline. net_worth.current/trend sum the accounts. Accounts with
+    no snapshots report current 0.0 and trend 0.0."""
+    _ensure_account_balances_table()
+    today = datetime.now().strftime("%Y-%m-%d")
+    start_day = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    out = {}
+    net_current = 0.0
+    net_trend = 0.0
+    with get_db() as conn:
+        cur = conn.cursor()
+        for acct in _ACCOUNT_TYPES:
+            current = _balance_as_of(cur, acct, today)
+            start = _balance_as_of(cur, acct, start_day)
+            if start is None:
+                start = _earliest_balance(cur, acct)
+            cur_val = round(current if current is not None else 0.0, 2)
+            trend = round((current or 0.0) - (start or 0.0), 2)
+            out[acct] = {
+                "current": cur_val,
+                "start_30d": round(start if start is not None else 0.0, 2),
+                "trend": trend,
+                "has_data": current is not None,
+            }
+            net_current += cur_val
+            net_trend += trend
+    out["net_worth"] = {"current": round(net_current, 2), "trend": round(net_trend, 2)}
+    return out
+
+
 # ── CSP violation reports ───────────────────────────────────────────────────────
 # Sink for Content-Security-Policy-Report-Only violations (Tier 4 Part 4). The
 # policy is still observe-only; these rows accumulate real violation data so a

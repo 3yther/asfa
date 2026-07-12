@@ -1099,6 +1099,34 @@ def api_finance_recent():
     return jsonify(db.get_recent_transactions(limit))
 
 
+@app.route("/api/finance/account-balance", methods=["POST"])
+def api_finance_account_balance():
+    # Log a point-in-time balance snapshot for one account (checking/savings).
+    # All validation (type whitelist, balance >= 0, real date) lives in
+    # db.add_account_balance, which returns (row, error).
+    data = request.get_json(force=True) or {}
+    row, err = db.add_account_balance(
+        data.get("account_type"),
+        data.get("balance"),
+        (data.get("date") or "").strip(),
+        notes=data.get("notes"),
+    )
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({
+        "ok": True,
+        "balance": row["balance"],
+        "date": row["date"],
+        "message": f"{row['account_type']} balance saved",
+    })
+
+
+@app.route("/api/finance/accounts/summary")
+def api_finance_accounts_summary():
+    # Current balance + 30-day trend per account, plus aggregate net worth.
+    return jsonify(db.get_accounts_summary())
+
+
 # ── Body / gym (PBs + body weight only — workout logging removed) ──────────────
 
 @app.route("/api/gym")
