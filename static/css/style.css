@@ -54,7 +54,11 @@
 /* Dark fill lives on the root so it paints bottom-most, behind the
    fixed #starfield-bg canvas (z-index:-1). Keeps a no-flash backdrop
    while letting the starfield show through a transparent body. */
-html { color-scheme: dark; background: var(--bg); }
+/* Root font-size drives every rem-based size in this sheet (body copy, HUD
+   labels, card titles). Nudged 16px→17px so the many small uppercase labels
+   (.52–.58rem) stay legible when the page is zoomed out; the bento grid is
+   px-based and unaffected. Adjust here to rescale all type proportionally. */
+html { color-scheme: dark; background: var(--bg); font-size: 17px; }
 
 body {
   /* transparent so the fixed starfield canvas behind the body is visible;
@@ -66,12 +70,16 @@ body {
   background-size: 52px 52px;
   color: var(--text);
   font-family: 'Inter', -apple-system, sans-serif;
-  /* Phase B — readable body type: 0.95rem, softer letter-spacing, roomier line-height */
-  font-size: .95rem;
+  /* Phase B — readable body type; bumped .95rem→1rem alongside the 17px root
+     for comfortable reading at any zoom. Softer letter-spacing, roomy leading. */
+  font-size: 1rem;
   line-height: 1.6;
   letter-spacing: .5px;
   min-height: 100vh;
   overflow-x: hidden;
+  /* Long unbreakable strings (URLs, tickers) must wrap, not force a horizontal
+     scrollbar when the viewport is narrow or the page is zoomed in. */
+  overflow-wrap: break-word;
   /* Phase D — leave room for the fixed mission-status bar at the very top */
   padding-top: 44px;
   padding-bottom: 90px;
@@ -370,6 +378,10 @@ body {
 /* ── Cards — refined sci-fi (soft shadow, translucent, no neon edges) ──── */
 .card {
   position: relative;
+  /* Grid items default to min-width:auto, so a wide child (chart, long line)
+     can blow a card past its column and force page-level horizontal scroll.
+     min-width:0 lets cards shrink to their track and keep the layout contained. */
+  min-width: 0;
   background: var(--panel);
   backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
   border: 1px solid var(--line);
