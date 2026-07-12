@@ -5242,6 +5242,101 @@ def clear_auth_failures(ip: str):
         cur.execute(f"DELETE FROM auth_failures WHERE ip = {ph}", (ip,))
 
 
+# ── Read-only API keys ─────────────────────────────────────────────────────────
+# High-entropy random tokens that let external read-only clients (the MCP
+# server) reach a curated set of GET endpoints without the session passphrase.
+# Only the SHA-256 of each token is stored — a 256-bit random secret can't be
+# brute-forced, so a fast indexed hash (not bcrypt) is the correct, standard
+# choice and lets validation be an O(1) unique-index lookup. Created lazily +
+# idempotently on first use; works on SQLite + Postgres.
+
+_API_KEYS_READY = False
+
+
+def _ensure_api_keys_table():
+    global _API_KEYS_READY
+    if _API_KEYS_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS api_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key_hash TEXT NOT NULL UNIQUE,
+        prefix TEXT,
+        name TEXT,
+        scope TEXT DEFAULT 'read',
+        last_used_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+    )"""
+    if USE_POSTGRES:
+        stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        stmt = stmt.replace("datetime('now')", "NOW()")
+    with get_db() as conn:
+        conn.cursor().execute(stmt)
+    _API_KEYS_READY = True
+
+
+def create_api_key(key_hash: str, prefix: str, name: str, scope: str = "read"):
+    """Store a new key by its SHA-256 hash. The raw token is never persisted."""
+    _ensure_api_keys_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"INSERT INTO api_keys (key_hash, prefix, name, scope) "
+            f"VALUES ({ph}, {ph}, {ph}, {ph})",
+            (key_hash, prefix, name, scope))
+
+
+def find_active_api_key_by_hash(key_hash: str):
+    """Return {id, name, scope} for a non-revoked key matching this hash, else None."""
+    _ensure_api_keys_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT id, name, scope FROM api_keys "
+            f"WHERE key_hash = {ph} AND revoked_at IS NULL",
+            (key_hash,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def touch_api_key(key_id: int):
+    """Record that a key was just used (for the last_used_at audit column)."""
+    _ensure_api_keys_table()
+    now = datetime.utcnow().isoformat(sep=" ")
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"UPDATE api_keys SET last_used_at = {ph} WHERE id = {ph}",
+                    (now, key_id))
+
+
+def list_api_keys():
+    """All keys, metadata only (never the token/hash). Newest first."""
+    _ensure_api_keys_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, prefix, scope, last_used_at, revoked_at, created_at "
+            "FROM api_keys ORDER BY created_at DESC, id DESC")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def revoke_api_key(key_id: int) -> bool:
+    """Mark a key revoked. Returns False if it doesn't exist or was already revoked."""
+    _ensure_api_keys_table()
+    now = datetime.utcnow().isoformat(sep=" ")
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"UPDATE api_keys SET revoked_at = {ph} "
+            f"WHERE id = {ph} AND revoked_at IS NULL",
+            (now, key_id))
+        return cur.rowcount > 0
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ── Scent Vault — fragrance collection, body products, pairings, wear log ─────
 # Standalone module: the 7-bottle fragrance shelf, the body/grooming products

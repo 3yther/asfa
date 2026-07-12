@@ -160,6 +160,44 @@ APP_PASSWORD = os.environ.get("APP_PASSWORD")
 _PUBLIC_ENDPOINTS = {"login", "static", "mission_control_health", "api_system_health",
                      "api_csp_report"}
 
+# Read-only API keys let external clients (the MCP server) reach the endpoints
+# below without the session passphrase — but ONLY these, and only via GET/HEAD.
+# Keyed by endpoint (function) name, which is what request.endpoint resolves to.
+# Writes and every other route stay session+CSRF gated; the key-management
+# routes are deliberately excluded so a key cannot mint or revoke keys.
+_API_KEY_READ_ENDPOINTS = {
+    "api_finance_summary",
+    "api_finance_accounts_summary",
+    "api_steps_date",
+    "api_nutrition_today",
+    "api_sleep_readiness",
+}
+# Human-recognizable prefix on every issued token (e.g. asfa_xY3...). The first
+# few chars are also stored as `prefix` so keys are identifiable in the list.
+_API_KEY_PREFIX = "asfa_"
+
+
+def _hash_api_key(raw: str) -> str:
+    """SHA-256 of a raw token. High-entropy tokens don't need a slow hash; this
+    also makes the stored hash uniquely indexable for O(1) validation lookups."""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _authenticate_api_key():
+    """Return the api_keys row ({id, name, scope}) for a valid
+    'Authorization: Bearer <token>' header, or None. Never raises."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    raw = auth[7:].strip()
+    if not raw:
+        return None
+    try:
+        return db.find_active_api_key_by_hash(_hash_api_key(raw))
+    except Exception as e:
+        logger.error("api key lookup failed: %s", e)
+        return None
+
 
 @app.before_request
 def _require_login():
@@ -172,6 +210,19 @@ def _require_login():
         if not session.get("csrf_token"):
             session["csrf_token"] = secrets.token_hex(32)
         return None
+    # Read-only API key: unlocks the curated read allowlist without a session,
+    # for safe methods only. Checked before the session fail-closed so the MCP
+    # server can reach these endpoints; writes/other routes still fall through
+    # to the passphrase gate below. No CSRF needed (GET/HEAD only).
+    if request.method in ("GET", "HEAD") and request.endpoint in _API_KEY_READ_ENDPOINTS:
+        key = _authenticate_api_key()
+        if key and key.get("scope") == "read":
+            g.api_key_id = key["id"]
+            try:
+                db.touch_api_key(key["id"])
+            except Exception as e:
+                logger.error("api key touch failed: %s", e)
+            return None
     # Fail closed: if no passphrase is configured the app stays locked.
     if not APP_PASSWORD:
         logger.error("APP_PASSWORD not set — app is locked. Set it to enable access.")
@@ -3526,6 +3577,43 @@ def _generate_startup_briefing():
         logger.info("Startup briefing generated.")
     except Exception as e:
         logger.error(f"startup briefing failed: {e}")
+
+
+# ── Read-only API key management ───────────────────────────────────────────────
+# Issue / list / revoke keys for external read-only clients (the MCP server).
+# Session-gated by the global before_request: these routes are NOT in
+# _PUBLIC_ENDPOINTS and NOT in _API_KEY_READ_ENDPOINTS, so only a logged-in
+# session (passphrase) reaches them — a key cannot mint or revoke other keys.
+# POSTs also carry the CSRF token via the patched fetch.
+
+@app.route("/api/keys/generate", methods=["POST"])
+def api_keys_generate():
+    """Mint a new read-only key. The raw token is returned exactly once and is
+    never recoverable — only its SHA-256 is stored."""
+    data = request.get_json(silent=True) or {}
+    name = ((data.get("name") or "").strip()[:100]) or "API Key"
+    raw_key = _API_KEY_PREFIX + secrets.token_urlsafe(32)
+    db.create_api_key(_hash_api_key(raw_key), raw_key[:12], name, scope="read")
+    return jsonify({
+        "key": raw_key,
+        "name": name,
+        "scope": "read",
+        "message": "Save this key now — it is shown only once and cannot be retrieved again.",
+    }), 201
+
+
+@app.route("/api/keys/list", methods=["GET"])
+def api_keys_list():
+    """Key metadata only (id, name, prefix, scope, timestamps) — never the token."""
+    return jsonify(db.list_api_keys())
+
+
+@app.route("/api/keys/<int:key_id>/revoke", methods=["POST"])
+def api_keys_revoke(key_id):
+    """Revoke a key immediately. Idempotent-ish: 404 if unknown/already revoked."""
+    if db.revoke_api_key(key_id):
+        return jsonify({"ok": True})
+    return jsonify({"error": "key not found or already revoked"}), 404
 
 
 def _start_background():
