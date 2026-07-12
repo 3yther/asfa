@@ -226,6 +226,11 @@ def init_db():
                 stmt = stmt.replace("datetime('now')", "NOW()")
             cursor.execute(stmt)
 
+        # Optional link from a hydration entry to the meal it was drunk with, so
+        # a logged meal can show "💧 400ml with this meal". Nullable — standalone
+        # water logs (the common case) leave it NULL. Added idempotently.
+        _add_column(cursor, "hydration_log", "meal_id", "INTEGER")
+
 
 # ── Habit helpers ──────────────────────────────────────────────────────────────
 
@@ -284,20 +289,39 @@ def get_habits(days: int = 7):
         return [dict(r) for r in cur.fetchall()]
 
 
-def log_hydration(date: str, amount_ml: int, logged_at: str = None):
+def log_hydration(date: str, amount_ml: int, logged_at: str = None, meal_id: int = None):
     """Append a hydration ledger entry. Keeps a per-event audit trail in
-    addition to the rolled-up habits.water_ml total."""
+    addition to the rolled-up habits.water_ml total. `meal_id` optionally links
+    the entry to the meal it was drunk with (nullable; standalone logs pass None)."""
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
+        cols = ["date", "amount_ml"]
+        vals = [date, amount_ml]
         if logged_at:
-            cur.execute(
-                f"INSERT INTO hydration_log (date, amount_ml, logged_at) VALUES ({ph},{ph},{ph})",
-                (date, amount_ml, logged_at))
-        else:
-            cur.execute(
-                f"INSERT INTO hydration_log (date, amount_ml) VALUES ({ph},{ph})",
-                (date, amount_ml))
+            cols.append("logged_at")
+            vals.append(logged_at)
+        if meal_id is not None:
+            cols.append("meal_id")
+            vals.append(meal_id)
+        placeholders = ",".join([ph] * len(vals))
+        cur.execute(
+            f"INSERT INTO hydration_log ({','.join(cols)}) VALUES ({placeholders})",
+            tuple(vals))
+
+
+def get_hydration_for_meal(meal_id: int) -> int:
+    """Total water (ml) explicitly linked to `meal_id`. 0 if none."""
+    if meal_id is None:
+        return 0
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT COALESCE(SUM(amount_ml), 0) AS total FROM hydration_log "
+            f"WHERE meal_id = {ph}", (meal_id,))
+        row = cur.fetchone()
+        return int(row["total"]) if row and row["total"] is not None else 0
 
 
 def get_hydration_total(date: str) -> int:
@@ -1242,7 +1266,13 @@ def _ensure_meals_table():
     if USE_POSTGRES:
         stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
     with get_db() as conn:
-        conn.cursor().execute(stmt)
+        cur = conn.cursor()
+        cur.execute(stmt)
+        # `source` records HOW the food was entered (barcode/search/favorite…);
+        # `food_source` records WHICH database the macros came from (usda /
+        # usda_branded / restaurant / open_food_facts / manual) so the row can
+        # show a provenance badge. Added idempotently for existing DBs.
+        _add_column(cur, "meals", "food_source", "TEXT")
     _MEALS_READY = True
 
 
@@ -1263,10 +1293,12 @@ def get_meal(meal_id):
 
 
 def log_meal(date, food_name, protein, carbs, fat, time=None, calories=None,
-             barcode=None, source="manual", notes=None):
+             barcode=None, source="manual", notes=None, food_source=None):
     """Insert one logged food item. `calories` is derived from the macros when
-    not supplied. Returns (row_dict, None) on success or (None, error_str) on a
-    validation failure (bad source, negative macro, blank name)."""
+    not supplied. `food_source` is the provenance of the macros (which food
+    database they came from); it is free-form and optional. Returns (row_dict,
+    None) on success or (None, error_str) on a validation failure (bad source,
+    negative macro, blank name)."""
     _ensure_meals_table()
     if source not in MEAL_SOURCES:
         return (None, f"source must be one of {', '.join(MEAL_SOURCES)}")
@@ -1288,10 +1320,10 @@ def log_meal(date, food_name, protein, carbs, fat, time=None, calories=None,
         cur = conn.cursor()
         cur.execute(
             f"INSERT INTO meals (date, time, food_name, protein, carbs, fat, "
-            f"calories, barcode, source, notes) "
-            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+            f"calories, barcode, source, notes, food_source) "
+            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
             (date, time, food_name.strip(), protein, carbs, fat, calories,
-             barcode, source, notes))
+             barcode, source, notes, food_source))
         if USE_POSTGRES:
             cur.execute("SELECT lastval() AS id")
         else:
@@ -1370,7 +1402,8 @@ def get_nutrition_history(days: int = 14) -> list:
 # Sources a meal may be logged under. The original card allowed only barcode/manual;
 # the hub adds search (picked from USDA/OFF/previous) and quick-add (macros typed
 # straight in). Kept here so database + endpoint validation share one source list.
-MEAL_SOURCES = ("barcode", "manual", "search", "quick-add", "template", "favorite")
+MEAL_SOURCES = ("barcode", "manual", "search", "quick-add", "template", "favorite",
+                "meal-prep", "restaurant")
 
 # Daily macro defaults surfaced until the user sets their own goals.
 DEFAULT_NUTRITION_GOALS = {
@@ -1852,6 +1885,400 @@ def log_favorite_food(food_name, date, time=None) -> tuple:
     return log_meal(
         date, match["food_name"], match["protein"], match["carbs"], match["fat"],
         time=time, calories=match["calories"], source="favorite")
+
+
+# ── Restaurant / chain food database (nutrition expansion v2) ────────────────────
+# A local table of chain/restaurant menu items, searched alongside USDA. Left
+# UNSEEDED in this pass by design — the search path (nutrition.search_foods) reads
+# it, and curated seed rows can be added later (or via add_restaurant_item) without
+# fabricating macros. `restaurants` groups items by brand for future filtering.
+
+_RESTAURANTS_READY = False
+
+RESTAURANT_CATEGORIES = ("fast_food", "casual", "chain")
+
+
+def _ensure_restaurants_tables():
+    global _RESTAURANTS_READY
+    if _RESTAURANTS_READY:
+        return
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS restaurants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category TEXT,
+            country TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS restaurant_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            restaurant_id INTEGER REFERENCES restaurants(id),
+            item_name TEXT NOT NULL,
+            kcal REAL,
+            protein REAL,
+            carbs REAL,
+            fat REAL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+    ]
+    with get_db() as conn:
+        cur = conn.cursor()
+        for stmt in stmts:
+            if USE_POSTGRES:
+                stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+            cur.execute(stmt)
+    _RESTAURANTS_READY = True
+
+
+def add_restaurant(name, category=None, country=None) -> int:
+    """Insert (or reuse) a restaurant by name, returning its id. Category is
+    validated against RESTAURANT_CATEGORIES (ignored if unknown)."""
+    _ensure_restaurants_tables()
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("restaurant name is required")
+    if category not in RESTAURANT_CATEGORIES:
+        category = None
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT id FROM restaurants WHERE LOWER(name) = LOWER({ph})", (name,))
+        row = cur.fetchone()
+        if row:
+            return int(row["id"])
+        cur.execute(
+            f"INSERT INTO restaurants (name, category, country) VALUES ({ph},{ph},{ph})",
+            (name, category, country))
+        cur.execute("SELECT lastval() AS id" if USE_POSTGRES
+                    else "SELECT last_insert_rowid() AS id")
+        return int(cur.fetchone()["id"])
+
+
+def add_restaurant_item(restaurant_id, item_name, kcal, protein, carbs, fat,
+                        notes=None) -> int:
+    """Insert one menu item under a restaurant. Returns the new item id."""
+    _ensure_restaurants_tables()
+    item_name = (item_name or "").strip()
+    if not item_name:
+        raise ValueError("item_name is required")
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO restaurant_items "
+            f"(restaurant_id, item_name, kcal, protein, carbs, fat, notes) "
+            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+            (restaurant_id, item_name, kcal, protein, carbs, fat, notes))
+        cur.execute("SELECT lastval() AS id" if USE_POSTGRES
+                    else "SELECT last_insert_rowid() AS id")
+        return int(cur.fetchone()["id"])
+
+
+def search_restaurant_items(query: str, limit: int = 10) -> list:
+    """Search the local restaurant_items table by item name OR restaurant name.
+    Returns absolute-per-serving foods shaped like the search API expects:
+    [{food_name, protein, carbs, fat, kcal, source, food_source, restaurant}].
+    Empty until the table is seeded — the search path just skips a no-hit tier."""
+    _ensure_restaurants_tables()
+    q = (query or "").strip()
+    if len(q) < 2:
+        return []
+    limit = max(1, min(25, int(limit)))
+    like = f"%{q.lower()}%"
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT ri.item_name, ri.kcal, ri.protein, ri.carbs, ri.fat, "
+            f"ri.notes, r.name AS restaurant "
+            f"FROM restaurant_items ri "
+            f"LEFT JOIN restaurants r ON r.id = ri.restaurant_id "
+            f"WHERE LOWER(ri.item_name) LIKE {ph} OR LOWER(COALESCE(r.name,'')) LIKE {ph} "
+            f"ORDER BY ri.item_name ASC LIMIT {ph}",
+            (like, like, limit))
+        rows = cur.fetchall()
+    out = []
+    for r in rows:
+        name = r["item_name"]
+        if r["restaurant"] and r["restaurant"].lower() not in name.lower():
+            name = f"{r['restaurant']} {name}"
+        out.append({
+            "food_name": name,
+            "protein": round(float(r["protein"] or 0), 1),
+            "carbs": round(float(r["carbs"] or 0), 1),
+            "fat": round(float(r["fat"] or 0), 1),
+            "kcal": round(float(r["kcal"] or 0), 1),
+            # Restaurant items are absolute per-serving (not per-100g); the UI
+            # logs them as-is rather than scaling by grams.
+            "per_serving": True,
+            "source": "restaurant",
+            "food_source": "restaurant",
+            "restaurant": r["restaurant"],
+        })
+    return out
+
+
+# ── Meal prep mode (nutrition expansion v2) ──────────────────────────────────────
+# Log a batch cook once (ingredients → totals + portion count), then "use" a
+# portion on any later day. Logging usage auto-adds a meal for that day with the
+# per-portion macros (source="meal-prep") so daily totals stay honest without
+# re-entering the food. Remaining portions = portions - Σ usage.portions_consumed.
+
+_MEAL_PREP_READY = False
+
+
+def _ensure_meal_prep_tables():
+    global _MEAL_PREP_READY
+    if _MEAL_PREP_READY:
+        return
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS meal_preps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            date_prepared TEXT,
+            total_kcal REAL,
+            total_protein REAL,
+            total_carbs REAL,
+            total_fat REAL,
+            portions INTEGER DEFAULT 1,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS meal_prep_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            meal_prep_id INTEGER REFERENCES meal_preps(id),
+            food_name TEXT,
+            amount REAL,
+            unit TEXT,
+            kcal REAL,
+            protein REAL,
+            carbs REAL,
+            fat REAL
+        )""",
+        """CREATE TABLE IF NOT EXISTS meal_prep_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            meal_prep_id INTEGER REFERENCES meal_preps(id),
+            date TEXT,
+            portions_consumed INTEGER DEFAULT 1,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+    ]
+    with get_db() as conn:
+        cur = conn.cursor()
+        for stmt in stmts:
+            if USE_POSTGRES:
+                stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+            cur.execute(stmt)
+    _MEAL_PREP_READY = True
+
+
+def _prep_per_portion(prep: dict) -> dict:
+    """Per-portion macros for a prep row (total ÷ portions, floor 1 portion)."""
+    portions = max(1, int(prep.get("portions") or 1))
+    return {
+        "kcal": round(float(prep.get("total_kcal") or 0) / portions, 1),
+        "protein": round(float(prep.get("total_protein") or 0) / portions, 1),
+        "carbs": round(float(prep.get("total_carbs") or 0) / portions, 1),
+        "fat": round(float(prep.get("total_fat") or 0) / portions, 1),
+    }
+
+
+def create_meal_prep(name, items, portions=1, date_prepared=None, notes=None) -> tuple:
+    """Create a meal-prep batch from a list of ingredient dicts
+    ({food_name, amount, unit, kcal, protein, carbs, fat}). Totals are SUMMED
+    from the items. Returns (prep_dict, None) or (None, error_str)."""
+    _ensure_meal_prep_tables()
+    name = (name or "").strip()
+    if not name:
+        return (None, "name is required")
+    try:
+        portions = int(portions)
+    except (TypeError, ValueError):
+        return (None, "portions must be an integer")
+    if portions < 1:
+        return (None, "portions must be >= 1")
+    if not isinstance(items, list) or not items:
+        return (None, "at least one ingredient is required")
+
+    clean = []
+    totals = {"kcal": 0.0, "protein": 0.0, "carbs": 0.0, "fat": 0.0}
+    for it in items:
+        fname = (str(it.get("food_name") or "")).strip()
+        if not fname:
+            continue
+        row = {
+            "food_name": fname,
+            "amount": _safe_float(it.get("amount")),
+            "unit": (str(it.get("unit") or "")).strip() or None,
+            "kcal": _safe_float(it.get("kcal")) or 0.0,
+            "protein": _safe_float(it.get("protein")) or 0.0,
+            "carbs": _safe_float(it.get("carbs")) or 0.0,
+            "fat": _safe_float(it.get("fat")) or 0.0,
+        }
+        # kcal falls back to Atwater when the caller omits it.
+        if not row["kcal"]:
+            row["kcal"] = compute_calories(row["protein"], row["carbs"], row["fat"])
+        for k in totals:
+            totals[k] += row[k]
+        clean.append(row)
+    if not clean:
+        return (None, "no valid ingredients")
+
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO meal_preps "
+            f"(name, date_prepared, total_kcal, total_protein, total_carbs, "
+            f"total_fat, portions, notes) "
+            f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+            (name, date_prepared, round(totals["kcal"], 1),
+             round(totals["protein"], 1), round(totals["carbs"], 1),
+             round(totals["fat"], 1), portions, notes))
+        cur.execute("SELECT lastval() AS id" if USE_POSTGRES
+                    else "SELECT last_insert_rowid() AS id")
+        prep_id = int(cur.fetchone()["id"])
+        for row in clean:
+            cur.execute(
+                f"INSERT INTO meal_prep_items "
+                f"(meal_prep_id, food_name, amount, unit, kcal, protein, carbs, fat) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+                (prep_id, row["food_name"], row["amount"], row["unit"],
+                 round(row["kcal"], 1), round(row["protein"], 1),
+                 round(row["carbs"], 1), round(row["fat"], 1)))
+    return (get_meal_prep(prep_id), None)
+
+
+def get_meal_prep(prep_id) -> dict:
+    """One prep with its items, per-portion macros, and remaining portions, or
+    None if it doesn't exist."""
+    _ensure_meal_prep_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM meal_preps WHERE id = {ph}", (prep_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        prep = dict(row)
+        cur.execute(
+            f"SELECT * FROM meal_prep_items WHERE meal_prep_id = {ph} ORDER BY id ASC",
+            (prep_id,))
+        items = [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            f"SELECT COALESCE(SUM(portions_consumed),0) AS used "
+            f"FROM meal_prep_usage WHERE meal_prep_id = {ph}", (prep_id,))
+        used = int(cur.fetchone()["used"] or 0)
+    portions = max(1, int(prep.get("portions") or 1))
+    prep["items"] = items
+    prep["item_count"] = len(items)
+    prep["per_portion"] = _prep_per_portion(prep)
+    prep["portions_used"] = used
+    prep["portions_remaining"] = portions - used
+    return prep
+
+
+def get_meal_preps(include_spent=True) -> list:
+    """All preps, newest first, each with per-portion macros + remaining count.
+    With include_spent=False, drops preps whose portions are fully consumed."""
+    _ensure_meal_prep_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM meal_preps ORDER BY id DESC")
+        ids = [r["id"] for r in cur.fetchall()]
+    out = [get_meal_prep(i) for i in ids]
+    out = [p for p in out if p]
+    if not include_spent:
+        out = [p for p in out if p["portions_remaining"] > 0]
+    return out
+
+
+def log_meal_prep_usage(prep_id, date, portions_consumed=1, notes=None) -> tuple:
+    """Record consuming `portions_consumed` portions of a prep on `date`, and
+    auto-add a matching meal (per-portion macros × portions, source="meal-prep")
+    so daily totals reflect it. Returns (result_dict, None) or (None, error_str).
+    Does not hard-block over-consumption but reports remaining (can go negative)."""
+    _ensure_meal_prep_tables()
+    prep = get_meal_prep(prep_id)
+    if not prep:
+        return (None, "meal prep not found")
+    try:
+        portions_consumed = int(portions_consumed)
+    except (TypeError, ValueError):
+        return (None, "portions_consumed must be an integer")
+    if portions_consumed < 1:
+        return (None, "portions_consumed must be >= 1")
+
+    per = prep["per_portion"]
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO meal_prep_usage "
+            f"(meal_prep_id, date, portions_consumed, notes) "
+            f"VALUES ({ph},{ph},{ph},{ph})",
+            (prep_id, date, portions_consumed, notes))
+    # Auto-log a meal for the day with the consumed macros.
+    meal, err = log_meal(
+        date, prep["name"],
+        round(per["protein"] * portions_consumed, 1),
+        round(per["carbs"] * portions_consumed, 1),
+        round(per["fat"] * portions_consumed, 1),
+        calories=round(per["kcal"] * portions_consumed, 1),
+        source="meal-prep", food_source="meal_prep",
+        notes=f"{portions_consumed} portion(s) of meal prep")
+    if err:
+        return (None, err)
+    return ({
+        "meal": meal,
+        "portions_consumed": portions_consumed,
+        "prep": get_meal_prep(prep_id),
+        "updated_totals": get_daily_macros(date),
+    }, None)
+
+
+def delete_meal_prep(prep_id) -> bool:
+    """Delete a prep and its items + usage rows. Returns True if it existed.
+    Does NOT delete meals already auto-logged from past usage (those are real
+    consumed food and stay in the daily record)."""
+    _ensure_meal_prep_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT id FROM meal_preps WHERE id = {ph}", (prep_id,))
+        if not cur.fetchone():
+            return False
+        cur.execute(f"DELETE FROM meal_prep_items WHERE meal_prep_id = {ph}", (prep_id,))
+        cur.execute(f"DELETE FROM meal_prep_usage WHERE meal_prep_id = {ph}", (prep_id,))
+        cur.execute(f"DELETE FROM meal_preps WHERE id = {ph}", (prep_id,))
+    return True
+
+
+def add_manual_favorite(food_name, protein, carbs, fat, date=None, calories=None) -> tuple:
+    """Log a food the user typed in as a favorite (source="favorite") so it
+    immediately joins the aggregate favorites list. Thin wrapper over log_meal
+    that just fixes the source. Returns (meal_dict, None) or (None, error_str)."""
+    return log_meal(
+        date or _server_today(), food_name, protein, carbs, fat,
+        calories=calories, source="favorite", food_source="manual")
+
+
+def _safe_float(value):
+    """Float or None (rejects bools/blanks). Local mirror of the app-layer helper
+    so DB functions don't depend on the route module."""
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _server_today() -> str:
+    from datetime import datetime as _dt
+    return _dt.now().strftime("%Y-%m-%d")
 
 
 # ── Insights (rule-based, honest, no AI call) ────────────────────────────────────

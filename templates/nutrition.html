@@ -193,11 +193,64 @@
       </div>
     </section>
 
+    <!-- ── MEAL PREP: batch cooks → one-tap portion logging ─────────────── -->
+    <section class="card sci-fi-panel nh-prep-panel">
+      <div class="card-head">
+        <h2 data-decode>Meal Prep</h2>
+        <button type="button" class="btn btn-ghost" id="nh-prep-new">+ new prep</button>
+      </div>
+      <div class="nh-preps" id="nh-preps"></div>
+      <div class="nutri-empty" id="nh-prep-empty">No active meal preps.</div>
+    </section>
+
     <!-- ── INSIGHTS (rule-based, honest) ─────────────────────────────────── -->
     <section class="card sci-fi-panel nh-insights-panel">
       <div class="hud-label nh-section-label">INSIGHTS</div>
       <ul class="nh-insights" id="nh-insights"></ul>
     </section>
+  </div>
+
+  <!-- ── Water-with-meal prompt ─────────────────────────────────────────── -->
+  <div class="nh-modal-overlay" id="nh-water-modal" aria-hidden="true">
+    <div class="nh-modal" role="dialog" aria-modal="true" aria-labelledby="nh-water-title">
+      <button type="button" class="nh-modal-close" id="nh-water-close" aria-label="Close">×</button>
+      <div class="nh-modal-title" id="nh-water-title">Water with this meal</div>
+      <div class="nh-modal-sub" id="nh-water-sub">Tap to log water linked to this meal.</div>
+      <div class="nh-water-choices">
+        <button type="button" class="btn btn-ghost nh-water-amt" data-ml="250">250 ml</button>
+        <button type="button" class="btn btn-ghost nh-water-amt" data-ml="500">500 ml</button>
+        <button type="button" class="btn btn-ghost nh-water-amt" data-ml="1000">1 L</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── New meal-prep modal (name + portions + ingredient rows) ────────── -->
+  <div class="nh-modal-overlay" id="nh-prep-modal" aria-hidden="true">
+    <div class="nh-modal" role="dialog" aria-modal="true" aria-labelledby="nh-prep-title">
+      <button type="button" class="nh-modal-close" id="nh-prep-close" aria-label="Close">×</button>
+      <div class="nh-modal-title" id="nh-prep-title">New meal prep</div>
+      <div class="nh-modal-sub">Log a batch cook once, then log portions on any day.</div>
+      <input type="text" class="nutri-input" id="nh-prep-name" maxlength="80" placeholder="NAME (e.g. Chicken rice batch)">
+      <label class="nh-goal-field"><span class="hud-label">PORTIONS</span><input type="number" class="nutri-input" id="nh-prep-portions" min="1" step="1" value="4"></label>
+      <div class="hud-label nh-section-label">INGREDIENTS</div>
+      <div class="nh-prep-items" id="nh-prep-items"></div>
+      <button type="button" class="btn btn-ghost" id="nh-prep-add-item">+ ingredient</button>
+      <div class="nh-prep-totals" id="nh-prep-totals"></div>
+      <button type="button" class="btn btn-grad" id="nh-prep-save">Save prep</button>
+      <div class="nutri-err" id="nh-prep-err" role="alert"></div>
+    </div>
+  </div>
+
+  <!-- ── Log-portion confirm ────────────────────────────────────────────── -->
+  <div class="nh-modal-overlay" id="nh-prep-use-modal" aria-hidden="true">
+    <div class="nh-modal" role="dialog" aria-modal="true" aria-labelledby="nh-prep-use-title">
+      <button type="button" class="nh-modal-close" id="nh-prep-use-close" aria-label="Close">×</button>
+      <div class="nh-modal-title" id="nh-prep-use-title">Log portions</div>
+      <div class="nh-modal-sub" id="nh-prep-use-sub">How many portions did you eat?</div>
+      <label class="nh-goal-field"><span class="hud-label">PORTIONS</span><input type="number" class="nutri-input" id="nh-prep-use-count" min="1" step="1" value="1"></label>
+      <button type="button" class="btn btn-grad" id="nh-prep-use-ok">Log to today</button>
+      <div class="nutri-err" id="nh-prep-use-err" role="alert"></div>
+    </div>
   </div>
 
   <!-- ── Copy-yesterday modal ───────────────────────────────────────────── -->
