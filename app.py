@@ -696,13 +696,20 @@ def api_nutrition_lookup_barcode():
 
 @app.route("/api/nutrition/search")
 def api_nutrition_search():
-    # Live whole-food text search via USDA FoodData Central. Returns up to 10
-    # foods with per-100g macros; fails soft to [] (never blanks the search UI).
+    # Text search across local restaurant_items (per-serving) + USDA whole-food +
+    # USDA Branded + Open Food Facts (per-100g). Returns up to 10 foods with a
+    # `source` tag for the provenance badge; fails soft to [] (never blanks the UI).
+    # Optional `category` filters the local restaurant tier (fast_food|casual|chain);
+    # it does not constrain the USDA/OFF tiers, which have no category concept.
     from services import nutrition
     q = (request.args.get("q") or "").strip()
     if len(q) < 2:
         return jsonify([])
-    return jsonify(nutrition.search_foods(q))
+    # Local restaurant/chain items first (curated, per-serving) when seeded.
+    local = db.search_restaurant_items(q)
+    remaining = max(0, 10 - len(local))
+    external = nutrition.search_foods(q, limit=remaining) if remaining else []
+    return jsonify(local + external)
 
 
 @app.route("/api/nutrition/convert")
@@ -770,11 +777,14 @@ def api_nutrition_log():
 
     barcode = (data.get("barcode") or "").strip() or None
     notes = data.get("notes") or None
+    # Provenance of the macros (which food DB): free-form, optional. Distinct
+    # from `source` (how the food was entered).
+    food_source = (data.get("food_source") or "").strip() or None
 
     meal, err = db.log_meal(
         date_str, food_name, macros["protein"], macros["carbs"], macros["fat"],
         time=time_str, calories=calories, barcode=barcode, source=source,
-        notes=notes)
+        notes=notes, food_source=food_source)
     if err:
         return jsonify({"error": err}), 400
     return jsonify({
@@ -821,9 +831,13 @@ def _meal_row(m):
         "fat": m.get("fat"),
         "calories": m.get("calories"),
         "source": m.get("source"),
+        # Provenance of the macros (which food DB) for the source badge.
+        "food_source": m.get("food_source"),
         # Serving note (e.g. "0.5 cup") when the food was logged via a household
         # measure — lets the row show how it was entered, not just the grams.
         "notes": m.get("notes"),
+        # Water (ml) explicitly linked to this meal, for the "💧 400ml" chip.
+        "water_ml": db.get_hydration_for_meal(m.get("id")),
     }
 
 
@@ -1052,13 +1066,11 @@ def api_nutrition_favorites():
     return jsonify(db.get_favorite_foods(limit))
 
 
-@app.route("/api/nutrition/log-favorite", methods=["POST"])
-def api_nutrition_log_favorite():
-    data = request.get_json(force=True) or {}
-    food_name = (data.get("food_name") or "").strip()
+def _log_favorite(food_name, date_str):
+    """Shared body for both log-favorite forms. Returns a Flask response."""
+    food_name = (food_name or "").strip()
     if not food_name:
         return jsonify({"error": "food_name is required"}), 400
-    date_str = (data.get("date") or "").strip() or _today()
     if not _valid_date(date_str):
         return jsonify({"error": "date must be YYYY-MM-DD"}), 400
     meal, err = db.log_favorite_food(food_name, date_str)
@@ -1068,6 +1080,159 @@ def api_nutrition_log_favorite():
         "ok": True,
         "meal": meal,
         "updated_totals": db.get_daily_macros(date_str),
+    })
+
+
+@app.route("/api/nutrition/log-favorite", methods=["POST"])
+def api_nutrition_log_favorite():
+    data = request.get_json(force=True) or {}
+    date_str = (data.get("date") or "").strip() or _today()
+    return _log_favorite(data.get("food_name"), date_str)
+
+
+@app.route("/api/nutrition/log-favorite/<path:food_name>", methods=["POST"])
+def api_nutrition_log_favorite_path(food_name):
+    """One-click favorite re-log by name in the path (the button form). Date is
+    today unless overridden in the JSON body."""
+    data = request.get_json(silent=True) or {}
+    date_str = (data.get("date") or "").strip() or _today()
+    return _log_favorite(food_name, date_str)
+
+
+@app.route("/api/nutrition/favorites/add-manual", methods=["POST"])
+def api_nutrition_favorites_add_manual():
+    """Add a favorite by typing its macros directly (no prior log history needed).
+    Logs it once as source='favorite' so it enters the aggregate favorites list
+    and its one-click re-log works immediately."""
+    data = request.get_json(force=True) or {}
+    food_name = (data.get("food_name") or "").strip()
+    if not food_name:
+        return jsonify({"error": "food_name is required"}), 400
+    macros = {}
+    for key in ("protein", "carbs", "fat"):
+        raw = data.get(key)
+        if isinstance(raw, bool):
+            return jsonify({"error": f"{key} must be a number >= 0"}), 400
+        try:
+            val = float(raw if raw not in (None, "") else 0)
+        except (TypeError, ValueError):
+            return jsonify({"error": f"{key} must be a number >= 0"}), 400
+        if val < 0:
+            return jsonify({"error": f"{key} must be a number >= 0"}), 400
+        macros[key] = val
+    calories = data.get("calories")
+    if calories is not None and calories != "":
+        try:
+            calories = float(calories)
+        except (TypeError, ValueError):
+            return jsonify({"error": "calories must be a number"}), 400
+    else:
+        calories = None
+    date_str = (data.get("date") or "").strip() or _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    meal, err = db.add_manual_favorite(
+        food_name, macros["protein"], macros["carbs"], macros["fat"],
+        date=date_str, calories=calories)
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({
+        "ok": True,
+        "meal": meal,
+        "favorites": db.get_favorite_foods(10),
+        "updated_totals": db.get_daily_macros(date_str),
+    })
+
+
+# ── Meal prep mode (nutrition expansion v2) ──────────────────────────────────────
+# Log a batch cook once, then "use" portions on later days; using a portion
+# auto-adds a meal for that day. All auth-gated + CSRF like the rest.
+
+@app.route("/api/nutrition/meal-prep/create", methods=["POST"])
+def api_meal_prep_create():
+    data = request.get_json(force=True) or {}
+    name = (data.get("name") or "").strip()
+    items = data.get("items")
+    if not isinstance(items, list) or not items:
+        return jsonify({"error": "items must be a non-empty list"}), 400
+    date_prepared = (data.get("date_prepared") or "").strip() or _today()
+    if not _valid_date(date_prepared):
+        return jsonify({"error": "date_prepared must be YYYY-MM-DD"}), 400
+    prep, err = db.create_meal_prep(
+        name, items, portions=data.get("portions", 1),
+        date_prepared=date_prepared, notes=data.get("notes"))
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({"ok": True, "meal_prep": prep})
+
+
+@app.route("/api/nutrition/meal-prep/list")
+def api_meal_prep_list():
+    # include_spent defaults false so the tab shows preps you can still eat.
+    include_spent = request.args.get("include_spent", "").lower() in ("1", "true", "yes")
+    return jsonify(db.get_meal_preps(include_spent=include_spent))
+
+
+@app.route("/api/nutrition/meal-prep/<int:prep_id>/log-usage", methods=["POST"])
+def api_meal_prep_log_usage(prep_id):
+    data = request.get_json(force=True) or {}
+    date_str = (data.get("date") or "").strip() or _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    result, err = db.log_meal_prep_usage(
+        prep_id, date_str, portions_consumed=data.get("portions_consumed", 1),
+        notes=data.get("notes"))
+    if err:
+        code = 404 if err == "meal prep not found" else 400
+        return jsonify({"error": err}), code
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/nutrition/meal-prep/<int:prep_id>", methods=["DELETE"])
+def api_meal_prep_delete(prep_id):
+    ok = db.delete_meal_prep(prep_id)
+    if not ok:
+        return jsonify({"error": "meal prep not found"}), 404
+    return jsonify({"ok": True})
+
+
+# ── Hydration linked to a meal (nutrition expansion v2) ──────────────────────────
+
+@app.route("/api/nutrition/log-water", methods=["POST"])
+def api_nutrition_log_water():
+    """Log water intake, optionally linked to a meal via `meal_id` so the meal
+    row can show '💧 400ml with this meal'. Mirrors /api/asfa/water-intake for the
+    habits gauge/score/streak so nothing drifts."""
+    data = request.get_json(force=True) or {}
+    try:
+        amount = int(data.get("amount", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "amount must be an integer (ml)"}), 400
+    if amount <= 0:
+        return jsonify({"error": "amount must be positive"}), 400
+    meal_id = data.get("meal_id")
+    date_str = _today()
+    if meal_id is not None:
+        try:
+            meal_id = int(meal_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "meal_id must be an integer"}), 400
+        meal = db.get_meal(meal_id)
+        if not meal:
+            return jsonify({"error": "meal not found"}), 404
+        # Attribute the water to the meal's day so a meal logged for a past date
+        # keeps its water on that date, not today.
+        date_str = meal.get("date") or date_str
+    now = datetime.now()
+    db.log_hydration(date_str, amount, now.isoformat(), meal_id=meal_id)
+    db.log_water(date_str, amount)  # keep habits gauge / score / briefing in sync
+    db.kv_set("last_water_ts", now.isoformat())
+    return jsonify({
+        "ok": True,
+        "amount": amount,
+        "meal_id": meal_id,
+        "meal_water_ml": db.get_hydration_for_meal(meal_id) if meal_id else 0,
+        "total_ml": db.get_hydration_total(date_str),
     })
 
 

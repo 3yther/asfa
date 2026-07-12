@@ -335,3 +335,56 @@
   .nutrition-screen .nh-ring-fill,
   .nutrition-screen .nh-wbar > i { transition: none; }
 }
+
+/* ── Provenance badge + meal-linked water (nutrition expansion v2) ──────────── */
+.nutrition-screen .nh-meal .nm-src {
+  margin-left: 6px; padding: 1px 5px; border-radius: 4px;
+  font: 600 8px var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-dim); border: 1px solid var(--line); vertical-align: middle;
+}
+.nutrition-screen .nh-meal .nm-water {
+  color: var(--cyan); font: 500 10px var(--mono); white-space: nowrap; margin-left: 4px;
+}
+.nutrition-screen .nh-water-btn {
+  background: none; border: none; cursor: pointer; padding: 0 2px;
+  font-size: 12px; line-height: 1; opacity: .6; transition: opacity .2s ease;
+}
+.nutrition-screen .nh-water-btn:hover { opacity: 1; }
+.nutrition-screen .nh-water-choices { display: flex; gap: 8px; margin-top: 12px; }
+.nutrition-screen .nh-water-choices .btn { flex: 1; }
+
+/* ── Search suggestion source badge already styled via .nh-sug-badge ────────── */
+
+/* ── Meal prep panel ───────────────────────────────────────────────────────── */
+.nutrition-screen .nh-preps { display: flex; flex-direction: column; gap: 10px; }
+.nutrition-screen .nh-prep {
+  padding: 10px 12px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.nutrition-screen .nh-prep-spent { opacity: .55; }
+.nutrition-screen .nh-prep-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+}
+.nutrition-screen .nh-prep-name { color: var(--text); font: 600 13px var(--mono); letter-spacing: .03em; }
+.nutrition-screen .nh-prep-remain { color: var(--cyan); font: 600 10px var(--mono); letter-spacing: .06em; white-space: nowrap; }
+.nutrition-screen .nh-prep-macros { color: var(--text-dim); font: 500 11px var(--mono); letter-spacing: .02em; margin-top: 4px; }
+.nutrition-screen .nh-prep-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.nutrition-screen .nh-prep-actions .btn { flex: 1; }
+.nutrition-screen .nh-prep-actions .btn:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+
+/* Meal-prep create modal: ingredient rows + running totals */
+.nutrition-screen .nh-prep-items { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; }
+.nutrition-screen .nh-prep-item-row {
+  display: grid; grid-template-columns: 1fr 44px 44px 44px 56px 20px; gap: 5px; align-items: center;
+}
+.nutrition-screen .nh-prep-item-row .nutri-input { padding: 6px 6px; font-size: 11px; }
+.nutrition-screen .nh-prep-totals {
+  color: var(--cyan); font: 500 11px var(--mono); letter-spacing: .02em; min-height: 16px; margin: 6px 0;
+}
+.nutrition-screen .nh-prep-panel .card-head { display: flex; justify-content: space-between; align-items: center; }
+
+@media (max-width: 560px) {
+  .nutrition-screen .nh-prep-item-row {
+    grid-template-columns: 1fr 40px 40px 40px 50px 18px; gap: 4px;
+  }
+}

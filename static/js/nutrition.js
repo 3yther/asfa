@@ -24,6 +24,11 @@ async function apiPost(url, body) {
   if (!r.ok) throw new Error(r.status);
   return r.json();
 }
+async function apiDelete(url) {
+  const r = await fetch(url, { method: "DELETE", credentials: "include" });
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
 function esc(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -53,6 +58,9 @@ const NH = {
   templates: [],   // [{id, name, items, item_count, totals}]
   meals: [],       // this day's meal rows (for the save-as-template modal)
   charts: {},      // Chart.js instances, created once then updated (no leak)
+  preps: [],       // active meal preps [{id, name, portions_remaining, per_portion, ...}]
+  prepUseId: null, // meal-prep id pending a "log portions" confirm
+  waterMealId: null, // meal id pending a water-with-meal log
 };
 
 function nhToday() {
@@ -154,9 +162,20 @@ function nhRenderMeals(meals) {
         `data-nh-food="${esc(m.food_name)}" aria-label="Delete meal" title="Delete">🗑</button>`;
       // Show the serving note (e.g. "0.5 cup") beside the name when present.
       const serving = m.notes ? `<span class="nm-serving">${esc(m.notes)}</span>` : "";
+      // Provenance badge (which food DB the macros came from).
+      const srcBadge = m.food_source
+        ? `<span class="nm-src">${esc((NH_SOURCE_BADGE[m.food_source] || m.food_source).toString())}</span>`
+        : "";
+      // Water linked to this meal: show the total when present, and always offer
+      // a one-tap "add water with this meal" prompt.
+      const water = Number(m.water_ml) > 0
+        ? `<span class="nm-water" title="Water with this meal">💧 ${Math.round(m.water_ml)}ml</span>`
+        : "";
+      const waterBtn = `<button type="button" class="nh-water-btn" data-nh-water="${m.id}" ` +
+        `aria-label="Add water with this meal" title="Water with this meal">💧+</button>`;
       html += `<div class="nh-meal">` +
-        `<span class="nm-name">${esc(m.food_name)}${serving}</span>` +
-        `<span class="nm-macros">${esc(macros)}</span>${undo}${del}</div>`;
+        `<span class="nm-name">${esc(m.food_name)}${serving}${srcBadge}</span>` +
+        `<span class="nm-macros">${esc(macros)}</span>${water}${waterBtn}${undo}${del}</div>`;
     });
     html += `</div>`;
   });
@@ -192,7 +211,7 @@ async function fetchNutritionHub() {
   if (!NH.date) NH.date = nhToday();
   const hour = new Date().getHours();
   const weekEnd = nhWeekEndSunday(NH.date);
-  const [goals, day, prev, freq, trends7, trends30, score, favorites, templates, insights] =
+  const [goals, day, prev, freq, trends7, trends30, score, favorites, templates, insights, preps] =
     await Promise.allSettled([
       apiGet("/api/nutrition/goals"),
       apiGet(`/api/nutrition/date/${NH.date}`),
@@ -204,6 +223,7 @@ async function fetchNutritionHub() {
       apiGet("/api/nutrition/favorites?limit=6"),
       apiGet("/api/nutrition/templates"),
       apiGet("/api/nutrition/insights"),
+      apiGet("/api/nutrition/meal-prep/list"),
     ]);
 
   if (goals.status === "fulfilled") NH.goals = goals.value;
@@ -229,6 +249,7 @@ async function fetchNutritionHub() {
   if (templates.status === "fulfilled") nhRenderTemplates(templates.value);
   if (insights.status === "fulfilled") nhRenderInsights(insights.value);
   else nhRenderInsights(null);
+  if (preps.status === "fulfilled") nhRenderPreps(preps.value);
 }
 
 // Single unified refresh so every day-derived widget moves together after a log,
@@ -404,6 +425,178 @@ function nhRenderInsights(lines) {
   wrap.innerHTML = list.map((s) => `<li>${esc(s)}</li>`).join("");
 }
 
+// ── Meal prep: batch cooks → one-tap portion logging ─────────────────────────
+function nhRenderPreps(preps) {
+  const wrap = document.getElementById("nh-preps");
+  const empty = document.getElementById("nh-prep-empty");
+  if (!wrap || !empty) return;
+  NH.preps = Array.isArray(preps) ? preps : [];
+  if (!NH.preps.length) { wrap.innerHTML = ""; empty.hidden = false; return; }
+  empty.hidden = true;
+  wrap.innerHTML = NH.preps.map((p) => {
+    const per = p.per_portion || {};
+    const macros = `${nhNum(per.protein)}P · ${nhNum(per.carbs)}C · ${nhNum(per.fat)}F · ` +
+      `${Math.round(per.kcal || 0)}kcal / portion`;
+    const remain = Number(p.portions_remaining);
+    const spent = remain <= 0;
+    return `<div class="nh-prep${spent ? " nh-prep-spent" : ""}">` +
+      `<div class="nh-prep-head"><span class="nh-prep-name">${esc(p.name)}</span>` +
+      `<span class="nh-prep-remain">${remain}/${p.portions} left</span></div>` +
+      `<div class="nh-prep-macros">${esc(macros)}</div>` +
+      `<div class="nh-prep-actions">` +
+      `<button type="button" class="btn btn-grad nh-prep-use" data-nh-prep-use="${p.id}" ` +
+      `data-name="${esc(p.name)}"${spent ? " disabled" : ""}>Log portion</button>` +
+      `<button type="button" class="nh-del" data-nh-prep-del="${p.id}" ` +
+      `aria-label="Delete meal prep" title="Delete prep">🗑</button></div></div>`;
+  }).join("");
+}
+
+function nhPrepAddItemRow(item) {
+  const wrap = document.getElementById("nh-prep-items");
+  if (!wrap) return;
+  const row = document.createElement("div");
+  row.className = "nh-prep-item-row";
+  const it = item || {};
+  row.innerHTML =
+    `<input type="text" class="nutri-input nh-pi-name" maxlength="80" placeholder="FOOD" value="${esc(it.food_name || "")}">` +
+    `<input type="number" class="nutri-input nh-pi-p" min="0" step="0.1" placeholder="P" value="${it.protein ?? ""}">` +
+    `<input type="number" class="nutri-input nh-pi-c" min="0" step="0.1" placeholder="C" value="${it.carbs ?? ""}">` +
+    `<input type="number" class="nutri-input nh-pi-f" min="0" step="0.1" placeholder="F" value="${it.fat ?? ""}">` +
+    `<input type="number" class="nutri-input nh-pi-k" min="0" step="1" placeholder="KCAL" value="${it.kcal ?? ""}">` +
+    `<button type="button" class="nh-del nh-pi-rm" aria-label="Remove ingredient">×</button>`;
+  row.querySelector(".nh-pi-rm").addEventListener("click", () => { row.remove(); nhPrepUpdateTotals(); });
+  row.querySelectorAll("input").forEach((i) => i.addEventListener("input", nhPrepUpdateTotals));
+  wrap.appendChild(row);
+}
+
+function nhCollectPrepItems() {
+  const rows = Array.from(document.querySelectorAll("#nh-prep-items .nh-prep-item-row"));
+  const items = [];
+  rows.forEach((row) => {
+    const name = row.querySelector(".nh-pi-name")?.value.trim();
+    if (!name) return;
+    const num = (sel) => { const v = parseFloat(row.querySelector(sel)?.value); return isNaN(v) ? 0 : v; };
+    items.push({ food_name: name, protein: num(".nh-pi-p"), carbs: num(".nh-pi-c"),
+      fat: num(".nh-pi-f"), kcal: num(".nh-pi-k") });
+  });
+  return items;
+}
+
+function nhPrepUpdateTotals() {
+  const el = document.getElementById("nh-prep-totals");
+  if (!el) return;
+  const items = nhCollectPrepItems();
+  const t = items.reduce((a, i) => ({
+    p: a.p + i.protein, c: a.c + i.carbs, f: a.f + i.fat,
+    k: a.k + (i.kcal || (i.protein * 4 + i.carbs * 4 + i.fat * 9)),
+  }), { p: 0, c: 0, f: 0, k: 0 });
+  const portions = Math.max(1, parseInt(document.getElementById("nh-prep-portions")?.value, 10) || 1);
+  el.innerHTML = items.length
+    ? `Total: <b>${Math.round(t.k)}</b> kcal · ${nhNum(t.p)}P · ${nhNum(t.c)}C · ${nhNum(t.f)}F` +
+      ` → <b>${Math.round(t.k / portions)}</b> kcal/portion`
+    : "";
+}
+
+function nhOpenPrepModal() {
+  const name = document.getElementById("nh-prep-name");
+  const portions = document.getElementById("nh-prep-portions");
+  const items = document.getElementById("nh-prep-items");
+  const err = document.getElementById("nh-prep-err");
+  if (name) name.value = "";
+  if (portions) portions.value = "4";
+  if (items) items.innerHTML = "";
+  if (err) err.textContent = "";
+  nhPrepAddItemRow();   // start with one blank ingredient row
+  nhPrepUpdateTotals();
+  nhModal("nh-prep-modal", true);
+}
+
+async function nhSavePrep() {
+  const err = document.getElementById("nh-prep-err");
+  const name = document.getElementById("nh-prep-name")?.value.trim();
+  const portions = parseInt(document.getElementById("nh-prep-portions")?.value, 10) || 1;
+  const items = nhCollectPrepItems();
+  if (err) err.textContent = "";
+  if (!name) { if (err) err.textContent = "Name is required."; return; }
+  if (!items.length) { if (err) err.textContent = "Add at least one ingredient."; return; }
+  const btn = document.getElementById("nh-prep-save");
+  if (btn) btn.disabled = true;
+  try {
+    await apiPost("/api/nutrition/meal-prep/create",
+      { name, portions, items, date_prepared: NH.date });
+    toast("MEAL PREP SAVED");
+    nhModal("nh-prep-modal", false);
+    await fetchNutritionHub();
+  } catch {
+    if (err) err.textContent = "Save failed — try again.";
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function nhOpenPrepUse(prepId, name) {
+  NH.prepUseId = prepId;
+  const sub = document.getElementById("nh-prep-use-sub");
+  const count = document.getElementById("nh-prep-use-count");
+  const err = document.getElementById("nh-prep-use-err");
+  if (sub) sub.textContent = `How many portions of “${name}” did you eat?`;
+  if (count) count.value = "1";
+  if (err) err.textContent = "";
+  nhModal("nh-prep-use-modal", true);
+}
+
+async function nhDoPrepUse() {
+  if (NH.prepUseId == null) return;
+  const err = document.getElementById("nh-prep-use-err");
+  const n = Math.max(1, parseInt(document.getElementById("nh-prep-use-count")?.value, 10) || 1);
+  const btn = document.getElementById("nh-prep-use-ok");
+  if (btn) btn.disabled = true;
+  try {
+    await apiPost(`/api/nutrition/meal-prep/${NH.prepUseId}/log-usage`,
+      { portions_consumed: n, date: NH.date });
+    toast(`LOGGED ${n} PORTION${n > 1 ? "S" : ""}`);
+    NH.prepUseId = null;
+    nhModal("nh-prep-use-modal", false);
+    await fetchNutritionHub();
+  } catch {
+    if (err) err.textContent = "Log failed — try again.";
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function nhDeletePrep(prepId) {
+  try {
+    await apiDelete(`/api/nutrition/meal-prep/${prepId}`);
+    toast("MEAL PREP DELETED");
+    await fetchNutritionHub();
+  } catch {
+    toast("DELETE FAILED");
+  }
+}
+
+// ── Water linked to a meal ───────────────────────────────────────────────────
+function nhOpenWater(mealId) {
+  NH.waterMealId = mealId;
+  const err = document.getElementById("nh-water-sub");
+  if (err) err.textContent = "Tap to log water linked to this meal.";
+  nhModal("nh-water-modal", true);
+}
+
+async function nhLogMealWater(ml) {
+  if (NH.waterMealId == null) return;
+  try {
+    await apiPost("/api/nutrition/log-water", { amount: ml, meal_id: NH.waterMealId });
+    toast(`+${ml}ml WITH MEAL`);
+    NH.waterMealId = null;
+    nhModal("nh-water-modal", false);
+    await fetchNutritionHub();
+  } catch {
+    const sub = document.getElementById("nh-water-sub");
+    if (sub) sub.textContent = "Log failed — try again.";
+  }
+}
+
 // Navigate the whole page to a specific date (week-strip column click).
 function goToDate(dateStr) {
   if (!dateStr || dateStr === NH.date) return;
@@ -556,14 +749,19 @@ function nhPaintSuggest(items) {
   if (input) input.setAttribute("aria-expanded", "true");
 }
 
-// Short badge label per search source (USDA → OFF fallback). Unknown/missing
-// source defaults to USDA since that's the primary provider.
-const NH_SOURCE_BADGE = { usda: "USDA", open_food_facts: "OFF" };
+// Short badge label per search source. Unknown/missing source defaults to USDA
+// (the primary provider). Restaurant = local curated chain items; BRANDED =
+// USDA branded/label data; OFF = Open Food Facts fallback.
+const NH_SOURCE_BADGE = {
+  usda: "USDA", usda_branded: "BRANDED", restaurant: "CHAIN",
+  open_food_facts: "OFF",
+};
 
-// Merge live search hits (per-100g) after the instant local suggestions,
-// deduping by name so a food already in the user's history isn't repeated.
-// Results may come from USDA or the Open Food Facts fallback; the badge reflects
-// whichever source returned them.
+// Merge live search hits after the instant local suggestions, deduping by name
+// so a food already in the user's history isn't repeated. Two shapes: USDA/OFF
+// items are per-100g (mode="per100", scaled by grams); restaurant items are
+// absolute per-serving (mode="serving", logged as-is). Each carries `food_source`
+// so the logged meal records where its macros came from.
 function nhMergeUsda(local, usda) {
   const seen = new Set(local.map((it) => it.food_name.toLowerCase()));
   const out = local.slice();
@@ -571,16 +769,19 @@ function nhMergeUsda(local, usda) {
     const name = (u.food_name || "").trim();
     if (!name || seen.has(name.toLowerCase())) return;
     seen.add(name.toLowerCase());
+    const perServing = u.per_serving === true;
     out.push({
       food_name: name,
-      protein: Number(u.protein_per_100g) || 0,
-      carbs: Number(u.carbs_per_100g) || 0,
-      fat: Number(u.fat_per_100g) || 0,
+      protein: Number(perServing ? u.protein : u.protein_per_100g) || 0,
+      carbs: Number(perServing ? u.carbs : u.carbs_per_100g) || 0,
+      fat: Number(perServing ? u.fat : u.fat_per_100g) || 0,
       // USDA household portions (Survey/FNDDS foods) — exact gram weights we
       // surface first in the unit dropdown, ahead of the density-table fallback.
       portions: Array.isArray(u.portions) ? u.portions : [],
       badge: NH_SOURCE_BADGE[u.source] || "USDA",
-      mode: "per100",
+      food_source: u.food_source || u.source || null,
+      // Restaurant items are already one serving; per-100g foods scale by grams.
+      mode: perServing ? "serving" : "per100",
     });
   });
   return out.slice(0, 12);
@@ -667,6 +868,7 @@ function nhShowPicked(food, mode) {
     carbs: Number(food.carbs) || 0,
     fat: Number(food.fat) || 0,
     portions: Array.isArray(food.portions) ? food.portions : [],
+    food_source: food.food_source || null,
     mode: mode || "serving",
   };
   NH.grams = null;            // resolved grams for per100 mode
@@ -783,6 +985,7 @@ async function nhLogPicked() {
     carbs: r(NH.picked.carbs),
     fat: r(NH.picked.fat),
     source: "search",
+    food_source: NH.picked.food_source || undefined,
   };
   // Remember the household measure that produced these grams (e.g. "0.5 cup") in
   // the notes field. Grams-direct (unit=g) and serving mode carry nothing extra.
@@ -1119,12 +1322,43 @@ function wireNutritionHub() {
   // Undo + save-as-template (delegated on the meal list)
   const meals = document.getElementById("nh-meals");
   if (meals) meals.addEventListener("click", (e) => {
+    const water = e.target.closest("[data-nh-water]");
+    if (water) { nhOpenWater(Number(water.dataset.nhWater)); return; }
     const del = e.target.closest("[data-nh-del]");
     if (del) { nhConfirmDelete(del.dataset.nhDel, del.dataset.nhFood); return; }
     if (e.target.closest("[data-nh-undo]")) { nhUndo(); return; }
     const save = e.target.closest("[data-nh-save-tpl]");
     if (save) nhOpenTemplateModal(save.dataset.nhSaveTpl);
   });
+
+  // Meal prep: new-prep / add-ingredient / save / portions total / list actions
+  const prepNew = document.getElementById("nh-prep-new");
+  if (prepNew) prepNew.addEventListener("click", nhOpenPrepModal);
+  const prepAddItem = document.getElementById("nh-prep-add-item");
+  if (prepAddItem) prepAddItem.addEventListener("click", () => { nhPrepAddItemRow(); nhPrepUpdateTotals(); });
+  const prepSave = document.getElementById("nh-prep-save");
+  if (prepSave) prepSave.addEventListener("click", nhSavePrep);
+  const prepClose = document.getElementById("nh-prep-close");
+  if (prepClose) prepClose.addEventListener("click", () => nhModal("nh-prep-modal", false));
+  const prepPortions = document.getElementById("nh-prep-portions");
+  if (prepPortions) prepPortions.addEventListener("input", nhPrepUpdateTotals);
+  const preps = document.getElementById("nh-preps");
+  if (preps) preps.addEventListener("click", (e) => {
+    const use = e.target.closest("[data-nh-prep-use]");
+    if (use && !use.disabled) { nhOpenPrepUse(Number(use.dataset.nhPrepUse), use.dataset.name); return; }
+    const del = e.target.closest("[data-nh-prep-del]");
+    if (del) nhDeletePrep(Number(del.dataset.nhPrepDel));
+  });
+  const prepUseOk = document.getElementById("nh-prep-use-ok");
+  if (prepUseOk) prepUseOk.addEventListener("click", nhDoPrepUse);
+  const prepUseClose = document.getElementById("nh-prep-use-close");
+  if (prepUseClose) prepUseClose.addEventListener("click", () => { NH.prepUseId = null; nhModal("nh-prep-use-modal", false); });
+
+  // Water-with-meal prompt
+  const waterClose = document.getElementById("nh-water-close");
+  if (waterClose) waterClose.addEventListener("click", () => { NH.waterMealId = null; nhModal("nh-water-modal", false); });
+  document.querySelectorAll(".nh-water-amt").forEach((b) =>
+    b.addEventListener("click", () => nhLogMealWater(Number(b.dataset.ml))));
 
   // Quick actions
   const copyBtn = document.getElementById("nh-copy-yday");
@@ -1151,7 +1385,8 @@ function wireNutritionHub() {
   if (delClose) delClose.addEventListener("click", closeDel);
 
   // Click the dim backdrop to close any modal.
-  ["nh-copy-modal", "nh-goals-modal", "nh-template-modal", "nh-tpl-confirm-modal", "nh-del-modal"].forEach((id) => {
+  ["nh-copy-modal", "nh-goals-modal", "nh-template-modal", "nh-tpl-confirm-modal", "nh-del-modal",
+   "nh-prep-modal", "nh-prep-use-modal", "nh-water-modal"].forEach((id) => {
     const ov = document.getElementById(id);
     if (ov) ov.addEventListener("click", (e) => { if (e.target === ov) nhModal(id, false); });
   });

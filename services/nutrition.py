@@ -30,6 +30,10 @@ _HEADERS = {"User-Agent": "ASFA-Dashboard/1.0 (nutrition; ami.salax@gmail.com)"}
 # nutrients; branded/packaged goods are already covered by the barcode path.
 _FDC_URL = "https://api.nal.usda.gov/fdc/v1/foods/search"
 _FDC_DATA_TYPES = "Foundation,SR Legacy,Survey (FNDDS)"
+# Branded/label data (~1.7M items brands submit to USDA): packaged convenience
+# foods and some chain items. Searched as a fallback tier for the branded/
+# restaurant queries the whole-food types miss ("mcdouble", "clif bar").
+_FDC_BRANDED_DATA_TYPE = "Branded"
 # FDC nutrient numbers (stable across data types; ids are not).
 _N_PROTEIN, _N_FAT, _N_CARBS, _N_KCAL = "203", "204", "205", "208"
 # Cache search results for 24h so repeated "chicken" queries don't burn the
@@ -113,7 +117,7 @@ def _fdc_api_key() -> str:
     return (os.getenv("FDC_API_KEY") or "").strip() or "DEMO_KEY"
 
 
-def _parse_fdc_food(food: dict):
+def _parse_fdc_food(food: dict, source: str = "usda"):
     """Map one FDC search hit to our per-100g shape, or None if it has no macros.
 
     FDC reports search nutrients per 100g regardless of data type. Values are
@@ -147,6 +151,14 @@ def _parse_fdc_food(food: dict):
     # Title-case the SHOUTING data ("CHICKEN, BACK") into something readable.
     if name.isupper():
         name = name.title()
+    # Branded hits carry a brand — prefix it so "Mcdouble" reads as "McDonald's
+    # Mcdouble" and disambiguates identically-named store items.
+    if source == "usda_branded":
+        brand = (food.get("brandOwner") or food.get("brandName") or "").strip()
+        if brand and brand.lower() not in name.lower():
+            if brand.isupper():
+                brand = brand.title()
+            name = f"{brand} {name}"
     return {
         "food_name": name,
         "protein_per_100g": round(protein, 1),
@@ -156,7 +168,7 @@ def _parse_fdc_food(food: dict):
         # USDA household portions when present (Survey/FNDDS foods) — the UI
         # surfaces these as the most-accurate unit options for this food.
         "portions": _fdc_portions(food),
-        "source": "usda",
+        "source": source,
     }
 
 
@@ -310,15 +322,17 @@ def _fdc_portions(food: dict):
     return out
 
 
-def _search_fdc(q: str, limit: int):
-    """Query USDA FoodData Central. Returns a list of parsed per-100g foods
-    (possibly empty) when the API is reached, or None on a transient failure
-    (network / HTTP error / malformed JSON) so the caller can fall back and avoid
-    caching an outage as 'no results'."""
+def _search_fdc(q: str, limit: int, data_types: str = _FDC_DATA_TYPES,
+                source: str = "usda"):
+    """Query USDA FoodData Central for `data_types`. Returns a list of parsed
+    per-100g foods (possibly empty) when the API is reached, or None on a
+    transient failure (network / HTTP error / malformed JSON) so the caller can
+    fall back and avoid caching an outage as 'no results'. `source` labels each
+    hit ('usda' whole-food vs 'usda_branded')."""
     params = {
         "query": q,
         "pageSize": max(1, min(25, limit)),
-        "dataType": _FDC_DATA_TYPES,
+        "dataType": data_types,
         "api_key": _fdc_api_key(),
     }
     try:
@@ -329,12 +343,18 @@ def _search_fdc(q: str, limit: int):
         return None
     out = []
     for food in (data.get("foods") or []):
-        parsed = _parse_fdc_food(food)
+        parsed = _parse_fdc_food(food, source=source)
         if parsed:
             out.append(parsed)
         if len(out) >= limit:
             break
     return out
+
+
+def _search_fdc_branded(q: str, limit: int):
+    """Search only USDA Branded foods (packaged/convenience/chain label data)."""
+    return _search_fdc(q, limit, data_types=_FDC_BRANDED_DATA_TYPE,
+                       source="usda_branded")
 
 
 def _parse_off_food(item: dict):
@@ -401,16 +421,20 @@ def search_open_food_facts(q: str, limit: int = 10):
 
 
 def search_foods(query: str, limit: int = 10):
-    """Search whole foods matching `query`, USDA first then Open Food Facts.
+    """Search foods matching `query` across USDA whole-food, USDA Branded, and
+    Open Food Facts, in that fallback order.
 
     Returns up to `limit` foods as
     [{food_name, protein_per_100g, carbs_per_100g, fat_per_100g, kcal_per_100g,
-      portions, source}] ordered by the winning source's relevance. USDA (curated
-    whole-food data) is tried first; if it returns zero hits, Open Food Facts is
-    queried as a fallback for the regional/branded items USDA misses. Results are
-    cached for 24h. Transient failures (network/HTTP/JSON) are never cached, so an
-    outage retries next call instead of pinning [] for a day. The search UI never
-    blanks — a total miss still leaves previous foods / barcode / manual entry."""
+      portions, source}] ordered by the winning source's relevance. Curated
+    whole-food USDA is tried first (best for "chicken breast"); if it returns
+    zero hits, USDA Branded is queried (catches "clif bar", chain label data),
+    then Open Food Facts. Results are cached for 24h. Transient failures
+    (network/HTTP/JSON) are never cached, so an outage retries next call instead
+    of pinning [] for a day. The search UI never blanks — a total miss still
+    leaves previous foods / barcode / manual entry. Local restaurant_items are
+    merged ahead of these by the /api/nutrition/search route, not here (this
+    module stays DB-free)."""
     q = (query or "").strip()
     if len(q) < 2:
         return []
@@ -425,16 +449,22 @@ def search_foods(query: str, limit: int = 10):
         _search_cache[key] = (time.time(), usda)
         return usda[:limit]
 
+    logger.info("USDA whole-food returned no results for %r, trying USDA Branded", q)
+    branded = _search_fdc_branded(q, limit)
+    if branded:
+        _search_cache[key] = (time.time(), branded)
+        return branded[:limit]
+
     logger.info("USDA returned no results for %r, trying Open Food Facts", q)
     off = search_open_food_facts(q, limit)
     if off:
         _search_cache[key] = (time.time(), off)
         return off[:limit]
 
-    # Cache an empty result only when BOTH sources were actually reached (both
-    # returned a list, not None). A transient failure on either side must not be
+    # Cache an empty result only when ALL sources were actually reached (each
+    # returned a list, not None). A transient failure on any side must not be
     # remembered as "no such food" for 24h.
-    if usda is not None and off is not None:
-        logger.info("No results for %r from USDA or Open Food Facts", q)
+    if usda is not None and branded is not None and off is not None:
+        logger.info("No results for %r from USDA (whole/branded) or Open Food Facts", q)
         _search_cache[key] = (time.time(), [])
     return []
