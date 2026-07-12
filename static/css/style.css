@@ -371,6 +371,10 @@ body {
 #bodyweight-card { grid-column: span 4; }
 #pbs-card        { grid-column: span 4; }
 #reflection-card { grid-column: span 4; }
+/* Finance is the sole card on the money tab; it shipped with no span, so it
+   auto-placed at span 1 (~1/12) and rendered as a cramped strip. Match the
+   detail-card width so its 3-up readouts have room to breathe. */
+#finance-card    { grid-column: span 4; }
 #supplements-card { grid-column: span 12; }
 #goals-card      { grid-column: span 12; }
 #chat-card       { grid-column: span 12; }
@@ -871,7 +875,7 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
   #briefing-card, #score-card, #bots-card,
   #scout-card, #scout-pipeline-card, #calendar-card, #inbox-card, #news-card,
   #water-card, #sleep-card, #bodyweight-card,
-  #pbs-card, #reflection-card,
+  #pbs-card, #reflection-card, #finance-card,
   #goals-card, #chat-card, #supplements-card { grid-column: span 1; }
 
   .header { padding: 12px 16px; }
@@ -901,7 +905,7 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
   #bots-card  { grid-column: span 4; }
   #scout-card, #scout-pipeline-card, #calendar-card, #inbox-card { grid-column: span 2; }
   #water-card, #sleep-card, #bodyweight-card { grid-column: span 2; }
-  #pbs-card, #reflection-card { grid-column: span 2; }
+  #pbs-card, #reflection-card, #finance-card { grid-column: span 2; }
   #supplements-card { grid-column: span 6; }
   #chat-card { grid-column: span 6; }
 }
