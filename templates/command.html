@@ -97,6 +97,13 @@
   #finance-card .fin-row .fin-input { flex: 1; }
   #finance-card .fin-err { min-height: 15px; font: 500 11px var(--mono); letter-spacing: .06em; color: var(--red); }
   #finance-card .fin-err:empty { min-height: 0; }
+  #finance-card .fin-balances { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(140,170,200,.10); }
+  #finance-card .fin-bal-readouts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 8px 0 4px; }
+  #finance-card .fin-bal-readouts .readout-l { font-size: 20px; }
+  #finance-card .fin-bal-trend { font: 600 11px var(--mono); letter-spacing: .04em; color: var(--muted); margin-top: 2px; }
+  #finance-card .fin-bal-trend.up { color: var(--online); }
+  #finance-card .fin-bal-trend.down { color: var(--red); }
+  #finance-card select.fin-input { text-transform: uppercase; }
 </style>
 </head>
 <body class="nav-with-mission">
@@ -560,6 +567,44 @@
       </div>
       <button type="button" class="btn btn-ghost" id="fin-log-btn">Log</button>
       <div class="fin-err" id="fin-err" role="alert"></div>
+    </div>
+
+    <!-- 6. Account balances + net worth -->
+    <div class="fin-balances">
+      <div class="fin-section-label">BALANCES</div>
+      <div class="fin-bal-readouts" role="group" aria-label="Account balances">
+        <div class="fin-stat">
+          <div class="hud-label">CHECKING</div>
+          <div class="readout-l glow" id="bal-checking">£—</div>
+          <div class="fin-bal-trend" id="bal-checking-trend"></div>
+        </div>
+        <div class="fin-stat">
+          <div class="hud-label">SAVINGS</div>
+          <div class="readout-l glow" id="bal-savings">£—</div>
+          <div class="fin-bal-trend" id="bal-savings-trend"></div>
+        </div>
+        <div class="fin-stat">
+          <div class="hud-label">NET WORTH</div>
+          <div class="readout-l val-live glow" id="bal-networth">£—</div>
+          <div class="fin-bal-trend" id="bal-networth-trend"></div>
+        </div>
+      </div>
+      <div class="fin-log">
+        <div class="fin-section-label">LOG BALANCE</div>
+        <div class="fin-row">
+          <select class="fin-input" id="bal-type" aria-label="Account type">
+            <option value="checking">CHECKING</option>
+            <option value="savings">SAVINGS</option>
+          </select>
+          <input type="number" class="fin-input" id="bal-amount" step="0.01" min="0" placeholder="£ BALANCE">
+        </div>
+        <div class="fin-row">
+          <input type="date" class="fin-input" id="bal-date" aria-label="Balance date">
+          <input type="text" class="fin-input" id="bal-notes" maxlength="120" placeholder="NOTES (OPTIONAL)">
+        </div>
+        <button type="button" class="btn btn-ghost" id="bal-log-btn">Log Balance</button>
+        <div class="fin-err" id="bal-err" role="alert"></div>
+      </div>
     </div>
   </section>
 

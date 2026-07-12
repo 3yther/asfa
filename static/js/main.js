@@ -1192,9 +1192,71 @@ async function fetchFinance() {
     renderFinanceCategories(summary);
     renderFinanceTxns(recent);
   } catch { /* leave card visible with whatever placeholders are showing */ }
+  // Balances load independently so a balances failure never blanks spending.
+  fetchAccountBalances();
 }
 
 function refreshFinance() { fetchFinance(); }
+
+// ── Account balances (checking/savings + net worth trend) ───────────────────────
+function fmtTrend(n) {
+  const v = Number(n) || 0;
+  return `${v >= 0 ? "+" : "−"}${fmtMoney(Math.abs(v))} (30d)`;
+}
+
+function renderAccountBalances(summary) {
+  if (!summary) return;
+  const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = fmtMoney(v); };
+  const setTrend = (id, n, hasData) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const v = Number(n) || 0;
+    el.textContent = hasData === false ? "NO DATA" : fmtTrend(v);
+    el.classList.toggle("up", hasData !== false && v > 0);
+    el.classList.toggle("down", hasData !== false && v < 0);
+  };
+  const c = summary.checking || {}, s = summary.savings || {}, nw = summary.net_worth || {};
+  setVal("bal-checking", c.current); setTrend("bal-checking-trend", c.trend, c.has_data);
+  setVal("bal-savings", s.current); setTrend("bal-savings-trend", s.trend, s.has_data);
+  setVal("bal-networth", nw.current); setTrend("bal-networth-trend", nw.trend, true);
+}
+
+async function fetchAccountBalances() {
+  if (!document.getElementById("bal-networth")) return;
+  try { renderAccountBalances(await apiGet("/api/finance/accounts/summary")); }
+  catch { /* leave placeholders */ }
+}
+
+async function balanceLog() {
+  const err = document.getElementById("bal-err");
+  const setErr = (m) => { if (err) err.textContent = m || ""; };
+  setErr("");
+
+  const raw = document.getElementById("bal-amount")?.value;
+  const balance = parseFloat(raw);
+  if (raw == null || raw === "" || isNaN(balance) || balance < 0) {
+    setErr("ENTER A BALANCE (£0 OR MORE)"); return;
+  }
+  const account_type = document.getElementById("bal-type")?.value || "checking";
+  const date = document.getElementById("bal-date")?.value || financeLocalToday();
+  const notes = document.getElementById("bal-notes")?.value.trim() || undefined;
+
+  const payload = { account_type, balance, date };
+  if (notes) payload.notes = notes;
+
+  const btn = document.getElementById("bal-log-btn");
+  if (btn) btn.disabled = true;
+  try {
+    await apiPost("/api/finance/account-balance", payload);
+    toast(`${account_type.toUpperCase()} ${fmtMoney(balance)} LOGGED`);
+    ["bal-amount", "bal-notes"].forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });
+    fetchAccountBalances();
+  } catch (e) {
+    setErr(String(e.message) === "400" ? "COULDN'T LOG — CHECK BALANCE AND DATE" : "LOG FAILED — TRY AGAIN");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
 
 function wireFinance() {
   const card = document.getElementById("finance-card");
@@ -1209,6 +1271,12 @@ function wireFinance() {
 
   const logBtn = document.getElementById("fin-log-btn");
   if (logBtn) logBtn.addEventListener("click", financeLog);
+
+  // Account balances: default the date to today, wire the log button.
+  const balDate = document.getElementById("bal-date");
+  if (balDate && !balDate.value) balDate.value = financeLocalToday();
+  const balBtn = document.getElementById("bal-log-btn");
+  if (balBtn) balBtn.addEventListener("click", balanceLog);
 }
 
 async function financeLog() {
