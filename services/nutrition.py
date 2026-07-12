@@ -6,12 +6,18 @@ Text search comes from USDA FoodData Central (whole foods). Every network path
 fails soft (returns None / []) so a lookup miss or an outage just drops the user
 back to manual entry rather than blanking the UI.
 """
+import logging
 import os
 import time
 
 import requests
 
+logger = logging.getLogger(__name__)
+
 _OFF_URL = "https://world.openfoodfacts.org/api/v0/product/{code}.json"
+# Open Food Facts full-text product search (fallback for whole foods USDA misses:
+# regional/branded items). Keyless; same descriptive User-Agent policy applies.
+_OFF_SEARCH_URL = "https://world.openfoodfacts.org/cgi/search.pl"
 _TIMEOUT = 5
 # Open Food Facts blocks requests without a descriptive User-Agent (403), per
 # their API policy: identify the app + a contact.
@@ -150,6 +156,7 @@ def _parse_fdc_food(food: dict):
         # USDA household portions when present (Survey/FNDDS foods) — the UI
         # surfaces these as the most-accurate unit options for this food.
         "portions": _fdc_portions(food),
+        "source": "usda",
     }
 
 
@@ -303,23 +310,11 @@ def _fdc_portions(food: dict):
     return out
 
 
-def search_foods(query: str, limit: int = 10):
-    """Search USDA FoodData Central for whole foods matching `query`.
-
-    Returns up to `limit` foods as
-    [{food_name, protein_per_100g, carbs_per_100g, fat_per_100g, kcal_per_100g}]
-    ordered by USDA relevance. Results are cached for 24h per query. Any failure
-    (timeout, HTTP error, malformed JSON) returns [] so the search UI never
-    blanks — the user can still fall back to previous foods / barcode / manual."""
-    q = (query or "").strip()
-    if len(q) < 2:
-        return []
-
-    key = q.lower()
-    hit = _search_cache.get(key)
-    if hit and (time.time() - hit[0]) < _SEARCH_TTL:
-        return hit[1][:limit]
-
+def _search_fdc(q: str, limit: int):
+    """Query USDA FoodData Central. Returns a list of parsed per-100g foods
+    (possibly empty) when the API is reached, or None on a transient failure
+    (network / HTTP error / malformed JSON) so the caller can fall back and avoid
+    caching an outage as 'no results'."""
     params = {
         "query": q,
         "pageSize": max(1, min(25, limit)),
@@ -331,8 +326,7 @@ def search_foods(query: str, limit: int = 10):
         r.raise_for_status()
         data = r.json()
     except (requests.RequestException, ValueError):
-        return []
-
+        return None
     out = []
     for food in (data.get("foods") or []):
         parsed = _parse_fdc_food(food)
@@ -340,6 +334,107 @@ def search_foods(query: str, limit: int = 10):
             out.append(parsed)
         if len(out) >= limit:
             break
-
-    _search_cache[key] = (time.time(), out)
     return out
+
+
+def _parse_off_food(item: dict):
+    """Map one Open Food Facts search product to our per-100g shape, or None if
+    it has no name. OFF nutriment keys are per-100g with '-' separators and
+    values that may be strings or absent; kcal falls back to kJ→kcal then Atwater
+    so items carrying only kJ or only macros still surface."""
+    name = (item.get("product_name") or "").strip()
+    if not name:
+        return None
+    nutr = item.get("nutriments") or {}
+    protein = _num(nutr.get("proteins_100g")) or 0.0
+    carbs = _num(nutr.get("carbohydrates_100g")) or 0.0
+    fat = _num(nutr.get("fat_100g")) or 0.0
+    kcal = _num(nutr.get("energy-kcal_100g"))
+    if kcal is None:
+        kj = _num(nutr.get("energy_100g"))
+        kcal = round(kj / 4.184, 1) if kj is not None else round(
+            protein * 4 + carbs * 4 + fat * 9, 1)
+    if name.isupper():
+        name = name.title()
+    return {
+        "food_name": name,
+        "protein_per_100g": round(max(0.0, protein), 1),
+        "carbs_per_100g": round(max(0.0, carbs), 1),
+        "fat_per_100g": round(max(0.0, fat), 1),
+        "kcal_per_100g": round(max(0.0, kcal), 1),
+        # OFF search doesn't return household portions; UI falls back to its
+        # density/measure table. Kept for shape-parity with USDA results.
+        "portions": [],
+        "source": "open_food_facts",
+        "barcode": (item.get("code") or ""),
+    }
+
+
+def search_open_food_facts(q: str, limit: int = 10):
+    """Full-text search Open Food Facts for foods matching `q` (fallback for the
+    regional/branded items USDA misses). Returns a list of per-100g foods
+    (possibly empty) when reached, or None on a transient failure. Products with
+    no usable energy are skipped so the dropdown never shows blank macros."""
+    params = {
+        "search_terms": q,
+        "search_simple": 1,
+        "action": "process",
+        "json": 1,
+        "page_size": max(1, min(25, limit)),
+        "fields": "product_name,nutriments,code",
+    }
+    try:
+        r = requests.get(_OFF_SEARCH_URL, params=params, headers=_HEADERS,
+                         timeout=_TIMEOUT)
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, ValueError):
+        return None
+    out = []
+    for item in (data.get("products") or []):
+        parsed = _parse_off_food(item)
+        if parsed and parsed["kcal_per_100g"] > 0:
+            out.append(parsed)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def search_foods(query: str, limit: int = 10):
+    """Search whole foods matching `query`, USDA first then Open Food Facts.
+
+    Returns up to `limit` foods as
+    [{food_name, protein_per_100g, carbs_per_100g, fat_per_100g, kcal_per_100g,
+      portions, source}] ordered by the winning source's relevance. USDA (curated
+    whole-food data) is tried first; if it returns zero hits, Open Food Facts is
+    queried as a fallback for the regional/branded items USDA misses. Results are
+    cached for 24h. Transient failures (network/HTTP/JSON) are never cached, so an
+    outage retries next call instead of pinning [] for a day. The search UI never
+    blanks — a total miss still leaves previous foods / barcode / manual entry."""
+    q = (query or "").strip()
+    if len(q) < 2:
+        return []
+
+    key = q.lower()
+    hit = _search_cache.get(key)
+    if hit and (time.time() - hit[0]) < _SEARCH_TTL:
+        return hit[1][:limit]
+
+    usda = _search_fdc(q, limit)
+    if usda:
+        _search_cache[key] = (time.time(), usda)
+        return usda[:limit]
+
+    logger.info("USDA returned no results for %r, trying Open Food Facts", q)
+    off = search_open_food_facts(q, limit)
+    if off:
+        _search_cache[key] = (time.time(), off)
+        return off[:limit]
+
+    # Cache an empty result only when BOTH sources were actually reached (both
+    # returned a list, not None). A transient failure on either side must not be
+    # remembered as "no such food" for 24h.
+    if usda is not None and off is not None:
+        logger.info("No results for %r from USDA or Open Food Facts", q)
+        _search_cache[key] = (time.time(), [])
+    return []

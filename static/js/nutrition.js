@@ -556,8 +556,14 @@ function nhPaintSuggest(items) {
   if (input) input.setAttribute("aria-expanded", "true");
 }
 
-// Merge USDA search hits (per-100g) after the instant local suggestions,
+// Short badge label per search source (USDA → OFF fallback). Unknown/missing
+// source defaults to USDA since that's the primary provider.
+const NH_SOURCE_BADGE = { usda: "USDA", open_food_facts: "OFF" };
+
+// Merge live search hits (per-100g) after the instant local suggestions,
 // deduping by name so a food already in the user's history isn't repeated.
+// Results may come from USDA or the Open Food Facts fallback; the badge reflects
+// whichever source returned them.
 function nhMergeUsda(local, usda) {
   const seen = new Set(local.map((it) => it.food_name.toLowerCase()));
   const out = local.slice();
@@ -573,7 +579,7 @@ function nhMergeUsda(local, usda) {
       // USDA household portions (Survey/FNDDS foods) — exact gram weights we
       // surface first in the unit dropdown, ahead of the density-table fallback.
       portions: Array.isArray(u.portions) ? u.portions : [],
-      badge: "USDA",
+      badge: NH_SOURCE_BADGE[u.source] || "USDA",
       mode: "per100",
     });
   });
