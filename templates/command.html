@@ -67,9 +67,15 @@
   #sleep-card .sleep-bar.empty { background: rgba(140,170,200,.10); box-shadow: none; }
 
   /* Finance card (Tier 8) — dense telemetry. Design-system tokens only. */
-  #finance-card .fin-readouts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0 6px; }
-  #finance-card .fin-stat { text-align: center; }
-  #finance-card .fin-stat .readout-l { font-size: 26px; }
+  /* Padding/overflow pass: at 17px root + high zoom / a narrow bento column the
+     3-up readouts cram and single-word labels break ("BALA NCES"). auto-fit +
+     minmax lets the row reflow to 2/1 columns instead of overflowing, labels
+     stay on one line, and money uses tabular figures so it never wraps. */
+  #finance-card .fin-readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 14px; margin: 12px 0 8px; }
+  #finance-card .fin-stat { text-align: center; min-width: 0; }
+  #finance-card .fin-stat .readout-l { font-size: 22px; }
+  #finance-card .hud-label { white-space: nowrap; }
+  #finance-card .readout-l { white-space: nowrap; font-variant-numeric: tabular-nums; }
   #finance-card .fin-stat .fin-proj-warn { color: var(--warn); text-shadow: 0 0 20px rgba(243,169,60,.30); }
   #finance-card .fin-stat .fin-proj-ok { color: var(--online); text-shadow: 0 0 20px rgba(55,217,160,.30); }
   #finance-card .fin-pace { margin: 4px 0 12px; }
@@ -98,7 +104,7 @@
   #finance-card .fin-err { min-height: 15px; font: 500 11px var(--mono); letter-spacing: .06em; color: var(--red); }
   #finance-card .fin-err:empty { min-height: 0; }
   #finance-card .fin-balances { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(140,170,200,.10); }
-  #finance-card .fin-bal-readouts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 8px 0 4px; }
+  #finance-card .fin-bal-readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 14px; margin: 10px 0 6px; }
   #finance-card .fin-bal-readouts .readout-l { font-size: 20px; }
   #finance-card .fin-bal-trend { font: 600 11px var(--mono); letter-spacing: .04em; color: var(--muted); margin-top: 2px; }
   #finance-card .fin-bal-trend.up { color: var(--online); }
