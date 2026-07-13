@@ -218,6 +218,26 @@ def init_db():
                 cached_locally INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             )""",
+            # Interview Assistant (merged from the former standalone
+            # interview_assistant app; backs the /interview page). Standalone
+            # tables — no links to any other ASFA table. See the interview_*
+            # helpers at the bottom of this module.
+            """CREATE TABLE IF NOT EXISTS interview_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT,
+                mode TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                ended_at TEXT
+            )""",
+            """CREATE TABLE IF NOT EXISTS interview_qa (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                question TEXT,
+                answer TEXT,
+                rating INTEGER DEFAULT 0,
+                ts TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )""",
         ]
         # Postgres uses SERIAL not AUTOINCREMENT
         for stmt in stmts:
@@ -6956,3 +6976,97 @@ def export_all_csvs():
         if content:
             out[filename] = content
     return out
+
+
+# ── Interview Assistant helpers ─────────────────────────────────────────────────
+# Back the /interview page (merged from the former standalone interview_assistant
+# app). Tables interview_sessions / interview_qa are created in init_db(). SQLite
+# locally, Postgres on Railway — hence the ph placeholder + RETURNING/lastrowid
+# split used elsewhere in this module.
+
+def interview_new_session(role, mode):
+    """Create a session row and return its id."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        created = datetime.now().isoformat()
+        sql = (f"INSERT INTO interview_sessions (role, mode, created_at) "
+               f"VALUES ({ph},{ph},{ph})")
+        if USE_POSTGRES:
+            cur.execute(sql + " RETURNING id", (role, mode, created))
+            return cur.fetchone()["id"]
+        cur.execute(sql, (role, mode, created))
+        return cur.lastrowid
+
+
+def interview_save_qa(session_id, question, answer, ts):
+    """Append a Q&A row to a session and return its id."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        created = datetime.now().isoformat()
+        sql = (f"INSERT INTO interview_qa (session_id, question, answer, ts, created_at) "
+               f"VALUES ({ph},{ph},{ph},{ph},{ph})")
+        vals = (session_id, question, answer, ts, created)
+        if USE_POSTGRES:
+            cur.execute(sql + " RETURNING id", vals)
+            return cur.fetchone()["id"]
+        cur.execute(sql, vals)
+        return cur.lastrowid
+
+
+def interview_rate(qa_id, rating):
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"UPDATE interview_qa SET rating={ph} WHERE id={ph}", (rating, qa_id))
+
+
+def interview_list_sessions(limit=100):
+    """Sessions that have at least one Q&A, newest first, with question count and
+    average non-zero rating. avg_rating/n are coerced to float/int so jsonify
+    never chokes on a Postgres Decimal."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT s.id, s.role, s.mode, s.created_at, "
+            "       COUNT(q.id) AS n, "
+            "       COALESCE(AVG(NULLIF(q.rating, 0)), 0) AS avg_rating "
+            "FROM interview_sessions s "
+            "LEFT JOIN interview_qa q ON q.session_id = s.id "
+            "GROUP BY s.id, s.role, s.mode, s.created_at "
+            "HAVING COUNT(q.id) > 0 "
+            "ORDER BY s.created_at DESC LIMIT " + str(int(limit)))
+        out = []
+        for r in cur.fetchall():
+            d = dict(r)
+            d["n"] = int(d["n"] or 0)
+            d["avg_rating"] = float(d["avg_rating"] or 0)
+            out.append(d)
+        return out
+
+
+def interview_session_detail(sid):
+    """Full session + ordered Q&A, or None if the session doesn't exist."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT id, role, mode, created_at, ended_at FROM interview_sessions "
+            f"WHERE id={ph}", (sid,))
+        s = cur.fetchone()
+        if not s:
+            return None
+        cur.execute(
+            f"SELECT id, question, answer, rating, ts FROM interview_qa "
+            f"WHERE session_id={ph} ORDER BY id", (sid,))
+        qa = [dict(r) for r in cur.fetchall()]
+    return {"session": dict(s), "qa": qa}
+
+
+def interview_delete_session(sid):
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"DELETE FROM interview_qa WHERE session_id={ph}", (sid,))
+        cur.execute(f"DELETE FROM interview_sessions WHERE id={ph}", (sid,))

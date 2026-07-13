@@ -362,6 +362,13 @@ os.makedirs(FRAGRANCE_UPLOAD_DIR, exist_ok=True)
 GYM_PHOTO_UPLOAD_DIR = os.path.join(app.static_folder, "uploads", "gym-photos")
 os.makedirs(GYM_PHOTO_UPLOAD_DIR, exist_ok=True)
 
+# Interview Assistant — merged from the former standalone interview_assistant app.
+# Serves the in-app page + practice/history API under /interview. All routes are
+# session-gated by the before_request hooks below (none are in _PUBLIC_ENDPOINTS).
+# interview_sessions / interview_qa tables are created by db.init_db() above.
+from services.interview import interview_bp
+app.register_blueprint(interview_bp, url_prefix="/interview")
+
 
 def _today():
     return datetime.now().strftime("%Y-%m-%d")
