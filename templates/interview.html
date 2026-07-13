@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>ASFA // INTERVIEW</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<style>
+  /* Interview Assistant — all rules scoped under .iv-app / .iv-* so they never
+     collide with ASFA's global style.css (which loads first). */
+  .iv-app{
+    --iv-bg:#0f1117; --iv-panel:#171a23; --iv-panel2:#1e2230; --iv-line:#2a2f3e;
+    --iv-text:#e6e8ee; --iv-muted:#8b90a0; --iv-accent:#7c9cff; --iv-good:#4ade80;
+    --iv-q:#ffd166; --iv-star:#ffcf4d; --iv-radius:14px;
+    color:var(--iv-text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  }
+  .iv-topbar{display:flex;align-items:center;gap:12px;padding:12px 18px;
+          border-bottom:1px solid var(--iv-line);background:var(--iv-panel)}
+  .iv-topbar h1{font-size:15px;font-weight:600}
+  .iv-app .spacer{flex:1}
+  .iv-app button{font:inherit;border:none;border-radius:9px;padding:8px 13px;cursor:pointer;
+         font-size:13px;font-weight:500;transition:.15s}
+  .iv-btn{background:var(--iv-panel2);color:var(--iv-text);border:1px solid var(--iv-line)}
+  .iv-btn:hover{border-color:var(--iv-accent)}
+  .iv-btn.go{background:var(--iv-accent);color:#0b0e16;border:none}
+  .iv-btn:disabled{opacity:.4;cursor:not-allowed}
+  .iv-tabs{display:flex;gap:4px;background:var(--iv-panel2);padding:4px;border-radius:10px}
+  .iv-tab{padding:6px 14px;border-radius:7px;font-size:13px;color:var(--iv-muted);cursor:pointer;font-weight:500}
+  .iv-tab.active{background:var(--iv-accent);color:#0b0e16}
+  .iv-wrap{display:grid;grid-template-columns:1fr;gap:14px;padding:14px;
+           height:calc(100vh - 118px)}
+  .iv-col{background:var(--iv-panel);border:1px solid var(--iv-line);border-radius:var(--iv-radius);
+       display:flex;flex-direction:column;overflow:hidden}
+  .iv-col h2{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--iv-muted);
+          padding:14px 16px;border-bottom:1px solid var(--iv-line)}
+  .iv-scroll{flex:1;overflow-y:auto;padding:14px 16px}
+  .iv-hidden{display:none!important}
+  .iv-qa{margin-bottom:16px;border:1px solid var(--iv-line);border-radius:12px;overflow:hidden}
+  .iv-qa .q{background:rgba(255,209,102,.08);border-left:3px solid var(--iv-q);
+         padding:11px 13px;font-size:14px;font-weight:600}
+  .iv-qa .a{padding:12px 13px;font-size:14px;line-height:1.6;color:#dfe3ec;white-space:pre-wrap}
+  .iv-qa .a.type::after{content:'\2588';color:var(--iv-accent);animation:iv-b .8s step-end infinite}
+  @keyframes iv-b{50%{opacity:0}}
+  .iv-stars{padding:0 13px 11px;display:flex;gap:4px;align-items:center}
+  .iv-stars .s{font-size:18px;color:var(--iv-line);cursor:pointer;transition:.1s}
+  .iv-stars .s.on{color:var(--iv-star)}
+  .iv-stars .lbl{font-size:11px;color:var(--iv-muted);margin-left:6px}
+  .iv-empty{color:var(--iv-muted);text-align:center;margin-top:40px;font-size:13px;line-height:1.6}
+  .iv-bar{display:flex;gap:10px;padding:14px 16px;border-top:1px solid var(--iv-line)}
+  .iv-bar input{flex:1;background:var(--iv-panel2);border:1px solid var(--iv-line);
+        border-radius:10px;padding:11px 13px;color:var(--iv-text);font:inherit;font-size:14px}
+  .iv-chips{display:flex;flex-wrap:wrap;gap:7px;padding:0 16px 12px}
+  .iv-chip{background:var(--iv-panel2);border:1px solid var(--iv-line);border-radius:20px;
+        padding:6px 12px;font-size:12px;color:var(--iv-muted);cursor:pointer}
+  .iv-chip:hover{border-color:var(--iv-accent);color:var(--iv-text)}
+  .iv-hist-item{border:1px solid var(--iv-line);border-radius:12px;padding:13px 15px;margin-bottom:10px;cursor:pointer;transition:.15s}
+  .iv-hist-item:hover{border-color:var(--iv-accent)}
+  .iv-hist-item .row1{display:flex;align-items:center;gap:10px}
+  .iv-hist-item .role{font-weight:600;font-size:14px}
+  .iv-hist-item .badge{font-size:11px;padding:2px 8px;border-radius:12px;background:var(--iv-panel2);color:var(--iv-muted)}
+  .iv-hist-item .meta{font-size:12px;color:var(--iv-muted);margin-top:5px}
+  .iv-hist-item .del{margin-left:auto;color:var(--iv-muted);font-size:16px}
+  .iv-hist-item .del:hover{color:#ff5d5d}
+  .iv-overlay{position:fixed;inset:0;background:rgba(8,10,15,.85);backdrop-filter:blur(6px);
+           display:flex;align-items:center;justify-content:center;z-index:50}
+  .iv-card{background:var(--iv-panel);border:1px solid var(--iv-line);border-radius:18px;
+        width:560px;max-width:92vw;max-height:90vh;overflow-y:auto;padding:26px}
+  .iv-card h3{font-size:18px;margin-bottom:6px}
+  .iv-card p.sub{color:var(--iv-muted);font-size:13px;margin-bottom:18px;line-height:1.5}
+  .iv-app label{display:block;font-size:12px;color:var(--iv-muted);margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px}
+  .iv-app input[type=text],.iv-app textarea{width:100%;background:var(--iv-panel2);border:1px solid var(--iv-line);
+        border-radius:10px;padding:10px 12px;color:var(--iv-text);font:inherit;font-size:14px}
+  .iv-app textarea{resize:vertical;min-height:90px}
+  .iv-row{display:flex;gap:10px;align-items:center}
+  .iv-filebtn{background:var(--iv-panel2);border:1px dashed var(--iv-line);border-radius:10px;
+           padding:10px 12px;font-size:13px;color:var(--iv-muted);cursor:pointer;flex:1}
+  .iv-card .actions{margin-top:22px;display:flex;gap:10px;justify-content:flex-end}
+  .iv-note{color:var(--iv-muted);font-size:12px;padding:0 18px 10px}
+</style>
+</head>
+<body>
+
+{% include "nav.html" with context %}
+
+<div class="iv-app">
+
+  <div class="iv-overlay iv-hidden" id="iv-setup">
+    <div class="iv-card">
+      <h3>Set up your session</h3>
+      <p class="sub">Paste or upload your CV so answers are grounded in your real experience.</p>
+      <label>Role you're interviewing for</label>
+      <input type="text" id="iv-role" placeholder="e.g. Junior Cloud / Security Engineer" value="Software Engineer">
+      <label>Your CV / resume</label>
+      <div class="iv-row">
+        <label class="iv-filebtn" for="iv-resumeFile" id="iv-fileLabel">Upload PDF or .txt</label>
+        <input type="file" id="iv-resumeFile" accept=".pdf,.txt" style="display:none">
+      </div>
+      <textarea id="iv-resume" placeholder="...or paste your CV text here"></textarea>
+      <label>Job description (optional)</label>
+      <textarea id="iv-jobdesc" placeholder="Paste the job ad for sharper, role-specific answers"></textarea>
+      <div class="actions">
+        <button class="iv-btn" onclick="ivSkipSetup()">Skip</button>
+        <button class="iv-btn go" onclick="ivSaveSetup()">Save &amp; continue</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="iv-topbar">
+    <h1>Interview Assistant</h1>
+    <div class="iv-tabs" style="margin-left:8px">
+      <div class="iv-tab active" data-mode="practice" onclick="ivSetMode('practice')">Practice</div>
+      <div class="iv-tab" data-mode="history" onclick="ivSetMode('history')">History</div>
+    </div>
+    <span class="spacer"></span>
+    <button class="iv-btn" onclick="ivOpenSetup()">Context</button>
+    <button class="iv-btn" onclick="ivResetPractice()">New session</button>
+    <button class="iv-btn" onclick="ivExportTxt()">Export</button>
+  </div>
+
+  <div class="iv-note" id="iv-liveNote">
+    Live audio transcription runs only in the standalone app (needs Whisper/FFmpeg locally).
+    This in-app version covers Practice mode and History.
+  </div>
+
+  <div class="iv-wrap" id="iv-practiceWrap">
+    <div class="iv-col">
+      <h2>Practice answers</h2>
+      <div class="iv-scroll" id="iv-qPanel"><div class="iv-empty">Type a question below or tap a suggestion.</div></div>
+      <div id="iv-practiceInput">
+        <div class="iv-chips" id="iv-chips"></div>
+        <div class="iv-bar">
+          <input type="text" id="iv-practiceQ" placeholder="Type a mock interview question..."
+                 onkeydown="if(event.key==='Enter')ivAskPractice()">
+          <button class="iv-btn go" onclick="ivAskPractice()">Ask</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="iv-wrap iv-hidden" id="iv-historyWrap">
+    <div class="iv-col">
+      <h2 id="iv-histTitle">Past sessions</h2>
+      <div class="iv-scroll" id="iv-histPanel"><div class="iv-empty">Loading...</div></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let ivMode = "practice";
+let ivQa = [];                 // current on-screen practice Q&A
+let ivSessionId = null;        // server session id for this practice run
+let ivCtx = { resume: "", role: "Software Engineer", jobdesc: "" };
+try { Object.assign(ivCtx, JSON.parse(localStorage.getItem("iv_ctx") || "{}")); } catch (_) {}
+
+const IV_CHIPS = [
+  "Tell me about yourself",
+  "Walk me through a project you're proud of",
+  "Describe a time you solved a hard technical problem",
+  "Why do you want this role?",
+  "What's your biggest weakness?",
+  "How do you handle tight deadlines?"
+];
+
+const $iv = id => document.getElementById(id);
+
+// ── Mode switching ────────────────────────────────────────────────────────────
+function ivSetMode(m) {
+  ivMode = m;
+  document.querySelectorAll(".iv-tab").forEach(t => t.classList.toggle("active", t.dataset.mode === m));
+  $iv("iv-practiceWrap").classList.toggle("iv-hidden", m !== "practice");
+  $iv("iv-historyWrap").classList.toggle("iv-hidden", m !== "history");
+  $iv("iv-liveNote").classList.toggle("iv-hidden", m !== "practice");
+  if (m === "practice") ivRenderChips();
+  if (m === "history") ivLoadHistory();
+}
+
+// ── Setup / context ───────────────────────────────────────────────────────────
+function ivOpenSetup() {
+  $iv("iv-role").value = ivCtx.role || "Software Engineer";
+  $iv("iv-resume").value = ivCtx.resume || "";
+  $iv("iv-jobdesc").value = ivCtx.jobdesc || "";
+  $iv("iv-setup").classList.remove("iv-hidden");
+}
+function ivSkipSetup() { $iv("iv-setup").classList.add("iv-hidden"); }
+function ivSaveSetup() {
+  ivCtx = {
+    resume: $iv("iv-resume").value.trim(),
+    role: ($iv("iv-role").value.trim() || "Software Engineer"),
+    jobdesc: $iv("iv-jobdesc").value.trim()
+  };
+  try { localStorage.setItem("iv_ctx", JSON.stringify(ivCtx)); } catch (_) {}
+  $iv("iv-setup").classList.add("iv-hidden");
+}
+$iv("iv-resumeFile").addEventListener("change", async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $iv("iv-fileLabel").textContent = "reading " + f.name;
+  const fd = new FormData(); fd.append("file", f);
+  try {
+    const r = await fetch("/interview/api/upload_resume", { method: "POST", body: fd });
+    const j = await r.json();
+    if (j.ok) { $iv("iv-resume").value = j.text; $iv("iv-fileLabel").textContent = "OK " + f.name; }
+    else { $iv("iv-fileLabel").textContent = j.error || "couldn't read file"; }
+  } catch (_) { $iv("iv-fileLabel").textContent = "upload failed"; }
+});
+
+// ── Practice ──────────────────────────────────────────────────────────────────
+function ivRenderChips() {
+  $iv("iv-chips").innerHTML = IV_CHIPS.map(c =>
+    `<div class="iv-chip" onclick="ivUseChip(this)">${ivEsc(c)}</div>`).join("");
+}
+function ivUseChip(el) { $iv("iv-practiceQ").value = el.textContent; ivAskPractice(); }
+function ivResetPractice() {
+  if (ivQa.length && !confirm("Clear the current practice answers and start a new session?")) return;
+  ivQa = []; ivSessionId = null; ivRenderQ();
+}
+function ivAskPractice() {
+  const q = $iv("iv-practiceQ").value.trim(); if (!q) return;
+  $iv("iv-practiceQ").value = "";
+  ivStreamPractice(q);
+}
+async function ivStreamPractice(q) {
+  const idx = ivQa.length;
+  ivQa.push({ question: q, answer: "", typing: true });
+  ivRenderQ();
+  let res;
+  try {
+    res = await fetch("/interview/api/practice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: q, resume: ivCtx.resume, role: ivCtx.role,
+                             jobdesc: ivCtx.jobdesc, session_id: ivSessionId })
+    });
+  } catch (e) { ivQa[idx].typing = false; ivQa[idx].answer = "[network error: " + e.message + "]"; ivRenderQ(); return; }
+  if (!res.ok || !res.body) {
+    ivQa[idx].typing = false; ivQa[idx].answer = "[error: HTTP " + res.status + "]"; ivRenderQ(); return;
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let sep;
+    while ((sep = buf.indexOf("\n\n")) >= 0) {
+      const chunk = buf.slice(0, sep); buf = buf.slice(sep + 2);
+      ivHandleEvent(chunk, idx);
+    }
+  }
+  if (ivQa[idx].typing) { ivQa[idx].typing = false; ivRenderQ(); }
+}
+function ivHandleEvent(raw, idx) {
+  let ev = "message", data = "";
+  raw.split("\n").forEach(line => {
+    if (line.startsWith("event:")) ev = line.slice(6).trim();
+    else if (line.startsWith("data:")) data += line.slice(5).trim();
+  });
+  if (!data) return;
+  let d; try { d = JSON.parse(data); } catch (_) { return; }
+  if (ev === "start") { ivSessionId = d.session_id; }
+  else if (ev === "delta") { ivQa[idx].answer += d.delta; ivRenderQ(); }
+  else if (ev === "done") { ivQa[idx].typing = false; ivQa[idx].qa_id = d.qa_id; ivSessionId = d.session_id; ivRenderQ(); ivBeep(); }
+  else if (ev === "error") { ivQa[idx].typing = false; ivQa[idx].answer += " [error: " + d.error + "]"; ivRenderQ(); }
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+function ivEsc(s) { const d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
+function ivRenderQ() {
+  const p = $iv("iv-qPanel");
+  if (!ivQa.length) { p.innerHTML = '<div class="iv-empty">Type a question below or tap a suggestion.</div>'; return; }
+  p.innerHTML = ivQa.map(x => {
+    let stars = "";
+    if (!x.typing && x.qa_id) {
+      stars = `<div class="iv-stars">${[1,2,3,4,5].map(n =>
+        `<span class="s ${x.rating >= n ? 'on' : ''}" onclick="ivRate(${x.qa_id},${n})">★</span>`).join("")}
+        <span class="lbl">${x.rating ? 'rated' : 'rate this answer'}</span></div>`;
+    }
+    return `<div class="iv-qa"><div class="q">${ivEsc(x.question)}</div>
+      <div class="a ${x.typing ? 'type' : ''}">${ivEsc(x.answer) || '...'}</div>${stars}</div>`;
+  }).join("");
+  p.scrollTop = p.scrollHeight;
+}
+async function ivRate(qaId, n) {
+  try {
+    const r = await fetch("/interview/api/rate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ qa_id: qaId, rating: n })
+    });
+    const j = await r.json();
+    if (j.ok) { const x = ivQa.find(q => q.qa_id === qaId); if (x) { x.rating = n; ivRenderQ(); } }
+  } catch (_) {}
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+async function ivLoadHistory() {
+  const p = $iv("iv-histPanel"); p.innerHTML = '<div class="iv-empty">Loading...</div>';
+  $iv("iv-histTitle").textContent = "Past sessions";
+  let rows;
+  try { rows = await (await fetch("/interview/api/sessions")).json(); }
+  catch (_) { p.innerHTML = '<div class="iv-empty">Couldn\'t load history.</div>'; return; }
+  if (!rows.length) { p.innerHTML = '<div class="iv-empty">No past sessions yet.<br>Run a practice session and it will show up here.</div>'; return; }
+  p.innerHTML = rows.map(s => {
+    const when = new Date(s.created_at).toLocaleString();
+    const avg = s.avg_rating ? `avg ${s.avg_rating.toFixed(1)}/5` : "unrated";
+    return `<div class="iv-hist-item" onclick="ivOpenSession(${s.id})">
+      <div class="row1"><span class="role">${ivEsc(s.role)}</span>
+        <span class="badge">${ivEsc(s.mode)}</span>
+        <span class="del" onclick="event.stopPropagation();ivDelSession(${s.id})">del</span></div>
+      <div class="meta">${ivEsc(when)} · ${s.n} question${s.n > 1 ? 's' : ''} · ${avg}</div>
+    </div>`;
+  }).join("");
+}
+async function ivOpenSession(id) {
+  let j;
+  try { j = await (await fetch("/interview/api/sessions/" + id)).json(); } catch (_) { return; }
+  if (!j.ok) return;
+  $iv("iv-histTitle").innerHTML =
+    `<span style="cursor:pointer;color:var(--iv-accent)" onclick="ivLoadHistory()">‹ back</span> · ${ivEsc(j.session.role)} (${ivEsc(j.session.mode)})`;
+  $iv("iv-histPanel").innerHTML = j.qa.map(x => {
+    const stars = x.rating ? '★'.repeat(x.rating) + '☆'.repeat(5 - x.rating) : '(unrated)';
+    return `<div class="iv-qa"><div class="q">${ivEsc(x.question)}</div>
+      <div class="a">${ivEsc(x.answer)}</div>
+      <div class="iv-stars"><span class="lbl" style="margin:0;color:var(--iv-star)">${stars}</span></div></div>`;
+  }).join("");
+}
+async function ivDelSession(id) {
+  if (!confirm("Delete this session permanently?")) return;
+  try { await fetch("/interview/api/sessions/" + id, { method: "DELETE" }); } catch (_) {}
+  ivLoadHistory();
+}
+
+// ── Export / misc ─────────────────────────────────────────────────────────────
+function ivExportTxt() {
+  let c = `Interview practice — ${new Date().toLocaleString()}\n${"=".repeat(40)}\n\n`;
+  ivQa.forEach((x, i) => { const r = x.rating ? ` [${x.rating}/5]` : ""; c += `${i + 1}. Q: ${x.question}\n   A: ${x.answer}${r}\n\n`; });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([c], { type: "text/plain" }));
+  a.download = `interview_${Date.now()}.txt`; a.click();
+}
+function ivBeep() {
+  try {
+    const c = new AudioContext(); const o = c.createOscillator(); const g = c.createGain();
+    o.connect(g); g.connect(c.destination); o.frequency.value = 880;
+    g.gain.setValueAtTime(.15, c.currentTime); g.gain.exponentialRampToValueAtTime(.001, c.currentTime + .12);
+    o.start(); o.stop(c.currentTime + .12);
+  } catch (_) {}
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+ivRenderChips();
+</script>
+</body>
+</html>
