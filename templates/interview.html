@@ -6,89 +6,123 @@
 <meta name="theme-color" content="#000408">
 <title>ASFA // INTERVIEW</title>
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="mask-icon" href="{{ url_for('static', filename='favicon.svg') }}" color="#00d9ff">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/sounds.js') }}" defer></script>
 <style>
-  /* Interview Assistant — all rules scoped under .iv-app / .iv-* so they never
-     collide with ASFA's global style.css (which loads first). */
-  .iv-app{
-    --iv-bg:#0f1117; --iv-panel:#171a23; --iv-panel2:#1e2230; --iv-line:#2a2f3e;
-    --iv-text:#e6e8ee; --iv-muted:#8b90a0; --iv-accent:#7c9cff; --iv-good:#4ade80;
-    --iv-q:#ffd166; --iv-star:#ffcf4d; --iv-radius:14px;
-    color:var(--iv-text);
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-  }
-  .iv-topbar{display:flex;align-items:center;gap:12px;padding:12px 18px;
-          border-bottom:1px solid var(--iv-line);background:var(--iv-panel)}
-  .iv-topbar h1{font-size:15px;font-weight:600}
-  .iv-app .spacer{flex:1}
-  .iv-app button{font:inherit;border:none;border-radius:9px;padding:8px 13px;cursor:pointer;
-         font-size:13px;font-weight:500;transition:.15s}
-  .iv-btn{background:var(--iv-panel2);color:var(--iv-text);border:1px solid var(--iv-line)}
-  .iv-btn:hover{border-color:var(--iv-accent)}
-  .iv-btn.go{background:var(--iv-accent);color:#0b0e16;border:none}
-  .iv-btn:disabled{opacity:.4;cursor:not-allowed}
-  .iv-tabs{display:flex;gap:4px;background:var(--iv-panel2);padding:4px;border-radius:10px}
-  .iv-tab{padding:6px 14px;border-radius:7px;font-size:13px;color:var(--iv-muted);cursor:pointer;font-weight:500}
-  .iv-tab.active{background:var(--iv-accent);color:#0b0e16}
-  .iv-wrap{display:grid;grid-template-columns:1fr;gap:14px;padding:14px;
-           height:calc(100vh - 118px)}
-  .iv-col{background:var(--iv-panel);border:1px solid var(--iv-line);border-radius:var(--iv-radius);
-       display:flex;flex-direction:column;overflow:hidden}
-  .iv-col h2{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--iv-muted);
-          padding:14px 16px;border-bottom:1px solid var(--iv-line)}
-  .iv-scroll{flex:1;overflow-y:auto;padding:14px 16px}
+  /* Interview Assistant — reuses ASFA's global design tokens from style.css
+     (var(--cyan), var(--panel), var(--line), --mono/--sans …). All rules are
+     scoped under .iv-screen / .iv-* so nothing collides with the globals.
+     Layout + aesthetic mirror nutrition.html and gym.html. */
+  .iv-screen{max-width:1080px;margin:0 auto;padding:18px 16px 120px;color:var(--text)}
+  /* iv-app carries the custom props the inline JS reads (var(--iv-accent) etc.),
+     remapped onto ASFA's design tokens. */
+  .iv-app{--iv-accent:var(--cyan);--iv-star:var(--gold)}
+
+  .iv-head{text-align:center;margin-bottom:16px}
+  .iv-head .screen-title{
+    font-size:1.9rem;letter-spacing:2px;
+    background:linear-gradient(135deg,var(--cyan),var(--purple));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .iv-head .screen-sub{color:var(--muted);font-size:.82rem;letter-spacing:1px}
+
+  /* ── Controls row: sub-tabs (gym-style) + actions ─────────────────────── */
+  .iv-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+  .iv-tabs{display:flex;gap:6px;padding:6px;border-radius:12px;
+    background:var(--panel);backdrop-filter:blur(18px);border:1px solid rgba(140,170,200,.08)}
+  .iv-tab{min-height:40px;padding:8px 18px;border-radius:8px;cursor:pointer;
+    color:var(--muted);font:600 .82rem/1 'Inter',sans-serif;letter-spacing:.4px;
+    transition:all .2s ease}
+  .iv-tab:hover{color:var(--text);background:rgba(0,217,255,.06)}
+  .iv-tab.active{color:#001018;background:linear-gradient(135deg,var(--cyan),#37e0ff);
+    box-shadow:0 0 18px rgba(0,217,255,.35)}
+  .iv-actions{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap}
+  .iv-app .spacer{display:none}
+
+  .iv-note{color:var(--text-dim);font:500 11px var(--mono);letter-spacing:.04em;
+    line-height:1.7;margin-bottom:14px;padding:0 4px}
+
+  /* ── Panels ───────────────────────────────────────────────────────────── */
+  .iv-screen .card{padding:0;margin-bottom:16px;overflow:hidden}
+  .iv-col{display:flex;flex-direction:column;min-height:440px;
+    max-height:calc(100vh - 250px)}
+  .iv-h2{font:500 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;
+    color:var(--text-dim);padding:16px 18px;border-bottom:1px solid rgba(140,170,200,.08)}
+  .iv-scroll{flex:1;overflow-y:auto;padding:16px 18px}
   .iv-hidden{display:none!important}
-  .iv-qa{margin-bottom:16px;border:1px solid var(--iv-line);border-radius:12px;overflow:hidden}
-  .iv-qa .q{background:rgba(255,209,102,.08);border-left:3px solid var(--iv-q);
-         padding:11px 13px;font-size:14px;font-weight:600}
-  .iv-qa .a{padding:12px 13px;font-size:14px;line-height:1.6;color:#dfe3ec;white-space:pre-wrap}
-  .iv-qa .a.type::after{content:'\2588';color:var(--iv-accent);animation:iv-b .8s step-end infinite}
+
+  /* ── Q&A blocks ───────────────────────────────────────────────────────── */
+  .iv-qa{margin-bottom:16px;border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;
+    background:var(--panel-2)}
+  .iv-qa .q{background:rgba(0,217,255,.06);border-left:3px solid var(--cyan);
+    padding:11px 14px;font:600 13px var(--sans);color:var(--text);letter-spacing:.01em}
+  .iv-qa .a{padding:13px 14px;font:400 13.5px/1.65 var(--sans);color:var(--text);white-space:pre-wrap}
+  .iv-qa .a.type::after{content:'\2588';color:var(--cyan);animation:iv-b .8s step-end infinite}
   @keyframes iv-b{50%{opacity:0}}
-  .iv-stars{padding:0 13px 11px;display:flex;gap:4px;align-items:center}
-  .iv-stars .s{font-size:18px;color:var(--iv-line);cursor:pointer;transition:.1s}
-  .iv-stars .s.on{color:var(--iv-star)}
-  .iv-stars .lbl{font-size:11px;color:var(--iv-muted);margin-left:6px}
-  .iv-empty{color:var(--iv-muted);text-align:center;margin-top:40px;font-size:13px;line-height:1.6}
-  .iv-bar{display:flex;gap:10px;padding:14px 16px;border-top:1px solid var(--iv-line)}
-  .iv-bar input{flex:1;background:var(--iv-panel2);border:1px solid var(--iv-line);
-        border-radius:10px;padding:11px 13px;color:var(--iv-text);font:inherit;font-size:14px}
-  .iv-chips{display:flex;flex-wrap:wrap;gap:7px;padding:0 16px 12px}
-  .iv-chip{background:var(--iv-panel2);border:1px solid var(--iv-line);border-radius:20px;
-        padding:6px 12px;font-size:12px;color:var(--iv-muted);cursor:pointer}
-  .iv-chip:hover{border-color:var(--iv-accent);color:var(--iv-text)}
-  .iv-hist-item{border:1px solid var(--iv-line);border-radius:12px;padding:13px 15px;margin-bottom:10px;cursor:pointer;transition:.15s}
-  .iv-hist-item:hover{border-color:var(--iv-accent)}
+  .iv-stars{padding:0 14px 12px;display:flex;gap:5px;align-items:center}
+  .iv-stars .s{font-size:18px;color:var(--line-bright);cursor:pointer;transition:.1s}
+  .iv-stars .s:hover,.iv-stars .s.on{color:var(--gold);text-shadow:0 0 10px rgba(212,175,55,.5)}
+  .iv-stars .lbl{font:500 10px var(--mono);letter-spacing:.08em;text-transform:uppercase;
+    color:var(--text-dim);margin-left:8px}
+  .iv-empty{color:var(--text-dim);text-align:center;margin-top:44px;
+    font:400 13px var(--sans);line-height:1.7}
+
+  /* ── Input bar + suggestion chips ─────────────────────────────────────── */
+  .iv-bar{display:flex;gap:10px;padding:14px 18px;border-top:1px solid rgba(140,170,200,.08)}
+  .iv-bar input{flex:1;text-transform:none}
+  .iv-chips{display:flex;flex-wrap:wrap;gap:8px;padding:0 18px 12px}
+  .iv-chip{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-pill);
+    padding:7px 13px;font:500 11px var(--mono);letter-spacing:.03em;color:var(--text-dim);
+    cursor:pointer;transition:all .2s ease}
+  .iv-chip:hover{border-color:var(--cyan);color:var(--cyan)}
+
+  /* ── History rows ─────────────────────────────────────────────────────── */
+  .iv-hist-item{border:1px solid var(--line);border-radius:var(--r-md);padding:14px 16px;
+    margin-bottom:10px;cursor:pointer;background:var(--panel-2);transition:all .2s ease}
+  .iv-hist-item:hover{border-color:var(--cyan);box-shadow:0 0 18px var(--cyan-glow)}
   .iv-hist-item .row1{display:flex;align-items:center;gap:10px}
-  .iv-hist-item .role{font-weight:600;font-size:14px}
-  .iv-hist-item .badge{font-size:11px;padding:2px 8px;border-radius:12px;background:var(--iv-panel2);color:var(--iv-muted)}
-  .iv-hist-item .meta{font-size:12px;color:var(--iv-muted);margin-top:5px}
-  .iv-hist-item .del{margin-left:auto;color:var(--iv-muted);font-size:16px}
-  .iv-hist-item .del:hover{color:#ff5d5d}
-  .iv-overlay{position:fixed;inset:0;background:rgba(8,10,15,.85);backdrop-filter:blur(6px);
-           display:flex;align-items:center;justify-content:center;z-index:50}
-  .iv-card{background:var(--iv-panel);border:1px solid var(--iv-line);border-radius:18px;
-        width:560px;max-width:92vw;max-height:90vh;overflow-y:auto;padding:26px}
-  .iv-card h3{font-size:18px;margin-bottom:6px}
-  .iv-card p.sub{color:var(--iv-muted);font-size:13px;margin-bottom:18px;line-height:1.5}
-  .iv-app label{display:block;font-size:12px;color:var(--iv-muted);margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px}
-  .iv-app input[type=text],.iv-app textarea{width:100%;background:var(--iv-panel2);border:1px solid var(--iv-line);
-        border-radius:10px;padding:10px 12px;color:var(--iv-text);font:inherit;font-size:14px}
-  .iv-app textarea{resize:vertical;min-height:90px}
+  .iv-hist-item .role{font:600 13px var(--sans);color:var(--text)}
+  .iv-hist-item .badge{font:500 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    padding:3px 9px;border-radius:var(--r-pill);background:var(--panel-3);color:var(--text-dim)}
+  .iv-hist-item .meta{font:500 11px var(--mono);letter-spacing:.03em;color:var(--text-dim);margin-top:6px}
+  .iv-hist-item .del{margin-left:auto;color:var(--text-dim);font:500 10px var(--mono);
+    letter-spacing:.06em;text-transform:uppercase;transition:.15s}
+  .iv-hist-item .del:hover{color:var(--red)}
+
+  /* ── Setup / context modal ────────────────────────────────────────────── */
+  .iv-overlay{position:fixed;inset:0;background:rgba(0,4,8,.82);backdrop-filter:blur(6px);
+    display:flex;align-items:center;justify-content:center;z-index:120;padding:20px}
+  .iv-card-modal{background:var(--panel);border:1px solid var(--line-bright);border-radius:var(--r-md);
+    width:560px;max-width:92vw;max-height:90vh;overflow-y:auto;padding:26px;
+    box-shadow:0 20px 60px rgba(0,0,0,.55),0 0 40px var(--cyan-glow)}
+  .iv-card-modal h3{font:600 1.05rem var(--sans);color:var(--primary);
+    text-shadow:0 0 10px rgba(0,217,255,.2);margin-bottom:6px}
+  .iv-card-modal p.sub{color:var(--text-dim);font:400 12px/1.6 var(--sans);margin-bottom:16px}
+  .iv-app label{display:block;font:500 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;
+    color:var(--text-dim);margin:16px 0 6px}
+  .iv-app input[type=text],.iv-app textarea{text-transform:none}
+  .iv-app textarea{min-height:90px}
   .iv-row{display:flex;gap:10px;align-items:center}
-  .iv-filebtn{background:var(--iv-panel2);border:1px dashed var(--iv-line);border-radius:10px;
-           padding:10px 12px;font-size:13px;color:var(--iv-muted);cursor:pointer;flex:1}
-  .iv-card .actions{margin-top:22px;display:flex;gap:10px;justify-content:flex-end}
-  .iv-note{color:var(--iv-muted);font-size:12px;padding:0 18px 10px}
+  .iv-filebtn{background:var(--panel-2);border:1px dashed var(--line-bright);border-radius:var(--r-sm);
+    padding:10px 12px;font:500 11px var(--mono);letter-spacing:.04em;color:var(--text-dim);
+    cursor:pointer;flex:1;text-align:center;transition:all .2s ease}
+  .iv-filebtn:hover{border-color:var(--cyan);color:var(--cyan)}
+  .iv-card-modal .actions{margin-top:24px;display:flex;gap:10px;justify-content:flex-end}
 </style>
 </head>
-<body>
+<body class="interview-body">
+<canvas id="starfield-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;"></canvas>
 
 {% include "nav.html" with context %}
 
+<main class="iv-screen">
 <div class="iv-app">
 
   <div class="iv-overlay iv-hidden" id="iv-setup">
-    <div class="iv-card">
+    <div class="iv-card-modal">
       <h3>Set up your session</h3>
       <p class="sub">Paste or upload your CV so answers are grounded in your real experience.</p>
       <label>Role you're interviewing for</label>
@@ -102,22 +136,27 @@
       <label>Job description (optional)</label>
       <textarea id="iv-jobdesc" placeholder="Paste the job ad for sharper, role-specific answers"></textarea>
       <div class="actions">
-        <button class="iv-btn" onclick="ivSkipSetup()">Skip</button>
-        <button class="iv-btn go" onclick="ivSaveSetup()">Save &amp; continue</button>
+        <button class="btn btn-ghost" onclick="ivSkipSetup()">Skip</button>
+        <button class="btn btn-grad" onclick="ivSaveSetup()">Save &amp; continue</button>
       </div>
     </div>
   </div>
 
-  <div class="iv-topbar">
-    <h1>Interview Assistant</h1>
-    <div class="iv-tabs" style="margin-left:8px">
-      <div class="iv-tab active" data-mode="practice" onclick="ivSetMode('practice')">Practice</div>
-      <div class="iv-tab" data-mode="history" onclick="ivSetMode('history')">History</div>
+  <header class="iv-head">
+    <h1 class="screen-title" data-decode>Interview</h1>
+    <p class="screen-sub">Practice • Rate • Review</p>
+  </header>
+
+  <div class="iv-controls">
+    <div class="iv-tabs" role="tablist" aria-label="Interview sections">
+      <div class="iv-tab active" data-mode="practice" role="tab" onclick="ivSetMode('practice')">Practice</div>
+      <div class="iv-tab" data-mode="history" role="tab" onclick="ivSetMode('history')">History</div>
     </div>
-    <span class="spacer"></span>
-    <button class="iv-btn" onclick="ivOpenSetup()">Context</button>
-    <button class="iv-btn" onclick="ivResetPractice()">New session</button>
-    <button class="iv-btn" onclick="ivExportTxt()">Export</button>
+    <div class="iv-actions">
+      <button class="btn btn-ghost" onclick="ivOpenSetup()">Context</button>
+      <button class="btn btn-ghost" onclick="ivResetPractice()">New session</button>
+      <button class="btn btn-ghost" onclick="ivExportTxt()">Export</button>
+    </div>
   </div>
 
   <div class="iv-note" id="iv-liveNote">
@@ -126,30 +165,40 @@
   </div>
 
   <div class="iv-wrap" id="iv-practiceWrap">
-    <div class="iv-col">
-      <h2>Practice answers</h2>
+    <div class="card sci-fi-panel iv-col">
+      <h2 class="iv-h2">Practice answers</h2>
       <div class="iv-scroll" id="iv-qPanel"><div class="iv-empty">Type a question below or tap a suggestion.</div></div>
       <div id="iv-practiceInput">
         <div class="iv-chips" id="iv-chips"></div>
         <div class="iv-bar">
           <input type="text" id="iv-practiceQ" placeholder="Type a mock interview question..."
                  onkeydown="if(event.key==='Enter')ivAskPractice()">
-          <button class="iv-btn go" onclick="ivAskPractice()">Ask</button>
+          <button class="btn btn-grad" onclick="ivAskPractice()">Ask</button>
         </div>
       </div>
     </div>
   </div>
 
   <div class="iv-wrap iv-hidden" id="iv-historyWrap">
-    <div class="iv-col">
-      <h2 id="iv-histTitle">Past sessions</h2>
+    <div class="card sci-fi-panel iv-col">
+      <h2 class="iv-h2" id="iv-histTitle">Past sessions</h2>
       <div class="iv-scroll" id="iv-histPanel"><div class="iv-empty">Loading...</div></div>
     </div>
   </div>
 
 </div>
+</main>
 
 <script>
+// Add bracket corners to all sci-fi panels (matches other ASFA screens).
+document.querySelectorAll('.sci-fi-panel').forEach(el => {
+  ['corner-bl', 'corner-br'].forEach(cls => {
+    const div = document.createElement('div');
+    div.className = cls;
+    el.appendChild(div);
+  });
+});
+
 // ── State ─────────────────────────────────────────────────────────────────────
 let ivMode = "practice";
 let ivQa = [];                 // current on-screen practice Q&A
@@ -354,5 +403,6 @@ function ivBeep() {
 // ── Init ──────────────────────────────────────────────────────────────────────
 ivRenderChips();
 </script>
+<script src="/static/js/starfield.js" defer></script>
 </body>
 </html>
