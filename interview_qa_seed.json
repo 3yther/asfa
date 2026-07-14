@@ -1,0 +1,203 @@
+[
+  {
+    "question": "Tell me about yourself.",
+    "answer": "I'm a sixth-form student at Leigh UTC Dartford doing a T-Level in Digital Software Development. Outside of coursework I build real, deployed software — my main project is ASFA, a personal operating-system dashboard that's live on Railway and runs my daily nutrition, sleep, gym and finance data. I've also had placements at Worldpay in cybersecurity and the Financial Times in IT support, so I've seen how software works inside real engineering teams, not just in a classroom.",
+    "category": "behavioral",
+    "difficulty": "easy"
+  },
+  {
+    "question": "Walk me through a project you're proud of.",
+    "answer": "ASFA. It started as a simple personal tracker and grew into eight modules — nutrition, sleep, gym, finance, steps, water, supplements and body composition — around 1,500 lines of code with 66 passing tests, built over about four months. It's a Flask app deployed on Railway with a Postgres backend, a Telegram briefing bot, and scheduled background jobs. I'm proud of it because it's genuinely live and I use it every single day, so the bar for reliability is real.",
+    "category": "behavioral",
+    "difficulty": "easy"
+  },
+  {
+    "question": "Describe a time you faced a technical challenge and how you solved it.",
+    "answer": "During a security audit of ASFA I found a CSV formula-injection vulnerability — exported data starting with characters like '=' or '+' could execute as a formula when opened in Excel. It was rated Medium (M1). I wrote a failing test that reproduced the injection first, then fixed the export sanitiser to prefix risky cells, and the test confirmed it was closed. Doing it test-first meant I knew the fix actually worked and wouldn't regress.",
+    "category": "behavioral",
+    "difficulty": "medium"
+  },
+  {
+    "question": "Tell me about a time you worked in a team.",
+    "answer": "On my Worldpay placement I worked with their cybersecurity team on cross-team security work, which meant I had to communicate clearly with people far more senior than me and understand how one team's changes affected another. At the Financial Times I did customer-facing IT support, so I was constantly coordinating with staff to resolve issues. Both taught me that most engineering problems are really communication problems.",
+    "category": "behavioral",
+    "difficulty": "easy"
+  },
+  {
+    "question": "How do you handle tight deadlines or pressure?",
+    "answer": "I've handled it on a few fronts. At TK Maxx I worked the Christmas peak, which is relentless — high customer volume, constant restocking, no time to overthink. With ASFA, because it's live, a bad deploy affects my real data, so I've learned to stay calm and lean on my tests and feature-branch workflow rather than panic-fixing on main. And I've built ASFA through exam season, so I'm used to juggling deadlines and personal projects at the same time. Pressure mostly comes down to prioritising ruthlessly.",
+    "category": "behavioral",
+    "difficulty": "medium"
+  },
+  {
+    "question": "What's a mistake you made and what did you learn?",
+    "answer": "With my quant bot I built a DCA strategy that only ever bought — no exit logic and no stop losses. It ended down 1.2% with an 11.58% max drawdown, and when I dug in I found 25 of 77 buys had fired while the market regime was still UNKNOWN, before the 200-day SMA had enough history, which caused the biggest losses. The lesson was that a strategy isn't finished until you've defined how you get out, not just how you get in. It's paper-only, so it cost me nothing but taught me a lot.",
+    "category": "behavioral",
+    "difficulty": "medium"
+  },
+  {
+    "question": "Why are you interested in this role/company?",
+    "answer": "I'm drawn to places where I can keep shipping and learning from people who've done this at scale. I already build and deploy real software in my own time, so I'm not looking for a role to teach me the basics from scratch — I'm looking for one where I can contribute quickly and grow. [Tailor: name a specific product, team, or value of the company here.]",
+    "category": "behavioral",
+    "difficulty": "medium"
+  },
+  {
+    "question": "Where do you see yourself in 5 years?",
+    "answer": "I want to be a strong software engineer, ideally somewhere between backend and applied AI, since that's where most of my projects already sit — ASFA integrates the Claude API, and my quant and Scout projects are automation-heavy. In five years I'd like to have shipped software that real people depend on, the way I currently depend on ASFA, just at a much bigger scale. I care more about depth and ownership than titles.",
+    "category": "behavioral",
+    "difficulty": "easy"
+  },
+
+  {
+    "question": "Explain the architecture of one of your projects.",
+    "answer": "ASFA is a Flask 3.0 backend with a dual-mode storage layer — SQLite locally and Postgres in production via a DATABASE_URL, abstracted behind a single database module. Scheduled work runs on APScheduler with 17+ in-process jobs like the morning briefing, water checks, and a read-only bot-trade poll every five minutes. It's deployed on Railway behind gunicorn, integrates the Claude API for AI briefings, and pushes notifications through a Telegram bot. The whole thing sits behind a session-based password gate with a fail-closed auth rule.",
+    "category": "technical",
+    "difficulty": "medium"
+  },
+  {
+    "question": "What's your approach to testing?",
+    "answer": "I lean test-driven when I'm fixing bugs or shipping anything risky. ASFA has 66 green tests — pytest for the backend and Playwright for UI flows. A concrete example: when I found the CSV formula-injection issue, I wrote a test that reproduced the exploit before touching the fix, so the test proved both the bug and the fix. I don't chase 100% coverage; I test the things that would actually hurt if they broke.",
+    "category": "technical",
+    "difficulty": "medium"
+  },
+  {
+    "question": "How do you ensure security in your applications?",
+    "answer": "ASFA has several layers: CSRF tokens on state-changing requests, HMAC-based audit logging, rate limiting, and a read-only API key system where keys are stored as SHA-256 hashes and looked up by index rather than kept in plaintext. The whole dashboard is behind a session auth gate that fails closed — if the password env var isn't set, the app returns 503 rather than serving anything. I also ran a formal security audit that caught and fixed the CSV injection issue. My Worldpay cybersecurity placement made me think about this stuff by default.",
+    "category": "technical",
+    "difficulty": "hard"
+  },
+  {
+    "question": "Walk me through your deployment process.",
+    "answer": "ASFA auto-deploys on Railway when I push to main. But I don't push straight to main for anything real — I work on feature branches and open a PR for review before merging, so main stays deployable. Because there's a single gunicorn worker, the APScheduler jobs run exactly once, and a daily Telegram briefing plus a nightly DB backup to a private repo give me a safety net. If a deploy misbehaves I can check Railway logs and roll back.",
+    "category": "technical",
+    "difficulty": "medium"
+  },
+  {
+    "question": "What's the most complex problem you've debugged?",
+    "answer": "The quant bot's losses were the most involved. It was down 1.2% and I had to work out why. I traced it back to the DCA logic firing buys while the market regime was still UNKNOWN — before the 200-day SMA had enough history — and those trades produced the worst losses. Breaking it down by asset showed BTC at a 0% win rate versus ETH at 67.6%, which told me the problem was systemic timing, not just bad luck. I've also debugged a divergence between my local trades.db and the Railway copy, and Grafana panels failing because of a schema mismatch.",
+    "category": "technical",
+    "difficulty": "hard"
+  },
+  {
+    "question": "How do you stay current with technology?",
+    "answer": "Mostly by building. I learn a tool by using it on a real project — I picked up APScheduler, Railway, the Claude API and Playwright because ASFA needed them, not from a tutorial. My T-Level gives me the structured fundamentals, and my Scout project literally scans job listings daily, so I get a live feed of what the market is actually asking for. When I hit something new I read the official docs first before reaching for Stack Overflow.",
+    "category": "technical",
+    "difficulty": "easy"
+  },
+  {
+    "question": "Tell me about a database design decision you made.",
+    "answer": "ASFA needed to run on SQLite locally for fast iteration but Postgres in production for durability, so I built a single database layer that abstracts over both and switches based on whether DATABASE_URL is set. That kept my route code database-agnostic. I also designed the API-key storage to index on a SHA-256 hash rather than the raw key, so lookups stay fast without ever storing the secret in plaintext. The main lesson was designing for two backends up front rather than hard-coding SQLite and paying for it later.",
+    "category": "technical",
+    "difficulty": "medium"
+  },
+  {
+    "question": "How do you approach API design?",
+    "answer": "I try to keep endpoints predictable and consistent, and I centralise the client side — in ASFA all frontend calls go through apiGet and apiPost helpers that set credentials so the session cookie is always sent, which stops a whole class of 401 bugs. On the backend, new routes have to be explicitly added to the public-endpoint set or they're auth-gated by default, so security is opt-out rather than opt-in. For my read-only API-key system I deliberately scoped keys to read endpoints only, so an external consumer like an MCP client can never mutate state.",
+    "category": "technical",
+    "difficulty": "medium"
+  },
+  {
+    "question": "Describe your development workflow with git and branching.",
+    "answer": "I work on feature branches, one per piece of work, and open a PR before merging into main so main stays deployable — that matters because Railway auto-deploys main. I write descriptive commits and use the PR as a review checkpoint even when it's just me. I've also dealt with the harder side of git: I once had to force-rewrite history and purge remote branches after a secret leaked into the repo, then rotate the affected key. That taught me to treat secrets and .gitignore seriously from day one.",
+    "category": "technical",
+    "difficulty": "medium"
+  },
+  {
+    "question": "What's your experience with cloud platforms?",
+    "answer": "ASFA runs on Railway with a managed Postgres database, gunicorn as the server, and auto-deploy wired to git pushes. I manage environment variables there — things like the secret key, which has to stay persistent or it invalidates every session and breaks OAuth mid-flow. I've configured Google and Spotify OAuth flows where the redirect URI has to match the deployed environment exactly. So I've dealt with the real operational side: config, secrets, logs, and debugging things that only break in production.",
+    "category": "technical",
+    "difficulty": "medium"
+  },
+
+  {
+    "question": "Tell me about ASFA.",
+    "answer": "ASFA is my personal operating system — a Flask dashboard live on Railway that I use every day. It's grown to eight modules covering nutrition, sleep, gym, finance, steps, water, supplements and body composition, about 1,500 lines of code with 66 tests. It runs on Postgres in production with APScheduler background jobs and a Telegram briefing bot, and it integrates the Claude API for AI briefings and insights. A security audit found one Medium issue — CSV injection — which I fixed test-first. My latest work added USDA branded-food search, a meal-prep mode, hydration linking and quick favourites; next up is a correlations engine to surface patterns across my data.",
+    "category": "project",
+    "difficulty": "medium"
+  },
+  {
+    "question": "Walk me through the quant bot.",
+    "answer": "It's a crypto trading bot running purely on paper — no real capital. It started as a DCA strategy: buy BTC and ETH on dips. It's currently down 1.2% with a max drawdown of 11.58%, and I'm being honest about why: there's no exit logic and no stop losses. Digging in, 25 of 77 buys fired when the regime was UNKNOWN, before the 200-day SMA had history, and those were the biggest losers — BTC ended at 0% win rate versus ETH at 67.6%. The plan is to rebuild it with grid trading and proper risk management. I keep it paper-only precisely because I haven't earned the right to risk money on it yet.",
+    "category": "project",
+    "difficulty": "hard"
+  },
+  {
+    "question": "Describe Scout.",
+    "answer": "Scout is a job-search agent I built because I was spending hours manually searching LinkedIn. It scans the REED API daily for roles near Dartford and Bexleyheath, then uses SerpAPI to validate that the openings are real and local rather than dead-end or ghost postings. It automates the boring, repetitive part of job hunting so I only spend time on genuine opportunities. It's a good example of me building a tool to solve my own actual problem.",
+    "category": "project",
+    "difficulty": "medium"
+  },
+  {
+    "question": "Tell me about the most recent feature you shipped.",
+    "answer": "The latest ASFA work was a nutrition expansion: USDA branded-food search so I can look up packaged products, a meal-prep mode, meal-linked water tracking, and quick favourites for foods I log often. I built it on a feature branch, opened a PR, and merged only after review, so it deployed cleanly to Railway. I deliberately deferred one part — pre-seeding restaurant menu data — because I couldn't source it without fabricating values, and I'd rather ship less than ship made-up data.",
+    "category": "project",
+    "difficulty": "medium"
+  },
+  {
+    "question": "How do you balance school and building projects?",
+    "answer": "I treat my projects as applied practice for the T-Level rather than a competing thing — a lot of what I learn building ASFA feeds straight back into coursework. During exam season I scale the project work down to small, safe changes on branches rather than big risky pushes, so nothing breaks while my attention is elsewhere. It comes down to prioritisation and not pretending I have unlimited time.",
+    "category": "project",
+    "difficulty": "easy"
+  },
+  {
+    "question": "What's the hardest part of maintaining a live service?",
+    "answer": "That things break in ways you can't reproduce locally. ASFA runs SQLite locally but Postgres in production, so I've hit bugs that only show up on Railway — like a divergence between my local database and the deployed one. Config is another sharp edge: the secret key has to stay persistent or every session dies, and OAuth redirect URIs have to match the environment exactly. The discipline is keeping main always deployable and having backups, because the cost of a mistake is your real, live data.",
+    "category": "project",
+    "difficulty": "medium"
+  },
+  {
+    "question": "How do you approach learning new tech?",
+    "answer": "I learn by shipping something real with it. When ASFA needed scheduled jobs I learned APScheduler by building the actual briefing job; when it needed UI tests I learned Playwright by writing them. I read the official documentation first rather than copying snippets, because I want to understand the model, not just make an error go away. Having a live project as the forcing function means I actually retain it.",
+    "category": "project",
+    "difficulty": "easy"
+  },
+  {
+    "question": "Tell me about a feature you didn't ship, and why not.",
+    "answer": "In the nutrition expansion I planned to pre-seed a set of restaurant menus so users could log meals out. I dropped it because I couldn't get reliable nutrition data for those menus without inventing the numbers, and seeding fabricated data into a health tracker is worse than not having the feature at all. I'd rather leave a gap than quietly ship something misleading. It's the same reason I keep the quant bot paper-only — I don't ship things I can't stand behind.",
+    "category": "project",
+    "difficulty": "medium"
+  },
+
+  {
+    "question": "Why do you want to work here? (Farmfoods / Amazon / [company])",
+    "answer": "[Template — tailor before use.] I want to work somewhere I can be reliable, learn fast, and contribute properly rather than just fill a shift. [For a specific company, name what draws you: e.g. Amazon's scale and operational rigour, or a local Farmfoods store where I can bring my retail experience.] I already juggle deadlines between school and live projects, so I'm used to showing up and getting things done under pressure.",
+    "category": "company",
+    "difficulty": "easy"
+  },
+  {
+    "question": "How would you apply your tech skills to this role?",
+    "answer": "[Template — tailor before use.] Even in a non-engineering role, the way I work transfers: I'm precise with data, I spot patterns and inefficiencies, and I'm comfortable with the systems most workplaces run on — point-of-sale, inventory, internal tools. Building ASFA taught me to automate repetitive tasks and to double-check accuracy, both of which matter anywhere. [If the role is technical, point to the specific tool or framework it uses and connect it to a project.]",
+    "category": "company",
+    "difficulty": "medium"
+  },
+  {
+    "question": "Tell me about your retail and customer-service experience. (for Farmfoods)",
+    "answer": "I worked at TK Maxx for six months, including the Christmas peak, which is about as busy as retail gets. I handled point-of-sale, stock replenishment and high customer volumes, and I coordinated with the floor team to keep things moving when it was hectic. It taught me speed under pressure, attention to detail for inventory accuracy, and how to stay friendly with customers even on the busiest days.",
+    "category": "company",
+    "difficulty": "easy"
+  },
+  {
+    "question": "Describe your experience with a specific tool or framework used at this company.",
+    "answer": "[Template — tailor to the named tool.] I've used [tool] in [project/placement]. For example, Flask and Postgres power ASFA end-to-end; I used the Claude API for its AI features; and I did cybersecurity work at Worldpay and IT support at the Financial Times. Point me at the specific stack you use and I can map it to something concrete I've actually built or supported.",
+    "category": "company",
+    "difficulty": "medium"
+  },
+  {
+    "question": "Tell me about your placement at Worldpay.",
+    "answer": "I did a placement with Worldpay's cybersecurity team, doing cross-team security work. It gave me a real appreciation for how security is treated in a large payments company — it's not an afterthought, it's built into the process. That mindset carries directly into ASFA, where I run audits, hash API keys, use CSRF tokens and audit logging, and treat the auth gate as fail-closed. It's a big reason I think about security by default rather than bolting it on.",
+    "category": "behavioral",
+    "difficulty": "medium"
+  },
+  {
+    "question": "What are you looking for in your next opportunity?",
+    "answer": "Somewhere I can keep building and take real ownership. I already ship and maintain live software on my own, so I thrive when I'm trusted with responsibility and given feedback from people more experienced than me. I care about working on things that actually get used, and about being honest when something isn't working — the same way I'm honest that my quant bot is down 1.2% and needs a rebuild. Growth and integrity matter more to me than a title.",
+    "category": "behavioral",
+    "difficulty": "easy"
+  },
+  {
+    "question": "What are your strengths and weaknesses?",
+    "answer": "My strength is that I actually finish and ship things — ASFA is live, used daily, and has 66 tests behind it, not a half-built repo. I'm also security-minded thanks to my Worldpay placement. My weakness is that I can over-invest in a project's scope; my quant bot is a case where I built the buying side thoroughly but neglected exits, and I've learned to define the full loop before going deep. I'm getting better at scoping ruthlessly and shipping the smaller, correct version first.",
+    "category": "behavioral",
+    "difficulty": "medium"
+  }
+]
