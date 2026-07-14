@@ -248,6 +248,28 @@
       <div class="add-exercise-bar">
         <button class="btn btn-ghost add-exercise-btn" id="add-exercise-btn">+ Add Exercise</button>
       </div>
+
+      <!-- ── Try Something New — inline, muscle-aware discovery ──────────── -->
+      <section class="discover sci-fi-panel" id="discover-panel">
+        <button class="discover-toggle" id="discover-toggle" aria-expanded="false" aria-controls="discover-body">
+          <span class="disc-lead"><span class="disc-spark">✦</span> Try Something New</span>
+          <span class="disc-sub" id="disc-toggle-sub">tap to explore</span>
+          <span class="disc-chev" aria-hidden="true">▾</span>
+        </button>
+        <div class="discover-body" id="discover-body" hidden>
+          <div class="disc-modes" role="tablist" aria-label="Discovery mode">
+            <button class="disc-mode active" data-dmode="suggested" role="tab">Suggested</button>
+            <button class="disc-mode" data-dmode="search" role="tab">Search</button>
+          </div>
+          <div class="disc-search-wrap" id="disc-search-wrap" hidden>
+            <input type="search" id="disc-search" class="disc-search" inputmode="search"
+                   placeholder="Search 1,324 exercises…" autocomplete="off">
+          </div>
+          <div class="disc-hint" id="disc-hint"></div>
+          <div class="disc-scroller" id="disc-cards" aria-live="polite"></div>
+        </div>
+      </section>
+
       <div id="exercise-list" class="exercise-list"></div>
     </div>
   </section>
@@ -276,7 +298,6 @@
     <div class="ex-controls">
       <input type="search" id="ex-search" class="ex-search" placeholder="Search exercises…" autocomplete="off">
       <div class="ex-filters" id="ex-filters"></div>
-      <a class="btn btn-ghost" href="/gym/exercises" style="white-space:nowrap">Full library (1,324) with GIFs ›</a>
     </div>
     <div id="ex-grid" class="ex-grid">
       <div class="skeleton-card sci-fi-panel"></div>
@@ -387,6 +408,15 @@
     <input type="search" id="addex-search" class="ex-search" placeholder="Search exercises…" autocomplete="off">
     <div class="ex-filters" id="addex-filters"></div>
     <div id="addex-list" class="addex-list"></div>
+  </div>
+</div>
+
+<!-- ── Exercise detail bottom-sheet (mobile-first) ─────────────────────── -->
+<div id="exdetail-sheet" class="sheet-overlay" hidden>
+  <div class="sheet sci-fi-panel" id="exdetail-inner" role="dialog" aria-modal="true" aria-label="Exercise detail">
+    <div class="sheet-grip" aria-hidden="true"></div>
+    <button class="sheet-close" id="exdetail-close" aria-label="Close">✕</button>
+    <div id="exdetail-body"><!-- filled by JS --></div>
   </div>
 </div>
 

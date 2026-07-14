@@ -1,34 +1,57 @@
-"""Exercise library — the browsable catalogue at /gym/exercises.
+"""Exercise catalogue API — the 1,324-exercise dataset behind /gym's inline
+"Try Something New" discovery.
 
-Serves the 1,324-exercise catalogue (synced from hasaneyldrm/exercises-dataset
-by scripts/sync_exercises.py into the ``exercises`` table) as a filtered,
-paginated read API plus the page itself. This is separate from the curated
-gym_exercises library that drives logging and ranks; the only bridge is
+Serves the catalogue (synced from hasaneyldrm/exercises-dataset by
+scripts/sync_exercises.py into the ``exercises`` table) as filtered/paginated
+read APIs plus a session-aware ``/suggested`` ranker. This is separate from the
+curated gym_exercises library that drives logging and ranks; the only bridge is
 "Add to workout", which get_or_create's a gym_exercises row from a catalogue
 entry so it can be logged through the normal gym flow.
 
-Auth: every route here is session-gated by ASFA's global before_request (none
-are in _PUBLIC_ENDPOINTS). The one POST (/add-to-workout) carries the CSRF
-token via the patched fetch wrapper included through nav.html on the page.
+There is no standalone browse page: discovery lives inline on /gym. All routes
+here are session-gated by ASFA's global before_request (none are in
+_PUBLIC_ENDPOINTS). The one POST (/add-to-workout) carries the CSRF token via
+the patched fetch wrapper included through nav.html.
 """
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, jsonify, request
 
 import database as db
+from services.exercise_match import (CARDIO_EQUIPMENT, suggest_exercises)
 
 exercises_bp = Blueprint("exercises", __name__)
 
 # Catalogue equipment values we treat as cardio when bridging into the gym log.
-_CARDIO_EQUIPMENT = {"stationary bike", "elliptical machine", "stepmill machine",
-                     "skierg machine", "upper body ergometer"}
+_CARDIO_EQUIPMENT = CARDIO_EQUIPMENT
 
 
 def _truthy(value: str) -> bool:
     return str(value).lower() in ("1", "true", "yes", "on")
 
 
-@exercises_bp.route("/gym/exercises")
-def exercises_page():
-    return render_template("gym-exercises.html", active="gym")
+def _csv(value):
+    return [v.strip() for v in str(value or "").split(",") if v.strip()]
+
+
+@exercises_bp.route("/api/exercises/suggested")
+def api_exercises_suggested():
+    """Session-aware discovery: rank catalogue exercises by relevance to what's
+    being trained RIGHT NOW. Query params (all optional):
+      muscles  — comma-separated gym muscle groups already in today's session
+      exclude  — comma-separated exercise names already logged/added today
+      limit    — how many to return (default 12, capped)
+    Ranking: muscle-match (from ``muscles`` or, when empty, the athlete's most
+    frequent historical group) → novelty (never logged) → staleness (>30 days).
+    Everything in ``exclude`` is dropped."""
+    try:
+        limit = max(1, min(30, int(request.args.get("limit", 12))))
+    except (TypeError, ValueError):
+        limit = 12
+    result = suggest_exercises(
+        session_muscles=_csv(request.args.get("muscles")),
+        exclude_names=_csv(request.args.get("exclude")),
+        limit=limit,
+    )
+    return jsonify(result)
 
 
 @exercises_bp.route("/api/exercises")

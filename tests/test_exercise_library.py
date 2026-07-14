@@ -185,9 +185,10 @@ def test_14_routes():
     body = r.get_json()
     assert body["ok"] and body["gym_exercise"]["name"] == "barbell squat"
 
-    r = client.get("/gym/exercises")
-    assert r.status_code == 200 and "Exercise Library" in r.get_data(as_text=True)
-    print("  14. routes: list/detail/404/facets/add-to-workout/page  OK")
+    # The standalone browse page was removed — discovery is now inline on /gym.
+    # The data APIs above stay; only the page route is gone.
+    assert client.get("/gym/exercises").status_code == 404
+    print("  14. routes: list/detail/404/facets/add-to-workout; page removed  OK")
 
 
 def test_15_existing_gym_unaffected():
