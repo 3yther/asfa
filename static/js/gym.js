@@ -83,6 +83,7 @@ const BAR_KG = 20;
    compact icon buttons so the tracker reads clean, not decorated. */
 const IC_FLAME = '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M12 2s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3 1.5-4 .5 1 1 1.5 1.8 1.7C9.5 7.5 12 5 12 2z"/></svg>';
 const IC_PLATE = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M3 9h2v6H3zM6 7h2v10H6zM16 7h2v10h-2zM19 9h2v6h-2zM8 11h8v2H8z"/></svg>';
+const IC_DUMBBELL = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M2 12h2M20 12h2M6 8v8M8 8v8M16 8v8M18 8v8M8 12h8"/></svg>';
 
 function corners(elm) { ["corner-bl", "corner-br"].forEach(c => elm.appendChild(el("div", c))); }
 
@@ -534,7 +535,7 @@ async function startRoutine(routineId) {
   saveLS();
   switchTab("workout");
   renderActiveSession();
-  drainPendingAdds();  // pull in anything queued from the /gym/exercises page
+  drainPendingAdds();  // drain any legacy queued adds (pre inline-discovery)
   // fetch last-session data per exercise (async, fills ghosts + overload hints)
   S.exercises.forEach(ex => hydrateLastSession(ex));
 }
@@ -718,6 +719,7 @@ async function removeExercise(ex) {
   saveLS();
   renderActiveSession();
   updateSessionTotals();
+  discoverSessionChanged();
   toast(`Removed ${ex.name}`);
 }
 
@@ -737,16 +739,17 @@ function addExerciseToSession(lib) {
   saveLS();
   renderActiveSession();
   hydrateLastSession(st);
+  discoverSessionChanged();
   const card = $(`.exercise-card[data-ex="${lib.id}"]`);
   if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
   toast(`Added ${lib.name}`);
 }
-/* ── Handoff from the /gym/exercises catalogue page ──────────────────────────
-   That page (exercises.js) get_or_create's a gym_exercise via the API, then
-   queues the returned row in localStorage under LS_PENDING. When an active
-   session is present we drain the queue into it here — so "Add to workout" on
-   the library page lands in the current session next time /gym loads. If no
-   session is active the items stay queued until startRoutine drains them. */
+/* ── Legacy pending-adds drain ───────────────────────────────────────────────
+   The old separate exercise-library page queued "Add to workout" rows in
+   localStorage under LS_PENDING for the next /gym load to pick up. That page is
+   gone (discovery is now inline), but we still drain any rows a previous build
+   left queued so nothing is silently dropped. New adds go straight into the
+   session via addCatalogueToSession. */
 const LS_PENDING = "gym_pending_adds";
 function drainPendingAdds() {
   if (!S) return;
@@ -756,6 +759,214 @@ function drainPendingAdds() {
   localStorage.removeItem(LS_PENDING);
   q.forEach(lib => { if (lib && lib.id != null) addExerciseToSession(lib); });
 }
+/* ══ TRY SOMETHING NEW — inline, muscle-aware exercise discovery ═══════════
+   Folds the 1,324-exercise catalogue into the active session: Suggested mode
+   ranks moves for the muscle(s) being trained now; Search mode is a debounced
+   name lookup. Both add via the EXISTING bridge (POST add-to-workout →
+   addExerciseToSession), so there is no parallel logger. */
+const DISC_API = "/api/exercises";
+const DISC = { mode: "suggested", query: "", seq: 0, loadedOnce: false };
+
+function debounce(fn, ms) {
+  let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+/* Muscle groups + names already in today's session — the suggestion signal. */
+function sessionMuscles() {
+  if (!S) return [];
+  return [...new Set(S.exercises.map(e => e.muscle_group).filter(Boolean))];
+}
+function sessionExerciseNames() {
+  return S ? S.exercises.map(e => e.name).filter(Boolean) : [];
+}
+
+/* A GIF thumbnail with a skeleton shimmer until it loads; clean placeholder on
+   miss or error — never a broken image. */
+function gifThumb(url, alt, cls) {
+  const wrap = el("div", "disc-gif" + (cls ? " " + cls : ""));
+  if (!url) { wrap.classList.add("disc-gif-empty"); wrap.innerHTML = IC_DUMBBELL; return wrap; }
+  wrap.classList.add("disc-gif-loading");
+  const img = el("img");
+  img.loading = "lazy"; img.decoding = "async"; img.alt = alt || "";
+  img.addEventListener("load", () => wrap.classList.remove("disc-gif-loading"));
+  img.addEventListener("error", () => {
+    wrap.classList.remove("disc-gif-loading");
+    wrap.classList.add("disc-gif-empty"); wrap.innerHTML = IC_DUMBBELL;
+  });
+  img.src = url;
+  wrap.appendChild(img);
+  return wrap;
+}
+
+/* One horizontally-scrollable discovery card. */
+function discoverCard(ex) {
+  const card = el("div", "disc-card");
+  card.appendChild(gifThumb(ex.gif_url, ex.name));
+  const muscle = ex.muscle || ex.category || ex.target_muscle || "";
+  const body = el("div", "disc-cbody");
+  body.innerHTML = `
+    <div class="disc-name">${esc(ex.name)}</div>
+    <div class="disc-tags">
+      ${muscle ? `<span class="disc-tag disc-muscle">${esc(muscle)}</span>` : ""}
+      ${ex.equipment ? `<span class="disc-tag disc-equip">${esc(ex.equipment)}</span>` : ""}
+      ${ex.is_home_friendly ? `<span class="disc-tag disc-home" title="Home-friendly">🏠</span>` : ""}
+    </div>`;
+  const add = el("button", "btn btn-grad disc-add", "＋ Add");
+  add.addEventListener("click", (e) => { e.stopPropagation(); addCatalogueToSession(ex, add, card); });
+  body.appendChild(add);
+  card.appendChild(body);
+  // Tap anywhere else on the card → detail bottom-sheet.
+  card.addEventListener("click", () => openExDetail(ex));
+  return card;
+}
+
+/* Skeleton cards while a fetch is in flight (matches ASFA shimmer, not a spinner). */
+function discoverSkeletons(n = 5) {
+  const wrap = $("#disc-cards"); wrap.innerHTML = "";
+  for (let i = 0; i < n; i++) {
+    const c = el("div", "disc-card disc-card-skel");
+    c.appendChild(el("div", "disc-gif skeleton"));
+    c.appendChild(el("div", "disc-cbody", '<div class="skeleton skeleton-row"></div><div class="skeleton skeleton-row short"></div>'));
+    wrap.appendChild(c);
+  }
+}
+
+function discoverRender(list, emptyMsg) {
+  const wrap = $("#disc-cards"); wrap.innerHTML = "";
+  if (!list || !list.length) { wrap.appendChild(el("div", "disc-empty", esc(emptyMsg || "Nothing to show."))); return; }
+  list.forEach(ex => wrap.appendChild(discoverCard(ex)));
+}
+
+async function loadSuggested() {
+  const seq = ++DISC.seq;
+  DISC.loadedOnce = true;
+  discoverSkeletons();
+  const params = new URLSearchParams({ limit: "12" });
+  const m = sessionMuscles(); if (m.length) params.set("muscles", m.join(","));
+  const ex = sessionExerciseNames(); if (ex.length) params.set("exclude", ex.join(","));
+  let data;
+  try { data = await apiGet(`${DISC_API}/suggested?${params}`); }
+  catch (e) { if (seq === DISC.seq) discoverRender([], "Couldn't load suggestions."); return; }
+  if (seq !== DISC.seq) return;                    // a newer request superseded us
+  const hint = $("#disc-hint");
+  if (data.fallback) hint.textContent = "Log a set and these tune to what you're training.";
+  else hint.textContent = `Fresh ideas for ${data.muscles.join(", ")} — not in today's session.`;
+  discoverRender(data.exercises, "No new moves for this muscle right now.");
+}
+
+async function runSearch(q) {
+  const seq = ++DISC.seq;
+  q = (q || "").trim();
+  const hint = $("#disc-hint");
+  if (!q) { hint.textContent = "Type an exercise, muscle, or equipment."; $("#disc-cards").innerHTML = ""; return; }
+  hint.textContent = `Results for “${q}”.`;
+  discoverSkeletons();
+  let data;
+  try { data = await apiGet(`${DISC_API}?q=${encodeURIComponent(q)}&per_page=24`); }
+  catch (e) { if (seq === DISC.seq) discoverRender([], "Search failed — try again."); return; }
+  if (seq !== DISC.seq) return;
+  discoverRender(data.exercises, "No match — try a broader term.");
+}
+const runSearchDebounced = debounce(runSearch, 300);
+
+/* Add a catalogue exercise via the existing bridge, then hand the resulting
+   gym_exercises row to the normal session flow. Keeps the GIF around so the
+   how-to modal can show it. */
+async function addCatalogueToSession(ex, btn, card) {
+  if (!S) { toast("Start a workout first"); return; }
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  try {
+    const res = await apiPost(`${DISC_API}/${ex.id}/add-to-workout`);
+    const gymEx = res.gym_exercise;
+    if (!gymEx) throw new Error("no gym_exercise");
+    // Remember the demo GIF + instructions against the gym id so the ▶ modal
+    // can show them (the gym-library cache was built at boot without this row).
+    EX_BY_ID[gymEx.id] = Object.assign({}, gymEx, {
+      gif_url: ex.gif_url, image_url: ex.image_url,
+      instructions: ex.instructions || gymEx.instructions,
+      target_muscle: ex.target_muscle,
+    });
+    if (!EXERCISES.some(e => e.id === gymEx.id)) EXERCISES.push(EX_BY_ID[gymEx.id]);
+    const already = S.exercises.some(e => e.exerciseId === gymEx.id);
+    addExerciseToSession(gymEx);                   // ← the one true add path
+    if (btn) { btn.textContent = "✓ Added"; btn.classList.add("added"); }
+    if (card) card.classList.add("disc-card-added");
+    // Refresh suggestions so the just-added move drops out (Suggested mode only).
+    if (!already && DISC.mode === "suggested") setTimeout(loadSuggested, 400);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = "＋ Add"; }
+    toast("Couldn't add — try again");
+  }
+}
+
+/* ── Detail bottom-sheet ── */
+function openExDetail(ex) {
+  const body = $("#exdetail-body");
+  const muscle = ex.muscle || ex.category || "";
+  const secondary = ex.target_muscle && ex.target_muscle !== muscle ? ex.target_muscle : "";
+  body.innerHTML = "";
+  body.appendChild(gifThumb(ex.gif_url, ex.name, "disc-gif-lg"));
+  const meta = el("div", "exd-meta");
+  meta.innerHTML = `
+    <h2 class="exd-name">${esc(ex.name)} ${ex.is_home_friendly ? '<span class="disc-tag disc-home" title="Home-friendly">🏠</span>' : ""}</h2>
+    <div class="exd-tags">
+      ${muscle ? `<span class="disc-tag disc-muscle">${esc(muscle)}</span>` : ""}
+      ${secondary ? `<span class="disc-tag">${esc(secondary)}</span>` : ""}
+      ${ex.equipment ? `<span class="disc-tag disc-equip">${esc(ex.equipment)}</span>` : ""}
+    </div>
+    ${ex.instructions ? `<div class="exd-section"><h4>How To</h4><div class="exd-steps">${esc(ex.instructions)}</div></div>` : ""}`;
+  body.appendChild(meta);
+  const add = el("button", "btn btn-grad exd-add", "＋ Add to today's workout");
+  add.addEventListener("click", () => {
+    addCatalogueToSession(ex, add, null);
+    setTimeout(closeExDetail, 500);
+  });
+  body.appendChild(add);
+  openSheet();
+}
+function openSheet() {
+  const s = $("#exdetail-sheet"); s.hidden = false;
+  requestAnimationFrame(() => s.classList.add("open"));
+  document.body.classList.add("sheet-open");
+}
+function closeExDetail() {
+  const s = $("#exdetail-sheet"); s.classList.remove("open");
+  document.body.classList.remove("sheet-open");
+  setTimeout(() => { s.hidden = true; }, 220);
+}
+
+/* Called after the session changes (add/remove) so Suggested stays relevant. */
+function discoverSessionChanged() {
+  if (DISC.mode === "suggested" && DISC.loadedOnce && !$("#discover-body").hidden) loadSuggested();
+}
+
+function setDiscoverMode(mode) {
+  DISC.mode = mode;
+  $$(".disc-mode").forEach(b => b.classList.toggle("active", b.dataset.dmode === mode));
+  $("#disc-search-wrap").hidden = mode !== "search";
+  if (mode === "search") { const s = $("#disc-search"); runSearch(s.value); s.focus(); }
+  else loadSuggested();
+}
+
+function initDiscover() {
+  const toggle = $("#discover-toggle"), bodyEl = $("#discover-body");
+  if (!toggle) return;
+  toggle.addEventListener("click", () => {
+    const open = bodyEl.hidden;
+    bodyEl.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    $("#discover-panel").classList.toggle("open", open);
+    $("#disc-toggle-sub").textContent = open ? "" : "tap to explore";
+    if (open && DISC.mode === "suggested") loadSuggested();
+  });
+  $$(".disc-mode").forEach(b => b.addEventListener("click", () => setDiscoverMode(b.dataset.dmode)));
+  const search = $("#disc-search");
+  if (search) search.addEventListener("input", (e) => { DISC.query = e.target.value; runSearchDebounced(e.target.value); });
+  const sheet = $("#exdetail-sheet");
+  $("#exdetail-close").addEventListener("click", closeExDetail);
+  sheet.addEventListener("click", (e) => { if (e.target === sheet) closeExDetail(); });
+}
+
 function refreshExerciseCard(ex) {
   const card = $(`.exercise-card[data-ex="${ex.exerciseId}"]`); if (card) refreshExtras(ex, card);
 }
@@ -1484,16 +1695,9 @@ async function renderExGrid() {
   });
 }
 
-function ytEmbed(url) {
-  if (!url) return null;
-  let id = null;
-  const m1 = url.match(/[?&]v=([^&]+)/); const m2 = url.match(/youtu\.be\/([^?]+)/); const m3 = url.match(/embed\/([^?]+)/);
-  id = (m1 && m1[1]) || (m2 && m2[1]) || (m3 && m3[1]);
-  return id ? `https://www.youtube.com/embed/${id}` : null;
-}
 async function openVideo(ex) {
   const body = $("#video-modal-body");
-  const embed = ytEmbed(ex.youtube_url);
+  const gif = ex.gif_url || (EX_BY_ID[ex.id || ex.exerciseId] || {}).gif_url;
   const pr = PR_BY_EX[ex.id || ex.exerciseId] || null;
   let ormTable = "";
   if (pr && pr.one_rep_max) {
@@ -1504,11 +1708,15 @@ async function openVideo(ex) {
   }
   body.innerHTML = `<h2>${esc(ex.name)}</h2>
     <div class="muted-sub" style="margin-bottom:12px">${esc(ex.muscle_group)} · ${esc(ex.exercise_type||"")} · ${esc(ex.equipment||"")}</div>
-    ${embed ? `<div class="video-frame"><iframe src="${embed}" allowfullscreen loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>` : ""}
+    <div class="video-gif-slot"></div>
     ${ex.instructions ? `<div class="modal-section"><h4>How To</h4><div class="modal-steps">${esc(ex.instructions)}</div></div>` : ""}
     ${ex.tips ? `<div class="modal-section"><h4>Form Tips</h4><div class="form-tip">${esc(ex.tips)}</div></div>` : ""}
     ${ormTable}
     <div class="modal-section"><h4>Recent progress</h4><div class="chart-wrap" style="height:180px"><canvas id="mini-ex-chart"></canvas></div></div>`;
+  // Demo GIF (from the catalogue), replacing the old YouTube embed. Clean
+  // placeholder when no match, never a broken image.
+  const slot = body.querySelector(".video-gif-slot");
+  if (slot) slot.appendChild(gifThumb(gif, ex.name, "disc-gif-lg"));
   openModal("video-modal");
   // mini progress chart
   const hist = await apiGet(`${API}/history/${ex.id || ex.exerciseId}?limit=10`).catch(() => []);
@@ -1718,7 +1926,6 @@ function buildTrainerContext(message) {
     ctx.exercise = ex.name + (ex.muscle_group ? ` (${ex.muscle_group})` : "");
     const pr = PR_BY_EX[ex.id];
     if (pr) ctx.pr = `${fmtKg(pr.weight_kg)}kg × ${pr.reps} (est 1RM ${fmtKg(pr.one_rep_max)}kg)`;
-    if (ex.youtube_url) ctx.youtube_url = ex.youtube_url;
   }
   return ctx;
 }
@@ -2031,13 +2238,14 @@ async function boot() {
   initTrainer();
   initExport();
   initSteps();
+  initDiscover();
   // restore in-memory session from localStorage if present
   const saved = localStorage.getItem(LS_KEY);
   if (saved) { try { S = JSON.parse(saved); } catch (e) { S = null; } }
   const initial = (location.hash || "").replace("#", "");
   const tab = ["dashboard","workout","history","exercises","progress"].includes(initial) ? initial : "dashboard";
   switchTab(S ? "workout" : tab);
-  drainPendingAdds();  // pull in anything queued from the /gym/exercises page
+  drainPendingAdds();  // drain any legacy queued adds (pre inline-discovery)
 }
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
 else boot();

@@ -369,10 +369,11 @@ os.makedirs(GYM_PHOTO_UPLOAD_DIR, exist_ok=True)
 from services.interview import interview_bp
 app.register_blueprint(interview_bp, url_prefix="/interview")
 
-# Exercise library — the browsable 1,324-exercise catalogue at /gym/exercises,
-# synced from hasaneyldrm/exercises-dataset by scripts/sync_exercises.py. Read
-# API + page; "Add to workout" bridges into the gym_exercises logging flow.
-# The `exercises` table is created lazily on first query (_ensure_exercises_table).
+# Exercise catalogue — the 1,324-exercise dataset (synced from
+# hasaneyldrm/exercises-dataset by scripts/sync_exercises.py) behind /gym's
+# inline "Try Something New" discovery. Read API + /suggested ranker; there is
+# no standalone browse page. "Add to workout" bridges into the gym_exercises
+# logging flow. The `exercises` table is created lazily on first query.
 from services.exercises import exercises_bp
 app.register_blueprint(exercises_bp)
 
@@ -1382,7 +1383,8 @@ def api_log_weight():
 
 @app.route("/api/gym/exercises")
 def api_gym_exercises():
-    return jsonify(db.get_all_exercises())
+    from services.exercise_match import enrich_gym_exercises_with_gifs
+    return jsonify(enrich_gym_exercises_with_gifs(db.get_all_exercises()))
 
 
 @app.route("/api/gym/exercises/<int:exercise_id>")

@@ -5980,6 +5980,69 @@ def get_or_create_gym_exercise(name, muscle_group=None, equipment=None,
         return _exercise_row_to_dict(cur.fetchone())
 
 
+def get_gym_logged_history() -> list:
+    """Per gym exercise ever logged: its name + the most recent date it was
+    trained. Powers the inline "Try Something New" novelty/staleness ranking
+    (never-logged vs stale-30d+). Returns [{name, last_date}], newest first.
+    Dates are the session's YYYY-MM-DD (gym_sessions.date)."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT e.name AS name, MAX(s.date) AS last_date
+               FROM gym_sets st
+               JOIN gym_sessions s ON s.id = st.session_id
+               JOIN gym_exercises e ON e.id = st.exercise_id
+               GROUP BY e.name""")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_gym_muscle_frequency() -> list:
+    """Muscle groups the athlete trains most (by logged set count), most-trained
+    first: [{muscle_group, sets}]. Used as the fallback signal for suggestions
+    when the current session is still empty."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT e.muscle_group AS muscle_group, COUNT(*) AS sets
+               FROM gym_sets st
+               JOIN gym_exercises e ON e.id = st.exercise_id
+               GROUP BY e.muscle_group
+               ORDER BY COUNT(*) DESC""")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_catalogue_by_categories(categories) -> list:
+    """All catalogue exercises whose ``category`` is in ``categories`` (a list),
+    name-ordered. Empty list for no categories. Used by the suggestion ranker to
+    pull the candidate pool before Python-side muscle/target filtering."""
+    _ensure_exercises_table()
+    cats = [c for c in (categories or []) if c]
+    if not cats:
+        return []
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT * FROM exercises WHERE category IN "
+            f"({','.join([ph] * len(cats))}) ORDER BY name",
+            cats)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_all_catalogue_min() -> list:
+    """Lightweight (id, name, category, target_muscle, gif_url) for every
+    catalogue row — the input the gym-library GIF matcher scans. Kept minimal so
+    the match map is cheap to build/cache."""
+    _ensure_exercises_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, category, target_muscle, gif_url, "
+                    "image_url FROM exercises")
+        return [dict(r) for r in cur.fetchall()]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ── Scent Vault — fragrance collection, body products, pairings, wear log ─────
 # Standalone module: the 7-bottle fragrance shelf, the body/grooming products
