@@ -534,6 +534,7 @@ async function startRoutine(routineId) {
   saveLS();
   switchTab("workout");
   renderActiveSession();
+  drainPendingAdds();  // pull in anything queued from the /gym/exercises page
   // fetch last-session data per exercise (async, fills ghosts + overload hints)
   S.exercises.forEach(ex => hydrateLastSession(ex));
 }
@@ -739,6 +740,21 @@ function addExerciseToSession(lib) {
   const card = $(`.exercise-card[data-ex="${lib.id}"]`);
   if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
   toast(`Added ${lib.name}`);
+}
+/* ── Handoff from the /gym/exercises catalogue page ──────────────────────────
+   That page (exercises.js) get_or_create's a gym_exercise via the API, then
+   queues the returned row in localStorage under LS_PENDING. When an active
+   session is present we drain the queue into it here — so "Add to workout" on
+   the library page lands in the current session next time /gym loads. If no
+   session is active the items stay queued until startRoutine drains them. */
+const LS_PENDING = "gym_pending_adds";
+function drainPendingAdds() {
+  if (!S) return;
+  let q;
+  try { q = JSON.parse(localStorage.getItem(LS_PENDING) || "[]"); } catch (e) { q = []; }
+  if (!Array.isArray(q) || !q.length) return;
+  localStorage.removeItem(LS_PENDING);
+  q.forEach(lib => { if (lib && lib.id != null) addExerciseToSession(lib); });
 }
 function refreshExerciseCard(ex) {
   const card = $(`.exercise-card[data-ex="${ex.exerciseId}"]`); if (card) refreshExtras(ex, card);
@@ -2021,6 +2037,7 @@ async function boot() {
   const initial = (location.hash || "").replace("#", "");
   const tab = ["dashboard","workout","history","exercises","progress"].includes(initial) ? initial : "dashboard";
   switchTab(S ? "workout" : tab);
+  drainPendingAdds();  // pull in anything queued from the /gym/exercises page
 }
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
 else boot();

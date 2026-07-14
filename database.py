@@ -5785,6 +5785,202 @@ def revoke_api_key(key_id: int) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# ── Exercise library (catalogue from hasaneyldrm/exercises-dataset) ────────────
+# Full 1,324-exercise catalogue with GIFs, synced from GitHub by
+# scripts/sync_exercises.py into the ``exercises`` table. This is deliberately
+# SEPARATE from the curated ``gym_exercises`` library (which drives logging,
+# ranks and routines): this table is a read-mostly reference browsed at
+# /gym/exercises. "Add to workout" bridges a chosen catalogue entry into the
+# logging flow via get_or_create_gym_exercise (below). Idempotent on the string
+# ``id`` from the dataset; a re-sync updates synced fields but preserves the
+# manually-curated ``difficulty``.
+
+_EXERCISES_READY = False
+
+# Equipment values (lowercased) that make an exercise doable at home with no gym.
+HOME_EQUIPMENT = {"body weight", "bands", "resistance band"}
+
+
+def _ensure_exercises_table():
+    """Create the exercises table + its filter indexes if missing. Idempotent;
+    handles SQLite/Postgres (mirrors _ensure_gym_tables)."""
+    global _EXERCISES_READY
+    if _EXERCISES_READY:
+        return
+    create = """CREATE TABLE IF NOT EXISTS exercises (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        category TEXT,
+        target_muscle TEXT,
+        equipment TEXT,
+        instructions TEXT,
+        image_url TEXT,
+        gif_url TEXT,
+        difficulty TEXT,
+        is_home_friendly BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(create)
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS idx_exercises_category ON exercises(category)",
+            "CREATE INDEX IF NOT EXISTS idx_exercises_equipment ON exercises(equipment)",
+            "CREATE INDEX IF NOT EXISTS idx_exercises_home ON exercises(is_home_friendly)",
+        ):
+            cur.execute(stmt)
+    _EXERCISES_READY = True
+
+
+def upsert_exercise(ex: dict) -> str:
+    """Insert or update one catalogue exercise, keyed on ``id``. Returns
+    "inserted" or "updated". On update, only the synced fields are written —
+    ``difficulty`` (curated by hand later) is intentionally left untouched."""
+    _ensure_exercises_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    home = bool(ex.get("is_home_friendly"))
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT 1 FROM exercises WHERE id = {ph}", (ex["id"],))
+        exists = cur.fetchone() is not None
+        if exists:
+            cur.execute(
+                f"""UPDATE exercises SET name = {ph}, category = {ph},
+                    target_muscle = {ph}, equipment = {ph}, instructions = {ph},
+                    image_url = {ph}, gif_url = {ph}, is_home_friendly = {ph}
+                    WHERE id = {ph}""",
+                (ex["name"], ex.get("category"), ex.get("target_muscle"),
+                 ex.get("equipment"), ex.get("instructions"), ex.get("image_url"),
+                 ex.get("gif_url"), home, ex["id"]))
+            return "updated"
+        cols = ("id, name, category, target_muscle, equipment, instructions, "
+                "image_url, gif_url, is_home_friendly")
+        cur.execute(
+            f"INSERT INTO exercises ({cols}) VALUES ({','.join([ph] * 9)})",
+            (ex["id"], ex["name"], ex.get("category"), ex.get("target_muscle"),
+             ex.get("equipment"), ex.get("instructions"), ex.get("image_url"),
+             ex.get("gif_url"), home))
+        return "inserted"
+
+
+def get_exercises(category=None, equipment=None, home_only=False, q=None,
+                  difficulty=None, page=1, per_page=48) -> dict:
+    """Filtered, paginated catalogue query. ``equipment`` may be a comma-separated
+    list (matched with IN). Returns
+    {exercises, total, page, per_page, pages}."""
+    _ensure_exercises_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    where, params = [], []
+    if category:
+        where.append(f"category = {ph}")
+        params.append(category)
+    if equipment:
+        eqs = [e.strip() for e in str(equipment).split(",") if e.strip()]
+        if eqs:
+            where.append(f"equipment IN ({','.join([ph] * len(eqs))})")
+            params.extend(eqs)
+    if home_only:
+        where.append(f"is_home_friendly = {ph}")
+        params.append(True)
+    if difficulty:
+        where.append(f"difficulty = {ph}")
+        params.append(difficulty)
+    if q:
+        where.append(f"LOWER(name) LIKE {ph}")
+        params.append(f"%{str(q).lower()}%")
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+    try:
+        page = max(1, int(page))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        per_page = max(1, min(100, int(per_page)))
+    except (TypeError, ValueError):
+        per_page = 48
+    offset = (page - 1) * per_page
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) AS n FROM exercises {clause}", params)
+        row = cur.fetchone()
+        total = (row["n"] if isinstance(row, dict) or hasattr(row, "keys")
+                 else row[0]) or 0
+        cur.execute(
+            f"SELECT * FROM exercises {clause} ORDER BY name LIMIT {ph} OFFSET {ph}",
+            params + [per_page, offset])
+        rows = [dict(r) for r in cur.fetchall()]
+    return {
+        "exercises": rows, "total": total, "page": page, "per_page": per_page,
+        "pages": (total + per_page - 1) // per_page if total else 0,
+    }
+
+
+def get_exercise_by_id(ex_id: str) -> dict:
+    """One catalogue exercise by its string id, or None. Named to avoid clashing
+    with get_exercise() which serves the gym_exercises library."""
+    _ensure_exercises_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM exercises WHERE id = {ph}", (str(ex_id),))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def get_exercise_facets() -> dict:
+    """Distinct categories / equipment / difficulties for building filter UIs."""
+    _ensure_exercises_table()
+    out = {"categories": [], "equipment": [], "difficulties": []}
+    with get_db() as conn:
+        cur = conn.cursor()
+        for key, col in (("categories", "category"), ("equipment", "equipment"),
+                         ("difficulties", "difficulty")):
+            cur.execute(
+                f"SELECT DISTINCT {col} AS v FROM exercises "
+                f"WHERE {col} IS NOT NULL AND {col} <> '' ORDER BY {col}")
+            out[key] = [(r["v"] if hasattr(r, "keys") else r[0])
+                        for r in cur.fetchall()]
+    return out
+
+
+def count_exercises() -> int:
+    """Total rows in the catalogue (used by the sync summary + tests)."""
+    _ensure_exercises_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS n FROM exercises")
+        row = cur.fetchone()
+        return (row["n"] if hasattr(row, "keys") else row[0]) or 0
+
+
+def get_or_create_gym_exercise(name, muscle_group=None, equipment=None,
+                               exercise_type=None, instructions=None) -> dict:
+    """Bridge a catalogue exercise into the loggable gym_exercises library:
+    return the existing gym_exercises row matching ``name``, or create a minimal
+    one (NULL rank thresholds → shows as Unranked) and return it. This is how
+    "Add to workout" lets any of the 1,324 catalogue exercises be logged with
+    the normal gym set-logging flow."""
+    _ensure_gym_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM gym_exercises WHERE name = {ph}", (name,))
+        row = cur.fetchone()
+        if row:
+            return _exercise_row_to_dict(row)
+        # gym_exercises.muscle_group is NOT NULL — fall back to "other".
+        _gym_insert(
+            cur, "gym_exercises",
+            "name, muscle_group, secondary_muscles, equipment, exercise_type, "
+            "instructions",
+            (name, muscle_group or "other", json.dumps([]), equipment,
+             exercise_type, instructions))
+        cur.execute(f"SELECT * FROM gym_exercises WHERE name = {ph}", (name,))
+        return _exercise_row_to_dict(cur.fetchone())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # ── Scent Vault — fragrance collection, body products, pairings, wear log ─────
 # Standalone module: the 7-bottle fragrance shelf, the body/grooming products
 # layered under them, one curated routine (pairing) per fragrance, and a wear

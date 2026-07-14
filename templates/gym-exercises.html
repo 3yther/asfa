@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>ASFA // EXERCISE LIBRARY</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="mask-icon" href="{{ url_for('static', filename='favicon.svg') }}" color="#00d9ff">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/sounds.js') }}" defer></script>
+<style>
+  /* Exercise Library — reuses ASFA's global tokens from style.css (var(--cyan),
+     --panel, --line, --muted …). Everything scoped under .exl-* so nothing
+     collides with the globals. Layout mirrors gym.html / nutrition.html. */
+  .exl-screen{max-width:1180px;margin:0 auto;padding:18px 16px 120px;color:var(--text)}
+  .exl-head{text-align:center;margin-bottom:14px;position:relative}
+  .exl-head .screen-title{
+    font-size:1.9rem;letter-spacing:2px;
+    background:linear-gradient(135deg,var(--cyan),var(--purple));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .exl-head .screen-sub{color:var(--muted);font-size:.82rem;letter-spacing:1px}
+  .exl-back{position:absolute;left:0;top:6px;color:var(--muted);text-decoration:none;
+    font-family:var(--mono,'JetBrains Mono',monospace);font-size:.72rem;letter-spacing:1px}
+  .exl-back:hover{color:var(--cyan)}
+
+  .exl-layout{display:grid;grid-template-columns:250px 1fr;gap:18px;align-items:start}
+  @media (max-width:840px){.exl-layout{grid-template-columns:1fr}}
+
+  /* Filter sidebar */
+  .exl-side{padding:16px;position:sticky;top:12px}
+  .exl-side h3{font-size:.72rem;letter-spacing:2px;text-transform:uppercase;
+    color:var(--cyan);margin:0 0 10px;font-family:var(--mono,'JetBrains Mono',monospace)}
+  .exl-fgroup{margin-bottom:18px}
+  .exl-fgroup>label{display:block;font-size:.62rem;letter-spacing:1.5px;text-transform:uppercase;
+    color:var(--muted);margin-bottom:6px}
+  .exl-select,.exl-search{
+    width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    border-radius:var(--radius,4px);padding:8px 10px;font-size:.82rem;
+    font-family:var(--mono,'JetBrains Mono',monospace)}
+  .exl-select:focus,.exl-search:focus{outline:none;border-color:var(--cyan)}
+  .exl-checks{max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;
+    padding-right:4px}
+  .exl-check{display:flex;align-items:center;gap:8px;font-size:.78rem;color:var(--text);
+    cursor:pointer;padding:2px 0;text-transform:capitalize}
+  .exl-check input{accent-color:var(--cyan);width:15px;height:15px}
+  .exl-toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    font-size:.8rem;color:var(--text);cursor:pointer}
+  .exl-switch{position:relative;width:40px;height:22px;flex:none}
+  .exl-switch input{opacity:0;width:0;height:0}
+  .exl-slider{position:absolute;inset:0;background:var(--panel-3);border:1px solid var(--line);
+    border-radius:999px;transition:.15s}
+  .exl-slider::before{content:"";position:absolute;height:14px;width:14px;left:3px;top:3px;
+    background:var(--muted);border-radius:50%;transition:.15s}
+  .exl-switch input:checked+.exl-slider{background:rgba(61,225,240,.18);border-color:var(--cyan)}
+  .exl-switch input:checked+.exl-slider::before{transform:translateX(18px);background:var(--cyan)}
+  .exl-reset{margin-top:6px;width:100%;background:transparent;border:1px solid var(--line);
+    color:var(--muted);border-radius:var(--radius,4px);padding:7px;font-size:.72rem;
+    letter-spacing:1px;text-transform:uppercase;cursor:pointer;font-family:var(--mono,'JetBrains Mono',monospace)}
+  .exl-reset:hover{border-color:var(--cyan);color:var(--cyan)}
+
+  /* Results */
+  .exl-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    margin-bottom:12px;flex-wrap:wrap}
+  .exl-count{font-size:.74rem;color:var(--muted);letter-spacing:1px;
+    font-family:var(--mono,'JetBrains Mono',monospace)}
+  .exl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
+  .exl-card{padding:0;overflow:hidden;cursor:pointer;display:flex;flex-direction:column;
+    transition:transform .12s,border-color .12s}
+  .exl-card:hover{transform:translateY(-2px);border-color:var(--cyan)}
+  .exl-gifwrap{aspect-ratio:1/1;background:var(--panel-3);position:relative;overflow:hidden}
+  .exl-gif{width:100%;height:100%;object-fit:cover;display:block;background:#fff}
+  .exl-cardbody{padding:10px 12px 12px}
+  .exl-name{font-size:.86rem;font-weight:600;color:var(--text);line-height:1.25;
+    text-transform:capitalize;margin-bottom:6px}
+  .exl-meta{display:flex;flex-wrap:wrap;gap:5px}
+  .exl-badge{font-size:.58rem;letter-spacing:.5px;text-transform:uppercase;padding:2px 7px;
+    border-radius:999px;border:1px solid var(--line);color:var(--muted);
+    font-family:var(--mono,'JetBrains Mono',monospace)}
+  .exl-badge.target{border-color:rgba(61,225,240,.35);color:var(--cyan)}
+  .exl-badge.home{border-color:rgba(124,58,237,.45);color:#b28bff}
+
+  .exl-empty,.exl-loading{grid-column:1/-1;text-align:center;color:var(--muted);padding:60px 20px;
+    font-family:var(--mono,'JetBrains Mono',monospace);font-size:.8rem;letter-spacing:1px}
+  .exl-pager{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:22px}
+  .exl-pager button{background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    border-radius:var(--radius,4px);padding:8px 16px;cursor:pointer;font-size:.78rem;
+    font-family:var(--mono,'JetBrains Mono',monospace)}
+  .exl-pager button:disabled{opacity:.35;cursor:default}
+  .exl-pager button:not(:disabled):hover{border-color:var(--cyan);color:var(--cyan)}
+  .exl-pageinfo{font-size:.74rem;color:var(--muted);font-family:var(--mono,'JetBrains Mono',monospace)}
+
+  /* Detail modal */
+  .exl-overlay{position:fixed;inset:0;background:rgba(0,4,8,.82);backdrop-filter:blur(4px);
+    display:none;align-items:center;justify-content:center;z-index:120;padding:20px}
+  .exl-overlay.open{display:flex}
+  .exl-modal{max-width:640px;width:100%;max-height:88vh;overflow-y:auto;padding:0;position:relative}
+  .exl-modal-close{position:absolute;top:10px;right:12px;background:rgba(0,4,8,.6);border:1px solid var(--line);
+    color:var(--text);width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:1rem;z-index:2}
+  .exl-modal-close:hover{color:var(--cyan);border-color:var(--cyan)}
+  .exl-modal-gif{width:100%;max-height:340px;object-fit:contain;background:#fff;display:block}
+  .exl-modal-body{padding:16px 20px 22px}
+  .exl-modal-title{font-size:1.15rem;font-weight:700;color:var(--text);text-transform:capitalize;
+    margin:0 0 8px}
+  .exl-modal-meta{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+  .exl-modal h4{font-size:.66rem;letter-spacing:2px;text-transform:uppercase;color:var(--cyan);
+    margin:16px 0 8px;font-family:var(--mono,'JetBrains Mono',monospace)}
+  .exl-steps{margin:0;padding-left:20px;color:var(--text);font-size:.86rem;line-height:1.6}
+  .exl-steps li{margin-bottom:6px}
+  .exl-alt{margin-top:14px;padding:10px 12px;border:1px dashed var(--line);border-radius:var(--radius,4px);
+    color:var(--muted);font-size:.8rem}
+  .exl-alt strong{color:#b28bff}
+  .exl-alt a{color:var(--cyan);cursor:pointer;text-decoration:underline}
+  .exl-add{margin-top:18px;width:100%;background:linear-gradient(135deg,var(--cyan-deep),var(--cyan));
+    border:none;color:#00141a;font-weight:700;letter-spacing:1px;text-transform:uppercase;
+    border-radius:var(--radius,4px);padding:12px;cursor:pointer;font-size:.82rem;
+    font-family:var(--mono,'JetBrains Mono',monospace)}
+  .exl-add:hover{filter:brightness(1.1)}
+  .exl-add:disabled{opacity:.6;cursor:default}
+
+  .exl-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);
+    background:var(--panel-2);border:1px solid var(--cyan);color:var(--text);padding:12px 20px;
+    border-radius:var(--radius,4px);font-size:.82rem;opacity:0;transition:.2s;z-index:200;pointer-events:none}
+  .exl-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+<canvas id="starfield-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;"></canvas>
+
+{% include "nav.html" with context %}
+
+<main class="exl-screen">
+  <header class="exl-head">
+    <a class="exl-back" href="/gym">‹ IRON LOG</a>
+    <h1 class="screen-title" data-decode>Exercise Library</h1>
+    <p class="screen-sub">1,324 movements • form GIFs • home-friendly filter</p>
+  </header>
+
+  <div class="exl-layout">
+    <!-- ── Filter sidebar ─────────────────────────────────────────────── -->
+    <aside class="card sci-fi-panel exl-side">
+      <h3>Filters</h3>
+
+      <div class="exl-fgroup">
+        <label for="exl-search">Search</label>
+        <input type="search" id="exl-search" class="exl-search" placeholder="e.g. squat, press…" autocomplete="off">
+      </div>
+
+      <div class="exl-fgroup">
+        <label for="exl-category">Category</label>
+        <select id="exl-category" class="exl-select"><option value="">All categories</option></select>
+      </div>
+
+      <div class="exl-fgroup">
+        <label for="exl-difficulty">Difficulty</label>
+        <select id="exl-difficulty" class="exl-select"><option value="">Any difficulty</option></select>
+      </div>
+
+      <div class="exl-fgroup">
+        <label class="exl-toggle" for="exl-home">
+          <span>Home-friendly only</span>
+          <span class="exl-switch"><input type="checkbox" id="exl-home"><span class="exl-slider"></span></span>
+        </label>
+      </div>
+
+      <div class="exl-fgroup">
+        <label>Equipment</label>
+        <div class="exl-checks" id="exl-equipment"></div>
+      </div>
+
+      <button class="exl-reset" id="exl-reset">Reset filters</button>
+    </aside>
+
+    <!-- ── Results ────────────────────────────────────────────────────── -->
+    <section>
+      <div class="exl-toolbar">
+        <span class="exl-count" id="exl-count">Loading…</span>
+      </div>
+      <div class="exl-grid" id="exl-grid">
+        <div class="exl-loading">Loading exercises…</div>
+      </div>
+      <div class="exl-pager" id="exl-pager" hidden>
+        <button id="exl-prev">‹ Prev</button>
+        <span class="exl-pageinfo" id="exl-pageinfo"></span>
+        <button id="exl-next">Next ›</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<!-- ── Detail modal ─────────────────────────────────────────────────────── -->
+<div class="exl-overlay" id="exl-overlay">
+  <div class="card sci-fi-panel exl-modal" id="exl-modal">
+    <button class="exl-modal-close" id="exl-modal-close" aria-label="Close">✕</button>
+    <img class="exl-modal-gif" id="exl-modal-gif" alt="" src="">
+    <div class="exl-modal-body" id="exl-modal-body"></div>
+  </div>
+</div>
+
+<div class="exl-toast" id="exl-toast"></div>
+
+<script>
+  // Bracket corners on sci-fi panels (matches other ASFA screens).
+  document.querySelectorAll('.sci-fi-panel').forEach(el => {
+    ['corner-bl', 'corner-br'].forEach(cls => {
+      const div = document.createElement('div'); div.className = cls; el.appendChild(div);
+    });
+  });
+</script>
+<script src="{{ url_for('static', filename='js/exercises.js') }}" defer></script>
+<script src="/static/js/starfield.js" defer></script>
+</body>
+</html>

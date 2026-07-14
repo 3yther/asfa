@@ -369,6 +369,13 @@ os.makedirs(GYM_PHOTO_UPLOAD_DIR, exist_ok=True)
 from services.interview import interview_bp
 app.register_blueprint(interview_bp, url_prefix="/interview")
 
+# Exercise library — the browsable 1,324-exercise catalogue at /gym/exercises,
+# synced from hasaneyldrm/exercises-dataset by scripts/sync_exercises.py. Read
+# API + page; "Add to workout" bridges into the gym_exercises logging flow.
+# The `exercises` table is created lazily on first query (_ensure_exercises_table).
+from services.exercises import exercises_bp
+app.register_blueprint(exercises_bp)
+
 
 def _today():
     return datetime.now().strftime("%Y-%m-%d")
