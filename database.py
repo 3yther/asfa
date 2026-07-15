@@ -5628,6 +5628,629 @@ def get_active_session() -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# WORKOUT PLAN — the documented training structure behind /gym/plan
+# ═══════════════════════════════════════════════════════════════════════════════
+# This is the *intent* layer: the weekly split, the main-lift roadmap, and the
+# September goals. It sits alongside — not on top of — the gym_* tables, which
+# hold what was actually lifted.
+#
+# Nothing here stores a "current" value. Current bench and current bodyweight are
+# read live from gym_prs / gym_body_stats at request time, and progress percent is
+# computed from those. A stored snapshot would be wrong the moment a set is logged,
+# and this page is meant to be the source of truth.
+
+_PLAN_READY = False
+
+# Distinguishes "caller didn't pass a live reading" from "caller passed None,
+# meaning nothing is logged" — None is a real value here, so it can't be the default.
+_UNSET = object()
+
+
+def _ensure_workout_plan_tables():
+    """Create the workout_plan/* tables if missing. Idempotent; SQLite + Postgres."""
+    global _PLAN_READY
+    if _PLAN_READY:
+        return
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS workout_plan (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            split_name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS workout_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER NOT NULL REFERENCES workout_plan(id),
+            day_number INTEGER NOT NULL,
+            day_name TEXT NOT NULL,
+            session_type TEXT NOT NULL,
+            exercises TEXT,
+            cardio TEXT,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (plan_id, day_number)
+        )""",
+        # start_weight/start_reps document where the roadmap began; the live PR
+        # comes from gym_prs, so the two never contradict each other.
+        """CREATE TABLE IF NOT EXISTS progression_targets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            exercise_name TEXT NOT NULL UNIQUE,
+            start_weight REAL,
+            start_reps INTEGER,
+            target_weight REAL,
+            target_reps INTEGER,
+            target_date TEXT,
+            reach_weight REAL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        # metric_key binds a goal to a live source ('bodyweight' -> gym_body_stats,
+        # 'bench' -> gym_prs). NULL means qualitative: tracked, but no progress bar.
+        """CREATE TABLE IF NOT EXISTS workout_goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_name TEXT NOT NULL UNIQUE,
+            metric_key TEXT,
+            target_date TEXT,
+            start_value REAL,
+            target_value REAL,
+            unit TEXT,
+            notes TEXT,
+            order_index INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+    ]
+    with get_db() as conn:
+        cur = conn.cursor()
+        for stmt in stmts:
+            if USE_POSTGRES:
+                stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+            cur.execute(stmt)
+    _PLAN_READY = True
+
+
+# ── Plan seed ────────────────────────────────────────────────────────────────
+# 3 Push / 1 Pull is deliberate and Amir's actual training, so the split is named
+# for what it is rather than the conventional "4-day Push/Pull", which would imply
+# 2/2. Treadmill finisher rides along on every gym day; cycling Tue + Thu.
+
+PLAN_SPLIT_NAME = "4-Day Push-Focused Split"
+PLAN_TARGET_DATE = "2026-09-15"
+
+_TREADMILL = "30 min treadmill — 13% incline, 3.5 speed"
+_CYCLING = "7.9 miles, ~46 min"
+
+_PUSH_EXERCISES = [
+    "Incline Barbell Bench",
+    "Pec Deck",
+    "Chest Press",
+    "Shoulder Press",
+    "Triceps",
+]
+_PULL_EXERCISES = [
+    "Lat Pulldown",
+    "Rows",
+    "Biceps",
+    "Back Finisher",
+]
+
+PLAN_SESSIONS = [
+    (1, "Monday", "Push", _PUSH_EXERCISES, _TREADMILL, None),
+    (2, "Tuesday", "Cycling", [], _CYCLING, "Stamina work — no lifting."),
+    (3, "Wednesday", "Pull", _PULL_EXERCISES, _TREADMILL, None),
+    (4, "Thursday", "Cycling", [], _CYCLING, "Stamina work — no lifting."),
+    (5, "Friday", "Push", _PUSH_EXERCISES, _TREADMILL, "Same as Monday."),
+    (6, "Saturday", "Push", _PUSH_EXERCISES, _TREADMILL, "Same as Monday."),
+    (7, "Sunday", "Rest", [], None, "Full recovery day. Weekly weigh-in."),
+]
+
+PLAN_DESCRIPTION = (
+    "Three Push days, one Pull day, two cycling days, one full rest day. "
+    "Every gym day finishes with 30 min on the treadmill at 13% incline, 3.5 speed."
+)
+
+PLAN_NOTES = (
+    "Abs 2x/week post-gym (any two days). 10k steps daily via Apple Watch. "
+    "Log pre-workout (Energy Drink or Origin Pre-Workout) and an RPE 1-10 "
+    "effort rating each session. Progression: add reps first, then weight."
+)
+
+# ── Personal baselines (environment, never committed) ────────────────────────
+# This repo is public. Bodyweight, lift numbers and health-related goals are
+# biometric/medical data, so they live in .env (gitignored) rather than in source
+# — see .env.example for the full list. Unset is a first-class state: the plan
+# still seeds and the page still renders, it just shows nothing personal and says
+# the baseline isn't configured. Only the training *structure* above is committed.
+
+def _plan_env_float(name):
+    """Optional numeric plan baseline from the environment. None when unset or
+    unparseable — never a silent 0, which would read as a real measurement."""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        v = float(raw)
+    except ValueError:
+        return None
+    return v if v > 0 else None
+
+
+def _plan_env_int(name):
+    v = _plan_env_float(name)
+    return int(v) if v is not None else None
+
+
+def plan_progression_seed():
+    """The bench roadmap, populated from the environment. Empty when no start
+    weight is configured — a roadmap with no start has nothing to plot."""
+    start = _plan_env_float("PLAN_BENCH_START_KG")
+    target = _plan_env_float("PLAN_BENCH_TARGET_KG")
+    reach = _plan_env_float("PLAN_BENCH_REACH_KG")
+    if start is None or target is None:
+        return []
+    step = _plan_env_float("PLAN_BENCH_STEP_KG")
+    weeks = _plan_env_int("PLAN_BENCH_STEP_WEEKS")
+    note = "Add reps first, then weight."
+    if step and weeks:
+        note = f"+{step:g}kg per {weeks} weeks. " + note
+    if reach:
+        note += f" {reach:g}kg is the reach goal."
+    return [(
+        "Barbell Bench Press",
+        start, _plan_env_int("PLAN_BENCH_START_REPS"),
+        target, _plan_env_int("PLAN_BENCH_TARGET_REPS"),
+        reach, note,
+    )]
+
+
+def plan_goals_seed():
+    """The September goals, populated from the environment. Each is skipped when
+    its baseline isn't configured, so a fresh clone seeds no personal data.
+
+    PLAN_PRIVATE_GOALS carries anything that is nobody else's business (health
+    markers, appearance) as a JSON list of {"name", "notes"} — kept out of source
+    entirely rather than shipped as a default anyone could read."""
+    goals = []
+    bw_start = _plan_env_float("PLAN_BASELINE_KG")
+    bw_target = _plan_env_float("PLAN_TARGET_KG")
+    if bw_target is not None:
+        goals.append((f"Reach {bw_target:g}kg bodyweight", "bodyweight",
+                      bw_start, bw_target, "kg",
+                      "Weigh in weekly.", len(goals)))
+    bench_goal = _plan_env_float("PLAN_BENCH_GOAL_KG")
+    if bench_goal is not None:
+        goals.append((f"Bench PR {bench_goal:g}kg", "bench", None, bench_goal, "kg",
+                      "Realistic September target.", len(goals)))
+    for g in _plan_private_goals():
+        goals.append((g["name"], None, None, None, None, g.get("notes"), len(goals)))
+    return goals
+
+
+def _plan_private_goals():
+    raw = (os.environ.get("PLAN_PRIVATE_GOALS") or "").strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return []
+    return [g for g in parsed if isinstance(g, dict) and g.get("name")]
+
+
+def _plan_id(cur):
+    """The singleton plan's id, or None. The plan is identified by *existing*,
+    never by its name — split_name is user-editable from the Edit Plan button, so
+    keying off it would re-seed a duplicate plan the first time Amir renames the
+    split and the app restarts."""
+    cur.execute("SELECT id FROM workout_plan ORDER BY id LIMIT 1")
+    row = cur.fetchone()
+    return row["id"] if row else None
+
+
+def seed_workout_plan():
+    """Insert the plan, its 7 days, progression targets and goals once.
+    Idempotent — each row is skipped if already present, so edits made through
+    the UI are never stomped by a redeploy."""
+    _ensure_workout_plan_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        plan_id = _plan_id(cur)
+        if plan_id is None:
+            plan_id = _gym_insert(
+                cur, "workout_plan", "split_name, description, notes",
+                (PLAN_SPLIT_NAME, PLAN_DESCRIPTION, PLAN_NOTES))
+
+        for day_number, day_name, stype, exercises, cardio, notes in PLAN_SESSIONS:
+            cur.execute(
+                f"SELECT id FROM workout_sessions WHERE plan_id = {ph} AND day_number = {ph}",
+                (plan_id, day_number))
+            if cur.fetchone():
+                continue
+            _gym_insert(
+                cur, "workout_sessions",
+                "plan_id, day_number, day_name, session_type, exercises, cardio, notes",
+                (plan_id, day_number, day_name, stype, json.dumps(exercises), cardio, notes))
+
+        for name, start_kg, start_reps, tgt_kg, tgt_reps, reach_kg, notes in plan_progression_seed():
+            cur.execute(f"SELECT id FROM progression_targets WHERE exercise_name = {ph}",
+                        (name,))
+            if cur.fetchone():
+                continue
+            _gym_insert(
+                cur, "progression_targets",
+                "exercise_name, start_weight, start_reps, target_weight, target_reps, "
+                "target_date, reach_weight, notes",
+                (name, start_kg, start_reps, tgt_kg, tgt_reps, PLAN_TARGET_DATE,
+                 reach_kg, notes))
+
+        for goal_name, metric, start_v, target_v, unit, notes, order in plan_goals_seed():
+            cur.execute(f"SELECT id FROM workout_goals WHERE goal_name = {ph}", (goal_name,))
+            if cur.fetchone():
+                continue
+            _gym_insert(
+                cur, "workout_goals",
+                "goal_name, metric_key, target_date, start_value, target_value, "
+                "unit, notes, order_index",
+                (goal_name, metric, PLAN_TARGET_DATE, start_v, target_v, unit, notes, order))
+    return plan_id
+
+
+def seed_baseline_bodyweight():
+    """Record the configured starting bodyweight (PLAN_BASELINE_KG) so the goal
+    has something to measure against on day one. No-ops when unset. Only fires
+    when gym_body_stats is completely empty — once a real weigh-in exists this is
+    a no-op forever, so it can't duplicate or shadow logged data. Returns True if
+    it inserted."""
+    baseline = _plan_env_float("PLAN_BASELINE_KG")
+    if baseline is None:
+        return False
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS n FROM gym_body_stats")
+        if int(cur.fetchone()["n"]) > 0:
+            return False
+    log_body_stat(date.today().isoformat(), baseline,
+                  "Baseline bodyweight — starting point for the September goal.")
+    return True
+
+
+def init_workout_plan():
+    """Create + seed the plan tables. Safe to call on every boot."""
+    _ensure_workout_plan_tables()
+    seed_workout_plan()
+    seed_baseline_bodyweight()
+
+
+# ── Plan reads ───────────────────────────────────────────────────────────────
+
+def get_workout_plan() -> dict:
+    """The plan row + its 7 days, ordered Monday→Sunday. None if unseeded."""
+    _ensure_workout_plan_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM workout_plan ORDER BY id LIMIT 1")
+        row = cur.fetchone()
+        if not row:
+            return None
+        plan = dict(row)
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT * FROM workout_sessions WHERE plan_id = {ph} ORDER BY day_number",
+            (plan["id"],))
+        days = []
+        for r in cur.fetchall():
+            d = dict(r)
+            try:
+                d["exercises"] = json.loads(d.get("exercises") or "[]")
+            except (TypeError, ValueError):
+                d["exercises"] = []
+            days.append(d)
+        plan["days"] = days
+        plan["summary"] = summarise_split(days)
+        return plan
+
+
+def summarise_split(days: list) -> dict:
+    """Count the week by session type. 'Gym' is any lifting day (Push/Pull);
+    cycling and rest are counted separately."""
+    gym = sum(1 for d in days if (d.get("session_type") or "") in ("Push", "Pull"))
+    cardio = sum(1 for d in days if (d.get("session_type") or "") == "Cycling")
+    rest = sum(1 for d in days if (d.get("session_type") or "") == "Rest")
+    return {"gym_days": gym, "cardio_days": cardio, "rest_days": rest,
+            "total_days": len(days)}
+
+
+def _current_bench_pr() -> dict:
+    """Amir's heaviest logged bench, straight from gym_prs. None if never logged."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT p.weight_kg, p.reps, p.one_rep_max, p.achieved_at
+                FROM gym_prs p JOIN gym_exercises e ON e.id = p.exercise_id
+                WHERE e.name = {ph}""",
+            ("Barbell Bench Press",))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def _latest_bodyweight() -> dict:
+    """Most recent weigh-in from gym_body_stats. None if none logged."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT date, weight_kg FROM gym_body_stats WHERE weight_kg IS NOT NULL "
+            "ORDER BY date DESC, id DESC LIMIT 1")
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def _pct(start, current, target) -> int:
+    """Percent of the start→target journey covered, clamped 0–100. Works in both
+    directions (losing weight or adding kg). None when it can't be computed."""
+    if start is None or current is None or target is None:
+        return None
+    span = float(target) - float(start)
+    if span == 0:
+        return 100 if float(current) == float(target) else 0
+    done = (float(current) - float(start)) / span
+    return max(0, min(100, int(round(done * 100))))
+
+
+def get_progression_targets(pr=_UNSET) -> list:
+    """Progression roadmap with live current weight + % complete folded in.
+
+    `pr` lets a caller that already read gym_prs pass it in (see get_plan_payload)
+    rather than making this re-query; omit it and it reads for itself."""
+    _ensure_workout_plan_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM progression_targets ORDER BY id")
+        rows = [dict(r) for r in cur.fetchall()]
+    pr = _current_bench_pr() if pr is _UNSET else pr
+    for t in rows:
+        # Only bench has a live source today; others stay honest about it.
+        live = pr if t["exercise_name"] == "Barbell Bench Press" else None
+        t["current_weight"] = live["weight_kg"] if live else None
+        t["current_reps"] = live["reps"] if live else None
+        t["current_source"] = "logged PR" if live else None
+        t["achieved_at"] = live["achieved_at"] if live else None
+        t["percent_complete"] = _pct(t["start_weight"], t["current_weight"],
+                                     t["target_weight"])
+        t["percent_to_reach"] = _pct(t["start_weight"], t["current_weight"],
+                                     t["reach_weight"])
+        t["kg_to_target"] = (round(t["target_weight"] - t["current_weight"], 1)
+                             if t["current_weight"] is not None else None)
+        t["kg_to_reach"] = (round(t["reach_weight"] - t["current_weight"], 1)
+                            if t["current_weight"] is not None else None)
+        # The documented start is a lift Amir reports hitting; the live PR is what
+        # got logged through a session. They can disagree (a heavy double may never
+        # have been logged), which pins percent at 0 and looks broken unless said
+        # out loud. Surface the gap instead of hiding it behind an empty bar.
+        t["below_start"] = (
+            t["current_weight"] is not None and t["start_weight"] is not None
+            and t["current_weight"] < t["start_weight"])
+        t["kg_below_start"] = (
+            round(t["start_weight"] - t["current_weight"], 1)
+            if t["below_start"] else None)
+    return rows
+
+
+def get_workout_goals(pr=_UNSET, bw=_UNSET) -> list:
+    """Goals with live current values, % complete and a day countdown.
+    Qualitative goals (no metric_key) come back with current_value None and
+    percent_complete None rather than a fake number.
+
+    `pr`/`bw` are injectable live readings — see get_progression_targets."""
+    _ensure_workout_plan_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM workout_goals ORDER BY order_index, id")
+        rows = [dict(r) for r in cur.fetchall()]
+    bw = _latest_bodyweight() if bw is _UNSET else bw
+    pr = _current_bench_pr() if pr is _UNSET else pr
+    today = date.today()
+    for g in rows:
+        metric = g.get("metric_key")
+        if metric == "bodyweight":
+            g["current_value"] = bw["weight_kg"] if bw else None
+            g["measured_at"] = bw["date"] if bw else None
+            g["current_source"] = "latest weigh-in" if bw else None
+        elif metric == "bench":
+            g["current_value"] = pr["weight_kg"] if pr else None
+            g["measured_at"] = pr["achieved_at"] if pr else None
+            g["current_source"] = "logged PR" if pr else None
+        else:
+            g["current_value"] = None
+            g["measured_at"] = None
+            g["current_source"] = None
+        # Bench has no documented start, so fall back to the first logged PR as
+        # the baseline; without one there's no journey to measure.
+        start = g.get("start_value")
+        if start is None and metric == "bench":
+            start = g["current_value"]
+        g["percent_complete"] = (
+            _pct(start, g["current_value"], g.get("target_value"))
+            if metric else None)
+        g["remaining"] = (
+            round(abs(float(g["target_value"]) - float(g["current_value"])), 1)
+            if g.get("target_value") is not None and g["current_value"] is not None
+            else None)
+        g["qualitative"] = metric is None
+        g["days_remaining"] = _days_until(g.get("target_date"), today)
+    return rows
+
+
+def _days_until(target_date: str, today=None) -> int:
+    """Whole days from today to an ISO date. Negative once past. None if unparseable."""
+    if not target_date:
+        return None
+    try:
+        d = datetime.strptime(target_date, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+    return (d - (today or date.today())).days
+
+
+def get_plan_quick_stats(pr=_UNSET, bw=_UNSET, targets=_UNSET) -> dict:
+    """Section 4: countdown + the gaps left to close, all derived live.
+
+    `pr`/`bw`/`targets` are injectable so the page's single endpoint doesn't pay
+    for the same gym_prs/gym_body_stats reads four times over."""
+    today = date.today()
+    bw = _latest_bodyweight() if bw is _UNSET else bw
+    pr = _current_bench_pr() if pr is _UNSET else pr
+    targets = get_progression_targets(pr=pr) if targets is _UNSET else targets
+    bench = targets[0] if targets else None
+
+    # Goal bodyweight is a configured baseline, not a literal — see .env.example.
+    goal_bw = _plan_env_float("PLAN_TARGET_KG")
+    kg_to_lose = None
+    if bw and goal_bw is not None:
+        kg_to_lose = round(float(bw["weight_kg"]) - goal_bw, 1)
+
+    return {
+        "days_until_september": _days_until("2026-09-01", today),
+        "days_until_target": _days_until(PLAN_TARGET_DATE, today),
+        "target_date": PLAN_TARGET_DATE,
+        "current_bodyweight": bw["weight_kg"] if bw else None,
+        "bodyweight_measured_at": bw["date"] if bw else None,
+        "goal_bodyweight": goal_bw,
+        "kg_to_lose": kg_to_lose,
+        "current_bench_kg": pr["weight_kg"] if pr else None,
+        "current_bench_reps": pr["reps"] if pr else None,
+        "current_bench_1rm": pr["one_rep_max"] if pr else None,
+        "bench_achieved_at": pr["achieved_at"] if pr else None,
+        "kg_to_bench_target": bench["kg_to_target"] if bench else None,
+        "kg_to_bench_reach": bench["kg_to_reach"] if bench else None,
+    }
+
+
+def get_plan_payload() -> dict:
+    """Everything /gym/plan renders, built in one pass. The four sections all lean
+    on the same two live readings (bench PR + latest weigh-in), so read each once
+    and thread them through instead of re-querying per section."""
+    pr = _current_bench_pr()
+    bw = _latest_bodyweight()
+    targets = get_progression_targets(pr=pr)
+    return {
+        "plan": get_workout_plan(),
+        "progression": targets,
+        "goals": get_workout_goals(pr=pr, bw=bw),
+        "stats": get_plan_quick_stats(pr=pr, bw=bw, targets=targets),
+    }
+
+
+def update_workout_plan(split_name=None, description=None, notes=None) -> bool:
+    """Edit the plan's headline fields. Only non-None fields are written."""
+    _ensure_workout_plan_tables()
+    fields, values = [], []
+    for col, val in (("split_name", split_name), ("description", description),
+                     ("notes", notes)):
+        if val is not None:
+            fields.append(col)
+            values.append(val)
+    if not fields:
+        return False
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        plan_id = _plan_id(cur)
+        if plan_id is None:
+            return False
+        sets = ", ".join(f"{f} = {ph}" for f in fields)
+        cur.execute(
+            f"UPDATE workout_plan SET {sets}, updated_at = CURRENT_TIMESTAMP WHERE id = {ph}",
+            (*values, plan_id))
+    return True
+
+
+def update_workout_session(day_number: int, session_type=None, exercises=None,
+                           cardio=None, notes=None) -> bool:
+    """Edit one day of the split. `exercises` is a list; stored as JSON."""
+    _ensure_workout_plan_tables()
+    fields, values = [], []
+    if session_type is not None:
+        fields.append("session_type")
+        values.append(session_type)
+    if exercises is not None:
+        fields.append("exercises")
+        values.append(json.dumps(exercises))
+    if cardio is not None:
+        fields.append("cardio")
+        values.append(cardio)
+    if notes is not None:
+        fields.append("notes")
+        values.append(notes)
+    if not fields:
+        return False
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        # Scope to the plan: day_number alone is only unique per plan (see the
+        # (plan_id, day_number) UNIQUE), so an unscoped UPDATE would rewrite that
+        # weekday across every plan row.
+        plan_id = _plan_id(cur)
+        if plan_id is None:
+            return False
+        sets = ", ".join(f"{f} = {ph}" for f in fields)
+        cur.execute(
+            f"UPDATE workout_sessions SET {sets} WHERE plan_id = {ph} AND day_number = {ph}",
+            (*values, plan_id, int(day_number)))
+        return cur.rowcount > 0
+
+
+def update_progression_target(exercise_name: str, target_weight=None,
+                              target_reps=None, target_date=None,
+                              reach_weight=None, notes=None) -> bool:
+    """Edit a progression target. Start values stay put — they're the record of
+    where the roadmap began, not a live number."""
+    _ensure_workout_plan_tables()
+    fields, values = [], []
+    for col, val in (("target_weight", target_weight), ("target_reps", target_reps),
+                     ("target_date", target_date), ("reach_weight", reach_weight),
+                     ("notes", notes)):
+        if val is not None:
+            fields.append(col)
+            values.append(val)
+    if not fields:
+        return False
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        sets = ", ".join(f"{f} = {ph}" for f in fields)
+        cur.execute(f"UPDATE progression_targets SET {sets} WHERE exercise_name = {ph}",
+                    (*values, exercise_name))
+        return cur.rowcount > 0
+
+
+def update_workout_goal(goal_name: str, target_value=None, target_date=None,
+                        notes=None) -> bool:
+    """Edit a goal's target. Current values are always derived, never set here."""
+    _ensure_workout_plan_tables()
+    fields, values = [], []
+    for col, val in (("target_value", target_value), ("target_date", target_date),
+                     ("notes", notes)):
+        if val is not None:
+            fields.append(col)
+            values.append(val)
+    if not fields:
+        return False
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        sets = ", ".join(f"{f} = {ph}" for f in fields)
+        cur.execute(f"UPDATE workout_goals SET {sets} WHERE goal_name = {ph}",
+                    (*values, goal_name))
+        return cur.rowcount > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # AUTH FAILURES — persistent login brute-force tracking
 # ═══════════════════════════════════════════════════════════════════════════════
 # DB-backed (not in-memory) so lockout state survives Railway restarts.
