@@ -2,9 +2,10 @@
 the gym-library ⇄ catalogue GIF matcher, the add-to-session bridge, and that the
 separate library page is gone while /gym still renders.
 
-Self-contained, no pytest dependency:
+Runs either way — standalone (no pytest dependency) or under pytest:
 
     python tests/test_gym_discovery.py
+    pytest tests/test_gym_discovery.py
 
 Uses an ISOLATED temp SQLite DB (ASFA_DB_PATH) and a fixed dataset-shaped
 catalogue fixture so nothing hits the network or asfa.db.
@@ -43,10 +44,20 @@ RAW = [
      "target": "pectorals", "equipment": "dumbbell", "gif_url": "videos/0004.gif"},
     {"id": "0005", "name": "chest stretch", "category": "chest",
      "target": "pectorals", "equipment": "body weight", "gif_url": "videos/0005.gif"},
+    # The four back targets below mirror how the real dataset partitions its 203
+    # back rows: lats / upper back / traps / spine (there is no "lower back").
     {"id": "0006", "name": "barbell bent over row", "category": "back",
-     "target": "lats", "equipment": "barbell", "gif_url": "videos/0006.gif"},
+     "target": "upper back", "equipment": "barbell", "gif_url": "videos/0006.gif"},
     {"id": "0007", "name": "pull-up", "category": "back", "target": "lats",
      "equipment": "body weight", "gif_url": "videos/0007.gif"},
+    {"id": "0011", "name": "barbell shrug", "category": "back", "target": "traps",
+     "equipment": "barbell", "gif_url": "videos/0011.gif"},
+    {"id": "0012", "name": "back extension on exercise ball", "category": "back",
+     "target": "spine", "equipment": "body weight", "gif_url": "videos/0012.gif"},
+    # Forearms live under "lower arms", not "upper arms" — the distinction that
+    # made them unreachable when they were listed as a target of "biceps".
+    {"id": "0013", "name": "barbell wrist curl", "category": "lower arms",
+     "target": "forearms", "equipment": "barbell", "gif_url": "videos/0013.gif"},
     {"id": "0008", "name": "dumbbell biceps curl", "category": "upper arms",
      "target": "biceps", "equipment": "dumbbell", "gif_url": "videos/0008.gif"},
     {"id": "0009", "name": "triceps pushdown", "category": "upper arms",
@@ -60,10 +71,14 @@ def _names(result):
     return [e["name"] for e in result["exercises"]]
 
 
-def setup():
+def setup_module(module=None):
     """Seed the catalogue and a controlled gym history: bench logged TODAY
     (recent), cable crossover logged 40 days ago (stale). push-up + incline are
-    never logged (novel). Also a back move so muscle-frequency has a runner-up."""
+    never logged (novel). Also a back move so muscle-frequency has a runner-up.
+
+    Named ``setup_module`` (not ``setup``) so pytest runs it too: bare ``setup``
+    is nose-style, which pytest dropped in 8.0 — under pytest it was never
+    called, leaving every query against an unseeded DB returning nothing."""
     sync.sync(RAW, dry_run=False)
 
     def log(name, muscle, days_ago):
@@ -209,6 +224,7 @@ def test_11_routes():
     print("  11. routes: /gym 200, /gym/exercises 404, /suggested, search, bridge  OK")
 
 
+
 def test_12_no_dead_library_references():
     # The deleted page's template + page-JS are gone; nothing links to /gym/exercises.
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -219,9 +235,40 @@ def test_12_no_dead_library_references():
         assert "/gym/exercises" not in txt, f"{rel} still links the removed page"
     print("  12. no dead references to the removed /gym/exercises page  OK")
 
+def test_13_granular_back_split():
+    # The broad "back" key still returns the whole category — the gym library
+    # stores "back" as a muscle_group, so this must never narrow.
+    rb = em.suggest_exercises(session_muscles=["back"], limit=12)
+    assert {e["category"] for e in rb["exercises"]} == {"back"}
+    assert len(rb["exercises"]) == 4, _names(rb)          # all four back rows
+    # …while each granular key narrows to exactly its own target.
+    assert _names(em.suggest_exercises(session_muscles=["lats"])) == ["pull-up"]
+    assert _names(em.suggest_exercises(session_muscles=["upper back"])) == \
+        ["barbell bent over row"]
+    assert _names(em.suggest_exercises(session_muscles=["traps"])) == ["barbell shrug"]
+    # The dataset files lower-back work under "spine"; both names must resolve.
+    for key in ("lower back", "spine"):
+        assert _names(em.suggest_exercises(session_muscles=[key])) == \
+            ["back extension on exercise ball"], key
+    # A granular key is a real match, not a silent fallback to the top group.
+    assert em.suggest_exercises(session_muscles=["lats"])["fallback"] is False
+    print("  13. back splits into lats/upper back/traps/spine; broad 'back' intact  OK")
+
+
+def test_14_forearms_reachable():
+    # Regression: forearms were listed as a target of "biceps" (category "upper
+    # arms") but are category "lower arms", so the category check hid all of them.
+    r = em.suggest_exercises(session_muscles=["forearms"])
+    assert _names(r) == ["barbell wrist curl"], _names(r)
+    assert r["fallback"] is False
+    # …and they must not leak back into biceps, which is a different category.
+    assert "barbell wrist curl" not in _names(em.suggest_exercises(session_muscles=["biceps"]))
+    print("  14. forearms reachable via their own key, not leaking into biceps  OK")
+
+
 
 def main():
-    setup()
+    setup_module()
     tests = [
         test_1_suggested_muscle_matched,
         test_2_excludes_session_and_ranks_novel_first,
@@ -235,6 +282,8 @@ def main():
         test_10_add_to_session_writes_gym_row,
         test_11_routes,
         test_12_no_dead_library_references,
+        test_13_granular_back_split,
+        test_14_forearms_reachable,
     ]
     print("Gym inline-discovery tests:")
     passed = 0

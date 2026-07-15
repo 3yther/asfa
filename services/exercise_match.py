@@ -32,11 +32,22 @@ CARDIO_EQUIPMENT = {"stationary bike", "elliptical machine", "stepmill machine",
 # (bodybuilding-dataset convention) + the target_muscle values that refine it.
 # ``targets=None`` means "any target in this category". biceps/triceps share the
 # "upper arms" category but split on target; quads/hamstrings share "upper legs".
+#
+# Keys fall in two tiers. The BROAD tier is the vocabulary gym_exercises
+# .muscle_group actually stores, so a /gym session always resolves against it —
+# never rename or drop these. The GRANULAR tier is additive: extra keys a caller
+# may ask for by name to narrow a broad group. Every ``targets`` value below is
+# a target_muscle that exists in the dataset; a value that matches no row would
+# silently return nothing, so verify against the table before adding one.
 MUSCLE_MAP = {
+    # ── Broad (gym_exercises.muscle_group) ──
+    # chest and shoulders stay whole: the dataset files all 158 chest rows under
+    # the single target "pectorals" and all 143 shoulder rows under "delts",
+    # so there is no finer split to make.
     "chest":      {"category": "chest",      "targets": None},
     "back":       {"category": "back",       "targets": None},
     "shoulders":  {"category": "shoulders",  "targets": None},
-    "biceps":     {"category": "upper arms", "targets": {"biceps", "forearms"}},
+    "biceps":     {"category": "upper arms", "targets": {"biceps"}},
     "triceps":    {"category": "upper arms", "targets": {"triceps"}},
     "quads":      {"category": "upper legs",
                    "targets": {"quads", "glutes", "abductors", "adductors"}},
@@ -44,6 +55,21 @@ MUSCLE_MAP = {
     "calves":     {"category": "lower legs", "targets": None},
     "core":       {"category": "waist",      "targets": None},
     "cardio":     {"category": "cardio",     "targets": None},
+    # ── Granular ──
+    # These four partition "back" exactly (81+88+15+19 = all 203 back rows), so
+    # asking for lats no longer buries pulldowns under rows and shrugs.
+    "lats":       {"category": "back", "targets": {"lats"}},
+    "upper back": {"category": "back", "targets": {"upper back"}},
+    "traps":      {"category": "back", "targets": {"traps"}},
+    # The dataset has no "lower back"; it files that work (back extensions,
+    # straight-leg deadlifts) under "spine". Accept both names for it.
+    "lower back": {"category": "back", "targets": {"spine"}},
+    "spine":      {"category": "back", "targets": {"spine"}},
+    # Forearms are category "lower arms", NOT "upper arms" — they were
+    # previously listed as a target of "biceps", where the category check made
+    # them unreachable, hiding all 37 from every caller.
+    "forearms":   {"category": "lower arms", "targets": None},
+    "glutes":     {"category": "upper legs", "targets": {"glutes"}},
 }
 
 # Balanced default when the session is empty AND there is no logged history yet.
