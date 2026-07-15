@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>ASFA // WORKOUT PLAN</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="mask-icon" href="{{ url_for('static', filename='favicon.svg') }}" color="#00d9ff">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/gym.css') }}">
+<script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/sounds.js') }}" defer></script>
+<style>
+  .plan-screen { max-width: 1180px; margin: 0 auto; padding: 20px 16px 120px; }
+  .plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; }
+  .plan-head-txt { min-width: 0; }
+  .plan-split-name { font: 600 13px var(--sans); color: var(--cyan); letter-spacing: .04em; margin-top: 6px; }
+  .plan-desc { color: var(--text-dim); font-size: .82rem; margin-top: 6px; max-width: 70ch; line-height: 1.5; }
+
+  /* ── Week grid — 7 day columns, collapsing to cards on narrow screens ── */
+  .week-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
+  .day-col {
+    border: 1px solid var(--line); border-radius: var(--r-sm, 8px);
+    background: var(--panel-2); padding: 12px 10px; min-width: 0;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .day-col.is-today { border-color: var(--cyan); box-shadow: 0 0 18px var(--cyan-glow); }
+  .day-name { font: 600 11px var(--mono, 'JetBrains Mono', monospace); letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); }
+  .day-col.is-today .day-name { color: var(--cyan); }
+  .day-type {
+    display: inline-block; align-self: flex-start; font: 700 10px var(--mono, 'JetBrains Mono', monospace);
+    letter-spacing: .08em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; border: 1px solid;
+  }
+  .type-push   { color: var(--cyan);  border-color: rgba(61,225,240,.35); background: rgba(61,225,240,.08); }
+  .type-pull   { color: #a78bfa;      border-color: rgba(167,139,250,.35); background: rgba(167,139,250,.08); }
+  .type-cycling{ color: var(--green); border-color: rgba(63,185,80,.35);  background: rgba(63,185,80,.08); }
+  .type-rest   { color: var(--text-faint); border-color: rgba(140,170,200,.18); background: rgba(140,170,200,.05); }
+  .day-ex { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .day-ex li { font-size: .72rem; color: var(--text); line-height: 1.35; padding-left: 9px; position: relative; }
+  .day-ex li::before { content: "▸"; position: absolute; left: 0; color: var(--cyan-deep); font-size: .6rem; top: 1px; }
+  .day-cardio { font-size: .68rem; color: var(--green); line-height: 1.35; border-top: 1px dashed rgba(140,170,200,.14); padding-top: 7px; margin-top: auto; }
+  .day-note { font-size: .66rem; color: var(--text-faint); line-height: 1.35; font-style: italic; }
+  .split-tally { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .tally-chip { font: 600 10px var(--mono, 'JetBrains Mono', monospace); letter-spacing: .08em; text-transform: uppercase;
+                color: var(--text-dim); border: 1px solid rgba(140,170,200,.14); background: rgba(140,170,200,.04);
+                border-radius: 999px; padding: 4px 10px; }
+  .tally-chip b { color: var(--cyan); font-weight: 700; }
+
+  /* ── Progression roadmap ── */
+  .road { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; margin: 6px 0 16px; }
+  .road-stop { flex: 1 1 0; min-width: 120px; text-align: center; padding: 12px 8px; border: 1px solid var(--line);
+               background: var(--panel-2); position: relative; }
+  .road-stop:first-child { border-radius: 8px 0 0 8px; }
+  .road-stop:last-child  { border-radius: 0 8px 8px 0; }
+  .road-stop + .road-stop { border-left: none; }
+  .road-stop.stop-now  { border-color: var(--cyan); background: rgba(61,225,240,.06); z-index: 1; }
+  .road-label { font: 600 9px var(--mono, 'JetBrains Mono', monospace); letter-spacing: .12em; text-transform: uppercase; color: var(--text-faint); }
+  .road-stop.stop-now .road-label { color: var(--cyan); }
+  .road-weight { font: 700 1.25rem var(--mono, 'JetBrains Mono', monospace); color: var(--text); margin-top: 4px; }
+  .road-stop.stop-now .road-weight { color: var(--cyan); text-shadow: 0 0 14px var(--cyan-glow); }
+  .road-meta { font-size: .64rem; color: var(--text-dim); margin-top: 3px; line-height: 1.3; }
+
+  .bar-wrap { margin-top: 12px; }
+  .bar-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+  .bar-label { font-size: .74rem; color: var(--text); }
+  .bar-val { font: 700 .74rem var(--mono, 'JetBrains Mono', monospace); color: var(--cyan); }
+  .bar-track { height: 7px; border-radius: 999px; background: rgba(140,170,200,.1); overflow: hidden; border: 1px solid rgba(140,170,200,.1); }
+  .bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--cyan-deep), var(--cyan));
+              box-shadow: 0 0 12px var(--cyan-glow); transition: width .6s cubic-bezier(.22,1,.36,1); }
+  .bar-fill.fill-green { background: linear-gradient(90deg, #2a8f3c, var(--green)); box-shadow: 0 0 12px rgba(63,185,80,.35); }
+  .bar-sub { font-size: .66rem; color: var(--text-faint); margin-top: 5px; line-height: 1.4; }
+
+  /* A warning that reads as information, not alarm. */
+  .note-flag { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; padding: 9px 11px;
+               border: 1px solid rgba(245,158,11,.25); background: rgba(245,158,11,.06);
+               border-radius: 7px; font-size: .7rem; color: var(--text-dim); line-height: 1.45; }
+  .note-flag b { color: var(--amber); font-weight: 600; }
+
+  /* ── Goals ── */
+  .goal-list { display: flex; flex-direction: column; gap: 16px; }
+  .goal-row { padding-bottom: 14px; border-bottom: 1px solid rgba(140,170,200,.07); }
+  .goal-row:last-child { border-bottom: none; padding-bottom: 0; }
+  .goal-name { font-size: .82rem; color: var(--text); font-weight: 600; }
+  .goal-qual { display: inline-block; font: 600 9px var(--mono, 'JetBrains Mono', monospace); letter-spacing: .1em;
+               text-transform: uppercase; color: var(--text-faint); border: 1px solid rgba(140,170,200,.16);
+               border-radius: 999px; padding: 2px 7px; margin-left: 6px; vertical-align: middle; }
+  .goal-note { font-size: .68rem; color: var(--text-faint); margin-top: 4px; line-height: 1.4; }
+  .goal-days { font: 600 .66rem var(--mono, 'JetBrains Mono', monospace); color: var(--text-dim); white-space: nowrap; }
+
+  /* ── Quick stats ── */
+  .qs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .qs-card { border: 1px solid var(--line); border-radius: var(--r-sm, 8px); background: var(--panel-2); padding: 16px 14px; min-width: 0; }
+  .qs-label { font: 600 9px var(--mono, 'JetBrains Mono', monospace); letter-spacing: .12em; text-transform: uppercase; color: var(--text-faint); }
+  .qs-value { font: 700 1.7rem var(--mono, 'JetBrains Mono', monospace); color: var(--cyan); margin-top: 6px; line-height: 1; text-shadow: 0 0 16px var(--cyan-glow); }
+  .qs-value.val-muted { color: var(--text-faint); text-shadow: none; font-size: 1rem; }
+  .qs-sub { font-size: .64rem; color: var(--text-dim); margin-top: 6px; line-height: 1.35; }
+
+  .plan-notes { font-size: .74rem; color: var(--text-dim); line-height: 1.6; }
+  .empty-note { color: var(--text-faint); font-size: .76rem; }
+
+  /* ── Edit modal ── */
+  .modal-back { position: fixed; inset: 0; background: rgba(0,4,8,.78); backdrop-filter: blur(4px);
+                display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 200; }
+  .modal-box { background: var(--panel); border: 1px solid var(--line-bright, rgba(61,225,240,.3)); border-radius: var(--r-md, 12px);
+               padding: 24px; width: 100%; max-width: 520px; max-height: 86vh; overflow-y: auto;
+               box-shadow: 0 20px 60px rgba(0,0,0,.6), 0 0 40px var(--cyan-glow); }
+  .modal-box h2 { font: 600 13px var(--sans); color: var(--cyan); letter-spacing: .04em; margin-bottom: 4px; }
+  .modal-sub { font-size: .7rem; color: var(--text-faint); margin-bottom: 18px; line-height: 1.4; }
+  .fld { margin-bottom: 14px; }
+  .fld label { display: block; font: 600 9px var(--mono, 'JetBrains Mono', monospace); letter-spacing: .1em;
+               text-transform: uppercase; color: var(--text-dim); margin-bottom: 5px; }
+  /* text-transform:none overrides the global uppercase input rule — these fields
+     hold prose (a split name, notes), so the field must show what will be saved. */
+  .fld input, .fld textarea {
+    width: 100%; background: var(--void, #05080D); border: 1px solid var(--line); border-radius: 6px;
+    padding: 9px 11px; color: var(--text); font: 400 .8rem var(--sans); text-transform: none; }
+  .fld input:focus, .fld textarea:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 2px var(--cyan-glow); }
+  .fld textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
+  .fld-hint { font-size: .63rem; color: var(--text-faint); margin-top: 4px; line-height: 1.4; }
+  .modal-acts { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+  .modal-err { color: var(--red); font-size: .7rem; margin-top: 10px; min-height: 1em; }
+
+  @media (max-width: 900px) {
+    .week-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .day-cardio { margin-top: 8px; }
+  }
+  @media (max-width: 520px) {
+    .week-grid { grid-template-columns: 1fr; }
+    .road-stop { border-radius: 8px !important; border-left: 1px solid var(--line) !important; }
+  }
+</style>
+</head>
+<body class="gym-body">
+<canvas id="starfield-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;"></canvas>
+
+{% include "nav.html" with context %}
+
+<main class="plan-screen">
+  <header class="plan-head">
+    <div class="plan-head-txt">
+      <h1 class="screen-title" data-decode>Workout Plan</h1>
+      <p class="screen-sub">The structure, the roadmap, the September targets</p>
+      <div class="plan-split-name" id="split-name">—</div>
+      <p class="plan-desc" id="split-desc"></p>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0;">
+      <a class="hud-chip chip-btn" href="/gym">← Iron Log</a>
+      <button class="hud-chip chip-action" id="edit-plan-btn" type="button">Edit Plan</button>
+    </div>
+  </header>
+
+  <!-- ══ SECTION 4 (surfaced first — it's the at-a-glance answer) ═══════ -->
+  <div class="qs-grid" id="quick-stats">
+    <div class="qs-card skeleton-card" style="height:96px"></div>
+    <div class="qs-card skeleton-card" style="height:96px"></div>
+    <div class="qs-card skeleton-card" style="height:96px"></div>
+    <div class="qs-card skeleton-card" style="height:96px"></div>
+  </div>
+
+  <!-- ══ SECTION 1 — Weekly split ══════════════════════════════════════ -->
+  <div class="card sci-fi-panel">
+    <div class="card-head"><h2>Weekly Split</h2></div>
+    <div class="week-grid" id="week-grid">
+      <div class="skeleton skeleton-block" style="height:150px"></div>
+    </div>
+    <div class="split-tally" id="split-tally"></div>
+    <p class="plan-notes" id="plan-notes" style="margin-top:16px"></p>
+  </div>
+
+  <!-- ══ SECTION 2 — Progression roadmap ═══════════════════════════════ -->
+  <div class="card sci-fi-panel">
+    <div class="card-head"><h2>Progression Roadmap</h2></div>
+    <div id="progression">
+      <div class="skeleton skeleton-block" style="height:110px"></div>
+    </div>
+  </div>
+
+  <!-- ══ SECTION 3 — September goals ═══════════════════════════════════ -->
+  <div class="card sci-fi-panel">
+    <div class="card-head">
+      <h2>September Goals</h2>
+      <span class="muted-sub" id="goals-deadline"></span>
+    </div>
+    <div class="goal-list" id="goals">
+      <div class="skeleton skeleton-row"></div>
+      <div class="skeleton skeleton-row"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  // Server data is user-authored (plan notes, exercise names) and lands in the
+  // DOM, so everything interpolated here goes through esc().
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const kg = (n) => `${Number(n).toFixed(1).replace(/\.0$/, "")}kg`;
+
+  let DATA = null;
+
+  async function load() {
+    const res = await fetch("/api/gym/plan", { credentials: "include" });
+    if (!res.ok) { $("week-grid").innerHTML = '<p class="empty-note">Could not load the plan.</p>'; return; }
+    DATA = await res.json();
+    renderQuickStats(DATA.stats);
+    renderSplit(DATA.plan);
+    renderProgression(DATA.progression);
+    renderGoals(DATA.goals);
+  }
+
+  // ── Section 4 — quick stats ────────────────────────────────────────────
+  function renderQuickStats(s) {
+    if (!s) return;
+    const cards = [];
+
+    cards.push(card("Days to September", s.days_until_september ?? "—",
+      s.target_date ? `${s.days_until_target} days to the ${s.target_date} target` : ""));
+
+    cards.push(s.kg_to_lose == null
+      ? card("To lose", s.goal_bodyweight == null ? "Not set" : "No weigh-in",
+             s.goal_bodyweight == null
+               ? "No bodyweight goal configured"
+               : "Log a weigh-in to track this", true)
+      : card("To lose", kg(s.kg_to_lose),
+             `${kg(s.current_bodyweight)} now → ${kg(s.goal_bodyweight)} goal · as of ${esc(s.bodyweight_measured_at)}`));
+
+    cards.push(s.current_bench_kg == null
+      ? card("Current bench PR", "Not logged", "No bench PR in the log yet", true)
+      : card("Current bench PR", kg(s.current_bench_kg),
+             `${s.current_bench_reps} reps · est. 1RM ${kg(s.current_bench_1rm)} · ${esc(s.bench_achieved_at)}`));
+
+    // Two numbers, because "kg to bench" has two honest answers.
+    const goalBench = (DATA.goals || []).find((g) => g.metric_key === "bench");
+    const reach = (DATA.progression || [])[0] && DATA.progression[0].reach_weight;
+    const toGoal = goalBench && goalBench.remaining != null ? goalBench.remaining : s.kg_to_bench_target;
+    cards.push(toGoal == null
+      ? card("To bench", "—", "Needs a logged bench PR and a target", true)
+      : card("To bench", kg(toGoal),
+             [goalBench ? `to the ${kg(goalBench.target_value)} goal` : "to target",
+              s.kg_to_bench_reach != null && reach
+                ? `${kg(s.kg_to_bench_reach)} to the ${kg(reach)} reach` : "",
+             ].filter(Boolean).join(" · ")));
+
+    $("quick-stats").innerHTML = cards.join("");
+  }
+
+  function card(label, value, sub, muted) {
+    return `<div class="qs-card">
+      <div class="qs-label">${esc(label)}</div>
+      <div class="qs-value${muted ? " val-muted" : ""}">${esc(value)}</div>
+      ${sub ? `<div class="qs-sub">${sub}</div>` : ""}
+    </div>`;
+  }
+
+  // ── Section 1 — weekly split ───────────────────────────────────────────
+  function renderSplit(plan) {
+    if (!plan) { $("week-grid").innerHTML = '<p class="empty-note">No plan saved yet.</p>'; return; }
+    $("split-name").textContent = plan.split_name || "";
+    $("split-desc").textContent = plan.description || "";
+    $("plan-notes").textContent = plan.notes || "";
+
+    // JS getDay() is 0=Sun; day_number is 1=Mon..7=Sun.
+    const jsDay = new Date().getDay();
+    const todayNum = jsDay === 0 ? 7 : jsDay;
+
+    $("week-grid").innerHTML = (plan.days || []).map((d) => {
+      const type = String(d.session_type || "").toLowerCase();
+      const isToday = d.day_number === todayNum;
+      const ex = (d.exercises || []).map((e) => `<li>${esc(e)}</li>`).join("");
+      return `<div class="day-col${isToday ? " is-today" : ""}">
+        <div class="day-name">${esc(d.day_name)}${isToday ? " • today" : ""}</div>
+        <span class="day-type type-${esc(type)}">${esc(d.session_type)}</span>
+        ${ex ? `<ul class="day-ex">${ex}</ul>` : ""}
+        ${d.notes ? `<div class="day-note">${esc(d.notes)}</div>` : ""}
+        ${d.cardio ? `<div class="day-cardio">${esc(d.cardio)}</div>` : ""}
+      </div>`;
+    }).join("");
+
+    const s = plan.summary || {};
+    $("split-tally").innerHTML = [
+      `<span class="tally-chip"><b>${s.gym_days}</b> gym days</span>`,
+      `<span class="tally-chip"><b>${s.cardio_days}</b> cardio days</span>`,
+      `<span class="tally-chip"><b>${s.rest_days}</b> rest day${s.rest_days === 1 ? "" : "s"}</span>`,
+    ].join("");
+  }
+
+  // ── Section 2 — progression roadmap ────────────────────────────────────
+  function renderProgression(targets) {
+    if (!targets || !targets.length) {
+      $("progression").innerHTML = '<p class="empty-note">No progression targets set.</p>';
+      return;
+    }
+    $("progression").innerHTML = targets.map((t) => {
+      const hasPR = t.current_weight != null;
+      const pct = t.percent_complete == null ? 0 : t.percent_complete;
+
+      const stops = `<div class="road">
+        <div class="road-stop">
+          <div class="road-label">Start</div>
+          <div class="road-weight">${kg(t.start_weight)}</div>
+          <div class="road-meta">× ${t.start_reps} reps</div>
+        </div>
+        <div class="road-stop${hasPR ? " stop-now" : ""}">
+          <div class="road-label">${hasPR ? "Logged PR" : "No PR logged"}</div>
+          <div class="road-weight">${hasPR ? kg(t.current_weight) : "—"}</div>
+          <div class="road-meta">${hasPR ? `× ${t.current_reps} reps · ${esc(t.achieved_at)}` : "log a bench set"}</div>
+        </div>
+        <div class="road-stop">
+          <div class="road-label">Target</div>
+          <div class="road-weight">${kg(t.target_weight)}</div>
+          <div class="road-meta">× ${t.target_reps} reps · by ${esc(t.target_date)}</div>
+        </div>
+        <div class="road-stop">
+          <div class="road-label">Reach</div>
+          <div class="road-weight">${kg(t.reach_weight)}</div>
+          <div class="road-meta">stretch goal</div>
+        </div>
+      </div>`;
+
+      const bar = `<div class="bar-wrap">
+        <div class="bar-top">
+          <span class="bar-label">${esc(t.exercise_name)} — progress to ${kg(t.target_weight)}</span>
+          <span class="bar-val">${t.percent_complete == null ? "—" : pct + "%"}</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+        <div class="bar-sub">${hasPR
+          ? `${kg(t.kg_to_target)} to target · ${kg(t.kg_to_reach)} to the ${kg(t.reach_weight)} reach goal`
+          : "Progress starts tracking once a bench PR is logged."}</div>
+      </div>`;
+
+      // The one place this page could quietly mislead: a documented start above
+      // the logged PR pins the bar at 0%. Say why rather than let it look broken.
+      const flag = t.below_start ? `<div class="note-flag">
+        <span><b>Heads up —</b> the roadmap starts from ${kg(t.start_weight)} × ${t.start_reps},
+        but your heaviest logged bench is ${kg(t.current_weight)} × ${t.current_reps}
+        (${kg(t.kg_below_start)} lighter), so progress reads 0%. Log the
+        ${kg(t.start_weight)} double and this catches up.</span></div>` : "";
+
+      const note = t.notes ? `<div class="bar-sub" style="margin-top:10px">${esc(t.notes)}</div>` : "";
+      return stops + bar + flag + note;
+    }).join("");
+  }
+
+  // ── Section 3 — September goals ────────────────────────────────────────
+  function renderGoals(goals) {
+    if (!goals || !goals.length) { $("goals").innerHTML = '<p class="empty-note">No goals set.</p>'; return; }
+    const days = goals[0] && goals[0].days_remaining;
+    $("goals-deadline").textContent = days == null ? "" :
+      (days >= 0 ? `${days} days remaining` : `${Math.abs(days)} days past`);
+
+    $("goals").innerHTML = goals.map((g) => {
+      const head = `<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
+        <div class="goal-name">${esc(g.goal_name)}${g.qualitative ? '<span class="goal-qual">qualitative</span>' : ""}</div>
+        <span class="goal-days">${g.target_date ? esc(g.target_date) : ""}</span>
+      </div>`;
+
+      let body = "";
+      if (g.qualitative) {
+        // No number exists for these, so no bar is drawn — inventing one would be a lie.
+        body = "";
+      } else if (g.current_value == null) {
+        body = `<div class="bar-wrap">
+          <div class="bar-top"><span class="bar-label">Not tracked yet</span><span class="bar-val">—</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:0%"></div></div>
+          <div class="bar-sub">Target ${kg(g.target_value)} · no ${esc(g.current_source || "reading")} logged yet.</div>
+        </div>`;
+      } else {
+        const pct = g.percent_complete == null ? 0 : g.percent_complete;
+        body = `<div class="bar-wrap">
+          <div class="bar-top">
+            <span class="bar-label">${kg(g.current_value)} now → ${kg(g.target_value)} target</span>
+            <span class="bar-val">${pct}%</span>
+          </div>
+          <div class="bar-track"><div class="bar-fill${pct >= 100 ? " fill-green" : ""}" style="width:${pct}%"></div></div>
+          <div class="bar-sub">${g.remaining != null ? `${kg(g.remaining)} to go` : ""}${
+            g.measured_at ? ` · ${esc(g.current_source)} ${esc(g.measured_at)}` : ""}</div>
+        </div>`;
+      }
+      const note = g.notes ? `<div class="goal-note">${esc(g.notes)}</div>` : "";
+      return `<div class="goal-row">${head}${body}${note}</div>`;
+    }).join("");
+  }
+
+  // ── Edit plan ──────────────────────────────────────────────────────────
+  // Session-gated server-side like every other route; this only edits the plan
+  // (split name / description / notes / targets), never the training log.
+  $("edit-plan-btn").addEventListener("click", openEdit);
+
+  function openEdit() {
+    if (!DATA || !DATA.plan) return;
+    const p = DATA.plan;
+    const t = (DATA.progression || [])[0];
+    const back = document.createElement("div");
+    back.className = "modal-back";
+    back.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="edit-title">
+      <h2 id="edit-title">Edit Plan</h2>
+      <p class="modal-sub">Edits the plan only. Your logged sessions, PRs and weigh-ins aren't touched —
+         current values on this page always come from the training log.</p>
+      <div class="fld">
+        <label for="f-name">Split name</label>
+        <input id="f-name" type="text" value="${esc(p.split_name)}">
+      </div>
+      <div class="fld">
+        <label for="f-desc">Description</label>
+        <textarea id="f-desc">${esc(p.description)}</textarea>
+      </div>
+      <div class="fld">
+        <label for="f-notes">Notes</label>
+        <textarea id="f-notes">${esc(p.notes)}</textarea>
+      </div>
+      ${t ? `<div class="fld">
+        <label for="f-target">${esc(t.exercise_name)} — target weight (kg)</label>
+        <input id="f-target" type="number" step="0.5" min="0" value="${t.target_weight}">
+        <div class="fld-hint">The ${kg(t.start_weight)} start stays fixed — it records where the roadmap began.</div>
+      </div>
+      <div class="fld">
+        <label for="f-reach">Reach weight (kg)</label>
+        <input id="f-reach" type="number" step="0.5" min="0" value="${t.reach_weight}">
+      </div>
+      <div class="fld">
+        <label for="f-date">Target date</label>
+        <input id="f-date" type="date" value="${esc(t.target_date)}">
+      </div>` : ""}
+      <div class="modal-err" id="f-err"></div>
+      <div class="modal-acts">
+        <button class="hud-chip chip-btn" id="f-cancel" type="button">Cancel</button>
+        <button class="hud-chip chip-action" id="f-save" type="button">Save</button>
+      </div>
+    </div>`;
+    document.body.appendChild(back);
+
+    const close = () => back.remove();
+    back.addEventListener("click", (e) => { if (e.target === back) close(); });
+    document.addEventListener("keydown", function onEsc(e) {
+      if (e.key === "Escape") { close(); document.removeEventListener("keydown", onEsc); }
+    });
+    $("f-cancel").addEventListener("click", close);
+    $("f-name").focus();
+
+    $("f-save").addEventListener("click", async () => {
+      const btn = $("f-save");
+      const err = $("f-err");
+      btn.disabled = true; err.textContent = "";
+      try {
+        // The CSRF header is added by the fetch wrapper in _csrf.html.
+        let r = await fetch("/api/gym/plan", {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            split_name: $("f-name").value.trim(),
+            description: $("f-desc").value.trim(),
+            notes: $("f-notes").value.trim(),
+          }),
+        });
+        if (!r.ok) throw new Error((await r.json()).error || "Could not save the plan");
+
+        if (t) {
+          r = await fetch(`/api/gym/plan/progression/${encodeURIComponent(t.exercise_name)}`, {
+            method: "POST", credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              target_weight: $("f-target").value,
+              reach_weight: $("f-reach").value,
+              target_date: $("f-date").value,
+            }),
+          });
+          if (!r.ok) throw new Error((await r.json()).error || "Could not save the target");
+        }
+        close();
+        await load();
+      } catch (e) {
+        err.textContent = e.message;
+        btn.disabled = false;
+      }
+    });
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>

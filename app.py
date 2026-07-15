@@ -350,6 +350,9 @@ init_all_skills()
 # Gym tracker — create the gym_* tables and seed the exercise library + routines.
 # Standalone; touches no existing tables.
 db.init_gym_data()
+# Workout plan — the documented split/roadmap/goals behind /gym/plan. Must run
+# after init_gym_data(): the bodyweight baseline seed writes to gym_body_stats.
+db.init_workout_plan()
 # Scent Vault — fragrance shelf, body products, curated pairings + wear log.
 db.init_fragrance_data()
 # Scout pipeline — Kanban stage board; create table + backfill from scout_jobs.
@@ -440,6 +443,11 @@ def gym():
 @app.route("/gym/photos")
 def gym_photos():
     return render_template("gym-photos.html", active="gym")
+
+
+@app.route("/gym/plan")
+def gym_plan():
+    return render_template("gym-plan.html", active="gym")
 
 
 @app.route("/nutrition")
@@ -1812,6 +1820,124 @@ def api_gym_trainer():
     context = d.get("context") or {}
     reply = ai.gym_coach_reply(message, context)
     return jsonify({"reply": reply})
+
+
+# ── Workout plan ────────────────────────────────────────────────────────────────
+# The documented split / progression roadmap / September goals behind /gym/plan.
+# Reads compose the stored plan with live gym_prs + gym_body_stats values, so the
+# page can't drift from what was actually lifted. Writes edit the plan only —
+# never the training log.
+
+class _BadNumber(ValueError):
+    """A plan edit supplied a field that isn't a number."""
+
+
+def _plan_num(value, field, integer=False):
+    """Coerce an optional numeric plan field. Absent/blank -> None (leave as-is);
+    present but unparseable -> raise, so a typo 400s instead of being silently
+    dropped by _num_or_none and leaving the user thinking the edit landed."""
+    if value is None or value == "":
+        return None
+    n = _num_or_none(value)
+    if n is None or n <= 0:
+        raise _BadNumber(field)
+    if integer and n != int(n):
+        raise _BadNumber(field)   # reject 5.9 reps rather than silently storing 5
+    return int(n) if integer else n
+
+
+@app.route("/api/gym/plan")
+def api_gym_plan():
+    return jsonify(db.get_plan_payload())
+
+
+@app.route("/api/gym/plan", methods=["POST"])
+def api_gym_plan_update():
+    """Edit the plan headline (split name / description / notes).
+
+    An absent key means "leave alone"; an empty string means "clear it" — so the
+    values pass through untouched rather than being collapsed with `or None`,
+    which would make a cleared description silently un-clearable. split_name is
+    the exception: it's the plan's headline and may not be blanked."""
+    d = request.get_json(force=True) or {}
+    if "split_name" in d and not (d.get("split_name") or "").strip():
+        return jsonify({"error": "split_name cannot be empty"}), 400
+    ok = db.update_workout_plan(
+        split_name=d.get("split_name"),
+        description=d.get("description"),
+        notes=d.get("notes"))
+    if not ok:
+        return jsonify({"error": "nothing to update"}), 400
+    return jsonify({"ok": True, "plan": db.get_workout_plan()})
+
+
+@app.route("/api/gym/plan/day/<int:day_number>", methods=["POST"])
+def api_gym_plan_day_update(day_number):
+    """Edit one day of the split."""
+    if not 1 <= day_number <= 7:
+        return jsonify({"error": "day_number must be 1-7"}), 400
+    d = request.get_json(force=True) or {}
+    exercises = d.get("exercises")
+    if exercises is not None and not isinstance(exercises, list):
+        return jsonify({"error": "exercises must be a list"}), 400
+    if "session_type" in d and not (d.get("session_type") or "").strip():
+        return jsonify({"error": "session_type cannot be empty"}), 400
+    ok = db.update_workout_session(
+        day_number,
+        session_type=d.get("session_type"),
+        exercises=exercises,
+        cardio=d.get("cardio"),
+        notes=d.get("notes"))
+    if not ok:
+        return jsonify({"error": "nothing to update"}), 400
+    return jsonify({"ok": True, "plan": db.get_workout_plan()})
+
+
+@app.route("/api/gym/plan/progression/<path:exercise_name>", methods=["POST"])
+def api_gym_plan_progression_update(exercise_name):
+    """Edit a progression target. Start values are immutable — they record where
+    the roadmap began."""
+    d = request.get_json(force=True) or {}
+    try:
+        target_weight = _plan_num(d.get("target_weight"), "target_weight")
+        target_reps = _plan_num(d.get("target_reps"), "target_reps", integer=True)
+        reach_weight = _plan_num(d.get("reach_weight"), "reach_weight")
+    except _BadNumber as e:
+        return jsonify({"error": f"{e} must be a positive number"}), 400
+    target_date = d.get("target_date") or None
+    if target_date and not _valid_date(target_date):
+        return jsonify({"error": "target_date must be YYYY-MM-DD"}), 400
+    ok = db.update_progression_target(
+        exercise_name,
+        target_weight=target_weight,
+        target_reps=target_reps,
+        target_date=target_date,
+        reach_weight=reach_weight,
+        notes=d.get("notes"))
+    if not ok:
+        return jsonify({"error": "target not found or nothing to update"}), 404
+    return jsonify({"ok": True, "progression": db.get_progression_targets()})
+
+
+@app.route("/api/gym/plan/goal/<path:goal_name>", methods=["POST"])
+def api_gym_plan_goal_update(goal_name):
+    """Edit a goal's target/date/notes. Current values stay derived."""
+    d = request.get_json(force=True) or {}
+    try:
+        target_value = _plan_num(d.get("target_value"), "target_value")
+    except _BadNumber as e:
+        return jsonify({"error": f"{e} must be a positive number"}), 400
+    target_date = d.get("target_date") or None
+    if target_date and not _valid_date(target_date):
+        return jsonify({"error": "target_date must be YYYY-MM-DD"}), 400
+    ok = db.update_workout_goal(
+        goal_name,
+        target_value=target_value,
+        target_date=target_date,
+        notes=d.get("notes"))
+    if not ok:
+        return jsonify({"error": "goal not found or nothing to update"}), 404
+    return jsonify({"ok": True, "goals": db.get_workout_goals()})
 
 
 # The gym tracker is chatty by nature — a single logged workout fires one request
