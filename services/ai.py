@@ -51,17 +51,53 @@ def _logged_create(c, endpoint, **params):
     return resp
 
 
+def _recent_gym_workouts(days=7):
+    """Flat workout rows from the gym tracker (gym_sessions/gym_sets), shaped like
+    the legacy ``workouts`` rows this context block renders.
+
+    The context historically read db.get_workouts()/get_pbs(), which query the
+    legacy ``workouts`` table. The /gym tracker replaced that table with
+    gym_sessions/gym_sets/gym_prs and nothing writes to ``workouts`` any more, so
+    the AI/Telegram context showed "None logged" while /gym held a full log. Read
+    the live tables instead."""
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    rows = []
+    for s in db.get_recent_sessions(limit=30):
+        sdate = str(s.get("date") or "")[:10]
+        if sdate < cutoff:
+            continue
+        for st in db.get_session_sets(s["id"]):
+            rows.append({
+                "date": sdate,
+                "exercise": st.get("exercise_name") or "",
+                "weight_kg": st.get("weight_kg"),
+                "reps": st.get("reps"),
+                "muscle_group": st.get("muscle_group") or "",
+                "is_pb": bool(st.get("is_pr")),
+            })
+    return rows
+
+
+def _gym_pbs():
+    """Personal bests from gym_prs, shaped like the legacy get_pbs() rows."""
+    return [{"exercise": p.get("exercise_name") or "",
+             "best_weight": p.get("weight_kg"), "best_reps": p.get("reps")}
+            for p in db.get_all_prs()]
+
+
 def build_context_block():
     today = datetime.now().strftime("%Y-%m-%d")
     now_str = datetime.now().strftime("%A, %d %B %Y %H:%M")
 
     habits = db.get_habits(7)
     today_habit = next((h for h in habits if h["date"] == today), {})
-    workouts = db.get_workouts(7)
+    # Read the live gym tracker, not the dead legacy ``workouts`` table.
+    workouts = _recent_gym_workouts(7)
     spending = db.get_spending(7)
     memories = db.get_memories(8)
     reflections = db.get_reflections(5)
-    pbs = db.get_pbs()
+    pbs = _gym_pbs()
     goals = db.get_goals()
     scores = db.get_daily_scores(7)
     body_weights = db.get_body_weight(14)
