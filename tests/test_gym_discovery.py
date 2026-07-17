@@ -356,6 +356,43 @@ def test_18_suggestions_rotate_daily_not_frozen():
     print("  18. suggestions rotate across days, stable within a day  OK")
 
 
+def test_19_replace_keeps_logged_sets():
+    # Issue 4: the athlete logged a cable fly, realises it was the Pec Deck, and
+    # hits Replace — the sets must be re-tagged to the new exercise with their
+    # weight/reps intact, not deleted and re-entered.
+    from datetime import date as _d
+    a = db.get_or_create_gym_exercise(name="cable chest fly", muscle_group="chest")
+    b = db.get_or_create_gym_exercise(name="Pec Deck", muscle_group="chest")
+    sid = db.create_session(None, _d.today().isoformat(), "10:00")
+    db.log_set(sid, a["id"], 1, "working", 40, 12)
+    db.log_set(sid, a["id"], 2, "working", 45, 10)
+
+    import app as app_module
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess["authed"] = True
+        sess["csrf_token"] = "tok"
+
+    r = client.post(f"/api/gym/sessions/{sid}/swap-exercise",
+                    json={"from_exercise_id": a["id"], "to_exercise_id": b["id"]},
+                    headers={"X-CSRF-Token": "tok"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["moved"] == 2, r.get_json()
+
+    sets = db.get_session_sets(sid)
+    assert sets and all(s["exercise_id"] == b["id"] for s in sets), "sets not re-pointed"
+    assert not any(s["exercise_id"] == a["id"] for s in sets), "old exercise still owns sets"
+    assert {(s["weight_kg"], s["reps"]) for s in sets} == {(40.0, 12), (45.0, 10)}, \
+        "weight/reps must survive the swap"
+
+    # Guardrails: swapping to a missing exercise 404s; a no-op swap moves nothing.
+    assert client.post(f"/api/gym/sessions/{sid}/swap-exercise",
+                       json={"from_exercise_id": b["id"], "to_exercise_id": 999999},
+                       headers={"X-CSRF-Token": "tok"}).status_code == 404
+    assert db.reassign_session_exercise(sid, b["id"], b["id"]) == 0
+    print("  19. Replace re-tags logged sets to the new exercise, numbers kept  OK")
+
+
 def main():
     setup_module()
     tests = [
@@ -377,6 +414,7 @@ def main():
         test_16_bridged_alias_logs_under_gym_floor_name,
         test_17_alias_maps_are_consistent,
         test_18_suggestions_rotate_daily_not_frozen,
+        test_19_replace_keeps_logged_sets,
     ]
     print("Gym inline-discovery tests:")
     passed = 0

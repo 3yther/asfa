@@ -1522,6 +1522,22 @@ def api_gym_delete_set(set_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/gym/sessions/<int:session_id>/swap-exercise", methods=["POST"])
+def api_gym_swap_exercise(session_id):
+    """Replace one exercise with another in a session, carrying its logged sets
+    (weight/reps/rpe) over unchanged — "logged the wrong exercise, fix it in one
+    click". No-op-safe: returns moved:0 when nothing was logged under the
+    original or the target exercise doesn't exist."""
+    d = request.get_json(force=True) or {}
+    frm, to = d.get("from_exercise_id"), d.get("to_exercise_id")
+    if frm is None or to is None:
+        return jsonify({"error": "from_exercise_id and to_exercise_id are required"}), 400
+    if not db.get_exercise(to):
+        return jsonify({"error": "target exercise not found"}), 404
+    moved = db.reassign_session_exercise(session_id, frm, to)
+    return jsonify({"ok": True, "moved": moved})
+
+
 def _csv_response(fieldnames, rows, filename):
     """Build a downloadable CSV response. csv.DictWriter handles quoting of
     commas, quotes and newlines inside fields; extrasaction='ignore' keeps

@@ -1445,20 +1445,41 @@ async function openSwap(ex) {
   });
   if (!body.children.length) body.innerHTML = `<div class="empty-note">No alternatives for this muscle group.</div>`;
 }
-function swapExercise(ex, newLib) {
-  // keep already-logged sets attached to old exercise as a separate finished block?
-  // Spec: session keeps any already-logged sets for the old exercise. We do that
-  // by leaving those sets in the DB; the card is replaced with the new exercise.
+async function swapExercise(ex, newLib) {
+  // "Replace": the athlete logged the wrong exercise and wants it recorded as
+  // the right one. When sets are already logged we re-point them to the new
+  // exercise on the server (weight/reps/rpe untouched) and KEEP them on the
+  // card, so the numbers carry over — orphaning them under the old exercise
+  // (invisible on the card yet still in the session totals) would just be a
+  // silent inconsistency. With nothing logged yet there's nothing to move.
+  const oldId = ex.exerciseId;
+  if (newLib.id === oldId) return;
+  if (S.exercises.some(e => e !== ex && e.exerciseId === newLib.id)) {
+    toast(`${newLib.name} is already in this session`); return;
+  }
+  const hadSets = ex.loggedSets && ex.loggedSets.length > 0;
+  if (hadSets) {
+    try {
+      await apiPost(`${API}/sessions/${S.id}/swap-exercise`,
+        { from_exercise_id: oldId, to_exercise_id: newLib.id });
+    } catch (e) { console.error(e); toast("Could not swap exercise"); return; }
+  }
   ex.exerciseId = newLib.id; ex.name = newLib.name; ex.muscle_group = newLib.muscle_group;
   ex.equipment = newLib.equipment; ex.exercise_type = newLib.exercise_type;
   ex.is_cardio = newLib.exercise_type === "cardio";
-  ex.loggedSets = []; ex.lastSession = undefined; ex.recommendation = undefined; ex._pr = null; ex.rowCount = ex.plannedSets;
+  ex.lastSession = undefined; ex.recommendation = undefined;
+  ex._pr = PR_BY_EX[newLib.id] || null;
+  // Keep the logged sets (now re-tagged) and enough rows to show them; only
+  // reset to the planned count when the slot was empty.
+  if (!hadSets) { ex.loggedSets = []; ex.rowCount = ex.plannedSets; }
+  else { ex.rowCount = Math.max(ex.plannedSets, ex.loggedSets.length); }
   ex.ranks = { bronze: newLib.rank_bronze, silver: newLib.rank_silver, gold: newLib.rank_gold, platinum: newLib.rank_platinum, diamond: newLib.rank_diamond };
   saveLS();
   renderActiveSession();
   const swapped = S.exercises.find(e => e.exerciseId === newLib.id);
-  if (swapped) hydrateLastSession(swapped);
-  toast(`Swapped to ${newLib.name}`);
+  if (swapped && !hadSets) hydrateLastSession(swapped);
+  updateSessionTotals();
+  toast(hadSets ? `Replaced with ${newLib.name} — sets kept` : `Swapped to ${newLib.name}`);
 }
 
 /* ── Finish workout ── */

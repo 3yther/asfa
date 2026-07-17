@@ -5488,6 +5488,31 @@ def delete_set(set_id: int) -> bool:
         return (cur.rowcount or 0) > 0
 
 
+def reassign_session_exercise(session_id: int, from_exercise_id: int,
+                              to_exercise_id: int) -> int:
+    """Re-point every logged set of one exercise in a session to another
+    exercise, keeping weight/reps/rpe/set_number intact — the "Replace" swap:
+    the athlete logged the wrong exercise (a cable fly) and wants it recorded as
+    the right one (the Pec Deck) without re-entering the numbers.
+
+    Returns the number of sets moved (0 if the target exercise doesn't exist or
+    nothing was logged under the original). XP/PRs/ranks already awarded are not
+    recomputed — they never downgrade by design, same as delete_set."""
+    _ensure_gym_tables()
+    if from_exercise_id == to_exercise_id:
+        return 0
+    if not get_exercise(to_exercise_id):
+        return 0
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""UPDATE gym_sets SET exercise_id = {ph}
+                WHERE session_id = {ph} AND exercise_id = {ph}""",
+            (to_exercise_id, session_id, from_exercise_id))
+        return cur.rowcount or 0
+
+
 def get_weekly_volume() -> list:
     """Total lifted volume (kg = Σ weight×reps) per muscle group for the last 7
     days vs the previous 7, with % change. Sorted by current volume desc."""
