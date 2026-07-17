@@ -804,8 +804,12 @@ function discoverCard(ex) {
   card.appendChild(gifThumb(ex.gif_url, ex.name));
   const muscle = ex.muscle || ex.category || ex.target_muscle || "";
   const body = el("div", "disc-cbody");
+  // The dataset names machines by mechanism ("lever seated fly"); when we know
+  // the gym-floor name ("Pec Deck") lead with it and keep the catalogue name as
+  // the tooltip, so the card matches what's written on the machine.
+  const name = ex.aka || ex.name;
   body.innerHTML = `
-    <div class="disc-name">${esc(ex.name)}</div>
+    <div class="disc-name" title="${esc(ex.name)}">${esc(name)}</div>
     <div class="disc-tags">
       ${muscle ? `<span class="disc-tag disc-muscle">${esc(muscle)}</span>` : ""}
       ${ex.equipment ? `<span class="disc-tag disc-equip">${esc(ex.equipment)}</span>` : ""}

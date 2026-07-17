@@ -64,6 +64,11 @@ RAW = [
      "target": "triceps", "equipment": "cable", "gif_url": "videos/0009.gif"},
     {"id": "0010", "name": "barbell squat", "category": "upper legs",
      "target": "quads", "equipment": "barbell", "gif_url": "videos/0010.gif"},
+    # The pec deck, under the exact mechanical name the real dataset uses for
+    # it. Nobody calls it this, which is why searching "pec deck" found nothing.
+    {"id": "0014", "name": "lever seated fly", "category": "chest",
+     "target": "pectorals", "equipment": "leverage machine",
+     "gif_url": "videos/0014.gif"},
 ]
 
 
@@ -266,6 +271,56 @@ def test_14_forearms_reachable():
     print("  14. forearms reachable via their own key, not leaking into biceps  OK")
 
 
+def test_15_pec_deck_findable_by_gym_floor_name():
+    # Regression: the dataset files the pec deck as "lever seated fly", so a
+    # search for what's written on the machine returned nothing and the athlete
+    # logged a cable fly instead.
+    assert em.resolve_alias("pec deck") == "lever seated fly"
+    assert em.resolve_alias("Pec Deck") == "lever seated fly"      # case-insensitive
+    assert em.resolve_alias("barbell squat") is None, "non-aliases search as-is"
+    assert em.display_alias("lever seated fly") == "Pec Deck"
+    assert em.display_alias("push-up") is None, "ordinary names need no alias"
+
+    import app as app_module
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess["authed"] = True
+        sess["csrf_token"] = "tok"
+
+    r = client.get("/api/exercises?q=pec+deck")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["total"] == 1, f"pec deck unfindable: {body['total']} hits"
+    hit = body["exercises"][0]
+    assert hit["name"] == "lever seated fly"
+    assert hit["aka"] == "Pec Deck", "card must show the gym-floor name"
+    print("  15. 'pec deck' resolves to lever seated fly and shows as Pec Deck  OK")
+
+
+def test_16_bridged_alias_logs_under_gym_floor_name():
+    # Adding it to a workout must write "Pec Deck" — the log is read by a human,
+    # and logging "lever seated fly" is the same unrecognisable name in a new place.
+    import app as app_module
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess["authed"] = True
+        sess["csrf_token"] = "tok"
+    r = client.post("/api/exercises/0014/add-to-workout",
+                    headers={"X-CSRF-Token": "tok"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["gym_exercise"]["name"] == "Pec Deck"
+    print("  16. bridging the pec deck logs it as 'Pec Deck'  OK")
+
+
+def test_17_alias_maps_are_consistent():
+    # A display name for a row nothing can reach is dead weight; an alias key
+    # that isn't normalised can never be hit, since lookup normalises first.
+    for shown in em.DISPLAY_ALIASES:
+        assert shown in em.NAME_ALIASES.values(), f"{shown} unreachable by any alias"
+    for key in em.NAME_ALIASES:
+        assert key == em.normalise_name(key), f"alias key {key!r} never matches"
+    print("  17. alias maps consistent: every display name is reachable  OK")
+
 
 def main():
     setup_module()
@@ -284,6 +339,9 @@ def main():
         test_12_no_dead_library_references,
         test_13_granular_back_split,
         test_14_forearms_reachable,
+        test_15_pec_deck_findable_by_gym_floor_name,
+        test_16_bridged_alias_logs_under_gym_floor_name,
+        test_17_alias_maps_are_consistent,
     ]
     print("Gym inline-discovery tests:")
     passed = 0

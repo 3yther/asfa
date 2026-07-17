@@ -72,6 +72,48 @@ MUSCLE_MAP = {
     "glutes":     {"category": "upper legs", "targets": {"glutes"}},
 }
 
+# ── Name aliases (gym floor → catalogue) ─────────────────────────────────────
+# The dataset names machines after their mechanism ("lever seated fly"), not
+# what anyone calls them standing in front of one ("pec deck"). Search is a
+# plain LIKE on name, so the gym-floor name returns nothing and the move looks
+# missing — the athlete then logs the nearest name they CAN find (a cable fly),
+# quietly polluting the log with the wrong exercise.
+#
+# Keys are normalise_name()'d vernacular; every value is the exact ``name`` of a
+# row verified to exist in the catalogue. A value with a typo matches no rows
+# and silently resurrects the bug, so check against the table before adding one.
+NAME_ALIASES = {
+    "pec deck":           "lever seated fly",
+    "pec dec":            "lever seated fly",
+    "pec deck machine":   "lever seated fly",
+    "chest fly machine":  "lever seated fly",
+    "machine chest fly":  "lever seated fly",
+    "butterfly machine":  "lever seated fly",
+    "reverse pec deck":   "lever seated reverse fly",
+    "rear delt machine":  "lever seated reverse fly",
+    "rear delt fly":      "lever seated reverse fly",
+}
+
+# The name to SHOW for a catalogue row whose dataset name nobody would
+# recognise. Inverse of NAME_ALIASES, but hand-picked: several aliases map to
+# one row, and only one of them is the name worth displaying.
+DISPLAY_ALIASES = {
+    "lever seated fly":         "Pec Deck",
+    "lever seated reverse fly": "Reverse Pec Deck",
+}
+
+
+def resolve_alias(query: str) -> str | None:
+    """The catalogue name for a gym-floor name ("pec deck" → "lever seated
+    fly"), or None when the query isn't an alias and should be searched as-is."""
+    return NAME_ALIASES.get(normalise_name(query))
+
+
+def display_alias(name: str) -> str | None:
+    """The gym-floor name for a catalogue row, or None if its own name is fine."""
+    return DISPLAY_ALIASES.get(normalise_name(name))
+
+
 # Balanced default when the session is empty AND there is no logged history yet.
 _DEFAULT_MUSCLES = ["chest", "back", "quads", "shoulders"]
 
@@ -258,6 +300,7 @@ def suggest_exercises(session_muscles=None, exclude_names=None, limit=12) -> dic
         scored.append((score, row.get("name") or "", {
             "id": row.get("id"),
             "name": row.get("name"),
+            "aka": display_alias(row.get("name")),
             "muscle": hit,
             "category": row.get("category"),
             "target_muscle": row.get("target_muscle"),

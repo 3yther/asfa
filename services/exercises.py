@@ -16,7 +16,8 @@ the patched fetch wrapper included through nav.html.
 from flask import Blueprint, jsonify, request
 
 import database as db
-from services.exercise_match import (CARDIO_EQUIPMENT, suggest_exercises)
+from services.exercise_match import (CARDIO_EQUIPMENT, display_alias,
+                                     resolve_alias, suggest_exercises)
 
 exercises_bp = Blueprint("exercises", __name__)
 
@@ -57,16 +58,23 @@ def api_exercises_suggested():
 @exercises_bp.route("/api/exercises")
 def api_exercises():
     """Filtered + paginated catalogue. Query params: category, equipment
-    (comma-separated), home_only, difficulty, q (name search), page, per_page."""
+    (comma-separated), home_only, difficulty, q (name search), page, per_page.
+
+    ``q`` is resolved through NAME_ALIASES first, so searching the gym-floor
+    name of a machine ("pec deck") finds the row the dataset files under its
+    mechanism ("lever seated fly")."""
+    q = request.args.get("q") or None
     result = db.get_exercises(
         category=request.args.get("category") or None,
         equipment=request.args.get("equipment") or None,
         home_only=_truthy(request.args.get("home_only", "")),
-        q=request.args.get("q") or None,
+        q=(resolve_alias(q) or q) if q else None,
         difficulty=request.args.get("difficulty") or None,
         page=request.args.get("page", 1),
         per_page=request.args.get("per_page", 48),
     )
+    for ex in result.get("exercises", []):
+        ex["aka"] = display_alias(ex.get("name"))
     return jsonify(result)
 
 
@@ -95,8 +103,10 @@ def api_add_to_workout(ex_id):
         return jsonify({"error": "exercise not found"}), 404
     equipment = (ex.get("equipment") or "").strip().lower()
     exercise_type = "cardio" if equipment in _CARDIO_EQUIPMENT else "strength"
+    # Log machines under their gym-floor name ("Pec Deck"), not the dataset's
+    # mechanical one ("lever seated fly") — the log is read by a human.
     gym_ex = db.get_or_create_gym_exercise(
-        name=ex["name"],
+        name=display_alias(ex["name"]) or ex["name"],
         muscle_group=ex.get("category") or ex.get("target_muscle"),
         equipment=ex.get("equipment"),
         exercise_type=exercise_type,
