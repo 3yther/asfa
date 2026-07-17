@@ -5763,11 +5763,11 @@ def _ensure_workout_plan_tables():
 
 
 # ── Plan seed ────────────────────────────────────────────────────────────────
-# 3 Push / 1 Pull is deliberate and Amir's actual training, so the split is named
-# for what it is rather than the conventional "4-day Push/Pull", which would imply
-# 2/2. Treadmill finisher rides along on every gym day; cycling Tue + Thu.
+# Amir's actual training: a 4-day Push/Pull/Push/Pull split (Mon/Wed/Fri/Sat),
+# alternating 2 Push + 2 Pull. Treadmill finisher rides along on every gym day;
+# cycling Tue + Thu. This mirrors the /gym Workout-tab routines (gym_seed.ROUTINES).
 
-PLAN_SPLIT_NAME = "4-Day Push-Focused Split"
+PLAN_SPLIT_NAME = "4-Day Push/Pull Split"
 PLAN_TARGET_DATE = "2026-09-15"
 
 _TREADMILL = "30 min treadmill — 13% incline, 3.5 speed"
@@ -5793,12 +5793,12 @@ PLAN_SESSIONS = [
     (3, "Wednesday", "Pull", _PULL_EXERCISES, _TREADMILL, None),
     (4, "Thursday", "Cycling", [], _CYCLING, "Stamina work — no lifting."),
     (5, "Friday", "Push", _PUSH_EXERCISES, _TREADMILL, "Same as Monday."),
-    (6, "Saturday", "Push", _PUSH_EXERCISES, _TREADMILL, "Same as Monday."),
+    (6, "Saturday", "Pull", _PULL_EXERCISES, _TREADMILL, "Same as Wednesday."),
     (7, "Sunday", "Rest", [], None, "Full recovery day. Weekly weigh-in."),
 ]
 
 PLAN_DESCRIPTION = (
-    "Three Push days, one Pull day, two cycling days, one full rest day. "
+    "Two Push days, two Pull days, two cycling days, one full rest day. "
     "Every gym day finishes with 30 min on the treadmill at 13% incline, 3.5 speed."
 )
 

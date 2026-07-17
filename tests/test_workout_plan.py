@@ -139,7 +139,7 @@ def test_6_each_day_has_the_right_session_type():
     by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
     expected = {
         "Monday": "Push", "Tuesday": "Cycling", "Wednesday": "Pull",
-        "Thursday": "Cycling", "Friday": "Push", "Saturday": "Push",
+        "Thursday": "Cycling", "Friday": "Push", "Saturday": "Pull",
         "Sunday": "Rest",
     }
     for day, stype in expected.items():
@@ -160,9 +160,10 @@ def test_7_push_pull_days_carry_exercises_and_treadmill():
     assert "Back Finisher" in wednesday["exercises"]
     assert "treadmill" in wednesday["cardio"]
 
-    # Friday/Saturday mirror Monday.
+    # Push/Pull/Push/Pull: Friday mirrors Monday's Push, Saturday mirrors
+    # Wednesday's Pull.
     assert by_day["Friday"]["exercises"] == monday["exercises"]
-    assert by_day["Saturday"]["exercises"] == monday["exercises"]
+    assert by_day["Saturday"]["exercises"] == wednesday["exercises"]
 
 
 def test_8_cycling_and_rest_days_carry_no_lifting():
@@ -535,8 +536,8 @@ def test_24_edit_day_of_the_split():
                     headers={"X-CSRF-Token": "tok"})
     assert r.status_code == 400, "day_number outside 1-7 must 400"
 
-    # restore
-    db.update_workout_session(6, session_type="Push", exercises=db._PUSH_EXERCISES)
+    # restore — Saturday's seed default is now Pull
+    db.update_workout_session(6, session_type="Pull", exercises=db._PULL_EXERCISES)
 
 
 def main():
