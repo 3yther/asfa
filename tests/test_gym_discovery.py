@@ -322,6 +322,40 @@ def test_17_alias_maps_are_consistent():
     print("  17. alias maps consistent: every display name is reachable  OK")
 
 
+def test_18_suggestions_rotate_daily_not_frozen():
+    # Regression: within an equal-score band the ranker used to tiebreak
+    # alphabetically, so "Try Something New" showed the same A-named twelve on
+    # every visit forever (163 chest rows in prod, 12 slots) and never rotated.
+    # It must now rotate day to day while staying stable within a single day.
+    import datetime as _dt
+
+    class _FixedDate(_dt.date):
+        _t = _dt.date(2026, 1, 1)
+
+        @classmethod
+        def today(cls):
+            return cls._t
+
+    orig = em.date
+
+    def order_on(day):
+        _FixedDate._t = day
+        em.date = _FixedDate
+        r = em.suggest_exercises(session_muscles=["chest"], limit=12)
+        return [e["name"] for e in r["exercises"]]
+
+    try:
+        base = _dt.date(2026, 1, 1)
+        # Stable within a day: the same date yields the identical order.
+        assert order_on(base) == order_on(base), "order must be stable within a day"
+        # Not frozen: across a week the order changes at least once.
+        week = [order_on(base + _dt.timedelta(days=i)) for i in range(7)]
+        assert any(o != week[0] for o in week), "panel never rotates (frozen)"
+    finally:
+        em.date = orig
+    print("  18. suggestions rotate across days, stable within a day  OK")
+
+
 def main():
     setup_module()
     tests = [
@@ -342,6 +376,7 @@ def main():
         test_15_pec_deck_findable_by_gym_floor_name,
         test_16_bridged_alias_logs_under_gym_floor_name,
         test_17_alias_maps_are_consistent,
+        test_18_suggestions_rotate_daily_not_frozen,
     ]
     print("Gym inline-discovery tests:")
     passed = 0

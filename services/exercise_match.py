@@ -18,6 +18,7 @@ The gym-library ⇄ catalogue vocabulary gap is bridged by MUSCLE_MAP below.
 """
 from __future__ import annotations
 
+import random
 import re
 from datetime import date, datetime
 
@@ -312,8 +313,16 @@ def suggest_exercises(session_muscles=None, exclude_names=None, limit=12) -> dic
             "reason": reason,
         }))
 
-    # Highest score first; name as a stable, deterministic tiebreak.
-    scored.sort(key=lambda t: (-t[0], t[1].lower()))
+    # Highest score first. Within an equal-score band every candidate is equally
+    # "new to you", so an alphabetical tiebreak would freeze the panel: chest has
+    # 163 rows all scoring the same and only 12 slots, so "Try Something New"
+    # would show the same A-named twelve on every visit — never rotating, and
+    # burying moves like the Pec Deck permanently. Break ties with a per-day
+    # shuffle instead: stable within a day (the panel doesn't reshuffle as you
+    # log a set) but fresh the next, so the whole pool cycles through over time.
+    # Seeding random with a str is deterministic and PYTHONHASHSEED-independent.
+    day = date.today().toordinal()
+    scored.sort(key=lambda t: (-t[0], random.Random(f"{day}:{t[1]}").random()))
     return {
         "muscles": muscles,
         "fallback": fallback,
