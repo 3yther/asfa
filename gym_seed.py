@@ -492,17 +492,23 @@ EXERCISES = [
     },
 ]
 
+# The live 4-day Push/Pull/Push/Pull split, in weekday order: Mon Push, Wed Pull,
+# Fri Push (shoulder-led), Sat Pull (back-led). Two Push + two Pull days share the
+# push/pull pattern but carry distinct day_type values so the up-next rotation in
+# gym.js cycles through all four (push → pull → push_b → pull_b → …). The card's
+# target duration is derived from set count in gym.js (round(totalSets × 2.5)):
+# 24 sets → 60 min for the Push days, 23 sets → 58 min for the Pull days.
 ROUTINES = [
-    {"name": "Push Day", "day_type": "push", "description": "Chest, shoulders and triceps", "order_index": 0},
-    {"name": "Pull Day", "day_type": "pull", "description": "Back and biceps", "order_index": 1},
-    {"name": "Legs Day", "day_type": "legs", "description": "Quads, hamstrings and calves", "order_index": 2},
-    {"name": "Upper Day", "day_type": "upper", "description": "Full upper body", "order_index": 3},
-    {"name": "Lower Day", "day_type": "lower", "description": "Full lower body", "order_index": 4},
+    {"name": "Push · Monday", "day_type": "push", "description": "Chest, shoulders & triceps", "order_index": 0},
+    {"name": "Pull · Wednesday", "day_type": "pull", "description": "Back & biceps", "order_index": 1},
+    {"name": "Push · Friday", "day_type": "push_b", "description": "Shoulders (primary), chest & triceps", "order_index": 2},
+    {"name": "Pull · Saturday", "day_type": "pull_b", "description": "Back (primary) & biceps", "order_index": 3},
 ]
 
 # (exercise_name, sets, rep_min, rep_max, rest_seconds)
 ROUTINE_EXERCISES = {
-    "Push Day": [
+    # Mon — Push, chest-led. 24 working+cardio sets → 60 min target.
+    "Push · Monday": [
         ("Barbell Bench Press", 4, 8, 10, 90),
         ("Incline Dumbbell Press", 3, 10, 12, 75),
         ("Cable Chest Fly", 3, 12, 15, 60),
@@ -512,7 +518,8 @@ ROUTINE_EXERCISES = {
         ("Overhead Tricep Extension", 3, 12, 15, 60),
         ("Incline Walk", 1, 25, 25, 0),
     ],
-    "Pull Day": [
+    # Wed — Pull, back + biceps. 23 sets → 58 min target.
+    "Pull · Wednesday": [
         ("Barbell Row", 4, 8, 10, 90),
         ("Lat Pulldown", 3, 10, 12, 75),
         ("Seated Cable Row", 3, 10, 12, 75),
@@ -522,38 +529,26 @@ ROUTINE_EXERCISES = {
         ("Pull-ups", 3, 1, 20, 90),
         ("Incline Walk", 1, 25, 25, 0),
     ],
-    "Legs Day": [
-        ("Barbell Squat", 4, 8, 10, 90),
-        ("Leg Press", 3, 10, 12, 75),
-        ("Romanian Deadlift", 3, 10, 12, 75),
-        ("Leg Extension", 3, 12, 15, 60),
-        ("Leg Curl", 3, 12, 15, 60),
-        ("Standing Calf Raise", 4, 15, 20, 45),
-        ("Ab Cruncher", 3, 15, 20, 45),
+    # Fri — Push, shoulder-led (chest secondary). 24 sets → 60 min target.
+    "Push · Friday": [
+        ("Seated Dumbbell Shoulder Press", 4, 8, 10, 90),
+        ("Lateral Raises", 4, 15, 20, 45),
+        ("Cable Lateral Raises", 3, 15, 20, 45),
+        ("Incline Dumbbell Press", 3, 10, 12, 75),
+        ("Cable Chest Fly", 3, 12, 15, 60),
+        ("Overhead Tricep Extension", 3, 12, 15, 60),
+        ("Tricep Rope Pushdown", 3, 12, 15, 60),
         ("Incline Walk", 1, 25, 25, 0),
     ],
-    "Upper Day": [
-        ("Smith Machine Incline Press", 4, 8, 10, 90),
-        ("Chest Press Machine", 3, 10, 12, 75),
-        ("Cable Chest Fly", 3, 12, 15, 60),
-        ("Seated Dumbbell Shoulder Press", 3, 10, 12, 75),
-        ("Lateral Raises", 3, 15, 20, 45),
-        ("Face Pulls", 3, 15, 20, 45),
+    # Sat — Pull, back-led (biceps secondary). 23 sets → 58 min target.
+    "Pull · Saturday": [
+        ("Lat Pulldown", 4, 8, 10, 90),
+        ("Seated Cable Row", 3, 10, 12, 75),
         ("Dumbbell Row", 3, 10, 12, 75),
         ("Lat Pulldown Close Grip", 3, 10, 12, 75),
+        ("Face Pulls", 3, 15, 20, 45),
+        ("Hammer Curls", 3, 12, 15, 60),
         ("Cable Bicep Curl", 3, 12, 15, 60),
-        ("Dips", 3, 1, 20, 75),
-        ("Overhead Tricep Extension", 3, 12, 15, 60),
-        ("Incline Walk", 1, 25, 25, 0),
-    ],
-    "Lower Day": [
-        ("Romanian Deadlift", 4, 8, 10, 90),
-        ("Smith Machine Squat", 3, 10, 12, 75),
-        ("Leg Press", 3, 10, 12, 75),
-        ("Walking Lunges", 3, 12, 12, 60),
-        ("Leg Curl", 3, 12, 15, 60),
-        ("Seated Calf Raise", 4, 15, 20, 45),
-        ("Ab Cruncher", 3, 15, 20, 45),
         ("Incline Walk", 1, 25, 25, 0),
     ],
 }

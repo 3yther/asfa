@@ -4402,11 +4402,38 @@ def _exercise_id_by_name(cur, name: str):
     return row["id"] if row else None
 
 
+def _reconcile_gym_routines():
+    """Delete any seeded routine whose name is no longer in gym_seed.ROUTINES,
+    together with its gym_routine_exercises rows. Keeps the split in sync with
+    the seed when days are retired or renamed."""
+    keep = [r["name"] for r in gym_seed.ROUTINES]
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        placeholders = ",".join([ph] * len(keep))
+        cur.execute(
+            f"SELECT id FROM gym_routines WHERE name NOT IN ({placeholders})", keep)
+        stale = [row["id"] for row in cur.fetchall()]
+        for rid in stale:
+            cur.execute(
+                f"DELETE FROM gym_routine_exercises WHERE routine_id = {ph}", (rid,))
+            cur.execute(f"DELETE FROM gym_routines WHERE id = {ph}", (rid,))
+
+
 def seed_gym_routines():
     """Insert routine templates + their exercise lists once. Idempotent — a
     routine is only populated if it doesn't already exist by name. Routine
-    exercises referencing an unknown exercise name are skipped."""
+    exercises referencing an unknown exercise name are skipped.
+
+    Routines are seed-managed templates (there is no create/edit endpoint), so
+    the seed is the source of truth: any routine whose name is no longer in the
+    seed is reconciled away, along with its exercise rows. This is how retired
+    split days (Legs/Upper/Lower, or a renamed day) get removed on the next boot
+    rather than lingering forever because the old idempotent seed only ever
+    added rows. Logged sessions keep their row (routine_id just goes dangling —
+    the reads LEFT JOIN, so history still renders)."""
     _ensure_gym_tables()
+    _reconcile_gym_routines()
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"

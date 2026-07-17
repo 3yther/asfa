@@ -74,7 +74,9 @@ function loadTargets() { try { return JSON.parse(localStorage.getItem(LS_TARGETS
 function saveTarget(rid, mins) { const t = loadTargets(); t[rid] = mins; localStorage.setItem(LS_TARGETS, JSON.stringify(t)); }
 function aiEnabled() { return localStorage.getItem(LS_AI) === "1"; }
 const CYAN = "#00d9ff", GOLD = "#ffd700", VIOLET = "#7f77dd";
-const ROTATION = ["push", "pull", "legs", "upper", "lower"];
+// 4-day Push/Pull/Push/Pull split (Mon/Wed/Fri/Sat). Two Push + two Pull days,
+// each with its own day_type so the up-next suggestion cycles through all four.
+const ROTATION = ["push", "pull", "push_b", "pull_b"];
 const PLATES = [25, 20, 15, 10, 5, 2.5, 1.25];
 const PLATE_COLORS = { 25:"#e23", 20:"#25c", 15:"#fb0", 10:"#2a5", 5:"#eee", 2.5:"#888", 1.25:"#c9a" };
 const BAR_KG = 20;
