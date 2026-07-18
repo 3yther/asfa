@@ -51,7 +51,10 @@
     <!-- Rest day prompt (shown when nothing logged today) -->
     <div id="rest-day-prompt" class="rest-day-prompt sci-fi-panel" hidden>
       <span>No workout logged today.</span>
-      <button class="btn btn-ghost" id="mark-rest-day">Mark as Rest Day</button>
+      <div class="rest-day-actions">
+        <button class="btn btn-ghost" id="mark-rest-day">Mark as Rest Day</button>
+        <button class="btn btn-ghost" id="mark-cardio">Mark as Cardio</button>
+      </div>
     </div>
 
     <!-- Stats row -->
@@ -435,6 +438,41 @@
   <div class="modal sci-fi-panel" id="video-modal-inner">
     <button class="modal-close" data-close-modal="video-modal">✕</button>
     <div id="video-modal-body"><!-- filled by JS --></div>
+  </div>
+</div>
+
+<!-- ── Quick cardio log (dashboard button + Quick Start cycling cards) ──── -->
+<div id="quick-cardio-modal" class="modal-overlay" hidden>
+  <div class="modal sci-fi-panel">
+    <button class="modal-close" data-close-modal="quick-cardio-modal">✕</button>
+    <h3>Log Cardio</h3>
+    <form id="quick-cardio-form" class="cardio-form">
+      <div class="cardio-fields">
+        <label class="cardio-field">Date
+          <input type="date" id="qc-date" required>
+        </label>
+        <label class="cardio-field">Type
+          <select id="qc-type">
+            <option value="cycling">Cycling</option>
+            <option value="treadmill">Treadmill</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label class="cardio-field">Distance (mi)
+          <input type="number" id="qc-distance" inputmode="decimal" step="0.1" min="0" placeholder="e.g. 7.9">
+        </label>
+        <label class="cardio-field">Time (min)
+          <input type="number" id="qc-duration" inputmode="numeric" step="1" min="0" placeholder="e.g. 46">
+        </label>
+        <label class="cardio-field">Effort (1-5)
+          <input type="number" id="qc-effort" inputmode="numeric" step="1" min="1" max="5" placeholder="1-5">
+        </label>
+      </div>
+      <label class="cardio-field cardio-notes-field">Notes
+        <input type="text" id="qc-notes" placeholder="Optional" autocomplete="off">
+      </label>
+      <button type="submit" class="btn btn-primary" id="qc-log-btn">+ Log Cardio</button>
+    </form>
   </div>
 </div>
 

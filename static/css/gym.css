@@ -561,6 +561,10 @@ body.rest-active .exercise-list { padding-bottom: 210px; }
 .remove-ex-btn:hover { border-color: var(--gym-red); color: var(--gym-red); }
 .addex-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; max-height: 50vh; overflow-y: auto; }
 .qs-btn.disabled { opacity: .5; cursor: default; }
+.qs-btn.qs-cardio { border-color: rgba(0,217,255,.28); }
+.qs-btn.qs-cardio:hover { border-color: rgba(0,217,255,.55); }
+.qs-btn.qs-cardio svg { vertical-align: -3px; margin-right: 3px; color: var(--gym-cyan); }
+.qs-btn.qs-rest { border-style: dashed; }
 
 /* ── Rest-day prompt + deload banner ──────────────────────────────────── */
 .rest-day-prompt {
@@ -568,6 +572,7 @@ body.rest-active .exercise-list { padding-bottom: 210px; }
   padding: 12px 16px; margin-bottom: 16px; border-radius: 12px; flex-wrap: wrap;
 }
 .rest-day-prompt span { color: var(--muted); font-size: .85rem; }
+.rest-day-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .deload-banner {
   display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; margin-bottom: 16px;
   border-radius: 12px; border-left: 3px solid var(--gym-amber); background: rgba(245,185,66,.08);
