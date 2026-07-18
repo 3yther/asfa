@@ -78,6 +78,18 @@ const CYAN = "#00d9ff", GOLD = "#ffd700", VIOLET = "#7f77dd";
 // Two Push + two Pull days, each with its own day_type so the up-next suggestion
 // cycles through all four (push → pull → push_b → pull_b).
 const ROTATION = ["push", "pull", "push_b", "pull_b"];
+// Weekly Quick Start schedule shown in calendar order. Gym days resolve to a
+// routine by day_type; the Tue/Thu cycling and Sun rest slots are parallel cards
+// that never advance the push/pull rotation (cardio lives in its own table).
+const WEEK_SCHEDULE = [
+  { kind: "gym",    day_type: "push",   day: "Saturday" },
+  { kind: "gym",    day_type: "pull",   day: "Monday" },
+  { kind: "cardio", day: "Tuesday",  type: "cycling", name: "Cycling" },
+  { kind: "gym",    day_type: "push_b", day: "Wednesday" },
+  { kind: "cardio", day: "Thursday", type: "cycling", name: "Cycling" },
+  { kind: "gym",    day_type: "pull_b", day: "Friday" },
+  { kind: "rest",   day: "Sunday",   name: "Rest" },
+];
 // Pre-workout supplement labels — keys mirror db.PRE_WORKOUT_TYPES.
 const PRE_WORKOUT_LABELS = { energy_drink: "Energy Drink", origin_pre_workout: "Origin Pre-Workout" };
 const CARDIO_TYPE_LABELS = { cycling: "Cycling", treadmill: "Treadmill", other: "Other" };
@@ -90,6 +102,7 @@ const BAR_KG = 20;
 const IC_FLAME = '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M12 2s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3 1.5-4 .5 1 1 1.5 1.8 1.7C9.5 7.5 12 5 12 2z"/></svg>';
 const IC_PLATE = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M3 9h2v6H3zM6 7h2v10H6zM16 7h2v10h-2zM19 9h2v6h-2zM8 11h8v2H8z"/></svg>';
 const IC_DUMBBELL = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M2 12h2M20 12h2M6 8v8M8 8v8M16 8v8M18 8v8M8 12h8"/></svg>';
+const IC_BIKE = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5.5" cy="17.5" r="3.5"/><circle cx="18.5" cy="17.5" r="3.5"/><path d="M15 5a1 1 0 1 0 0-2 1 1 0 0 0 0 2zM12 17.5 8.5 9.5l4-2.5 2.5 4h2.5"/></svg>';
 
 function corners(elm) { ["corner-bl", "corner-br"].forEach(c => elm.appendChild(el("div", c))); }
 
@@ -157,13 +170,14 @@ $$(".gym-subtab").forEach(b => b.addEventListener("click", () => switchTab(b.dat
 /* ══ 2. DASHBOARD ═════════════════════════════════════════════════════════ */
 async function loadDashboard() {
   try {
-    const [xp, ranks, prs, sessions, recovery, weekly, cal, body, deload, restDays] = await Promise.all([
+    const [xp, ranks, prs, sessions, recovery, weekly, cal, body, deload, restDays, cardio] = await Promise.all([
       apiGet(`${API}/xp`), apiGet(`${API}/ranks`), apiGet(`${API}/prs`),
       apiGet(`${API}/sessions?limit=60`), apiGet(`${API}/muscle-recovery`),
       apiGet(`${API}/volume/weekly`), apiGet(`${API}/sessions/calendar?months=3`),
       apiGet(`${API}/body-stats?limit=1`),
       apiGet(`${API}/deload-check`).catch(() => ({})),
       apiGet(`${API}/rest-days`).catch(() => []),
+      apiGet(`${API}/cardio?limit=30`).catch(() => []),
     ]);
     PR_BY_EX = {}; prs.forEach(p => PR_BY_EX[p.exercise_id] = p);
     renderStats(xp, sessions, body);
@@ -175,7 +189,7 @@ async function loadDashboard() {
     renderCalendar(cal, sessions);
     renderWeeklyVolume(weekly);
     renderDeloadBanner(deload);
-    renderRestDayPrompt(sessions, restDays);
+    renderRestDayPrompt(sessions, restDays, cardio);
   } catch (e) { console.error("dashboard load failed", e); toast("Could not load dashboard"); }
 }
 
@@ -194,13 +208,14 @@ function renderDeloadBanner(deload) {
 }
 
 /* ── Rest-day prompt (only when nothing logged today) ── */
-function renderRestDayPrompt(sessions, restDays) {
+function renderRestDayPrompt(sessions, restDays, cardio) {
   const prompt = $("#rest-day-prompt");
   if (!prompt) return;
   const todayStr = new Date().toISOString().slice(0, 10);
   const workedToday = (sessions || []).some(s => String(s.date).slice(0, 10) === todayStr);
   const restedToday = (restDays || []).some(d => String(d).slice(0, 10) === todayStr);
-  if (workedToday || restedToday) { prompt.hidden = true; return; }
+  const cardioToday = (cardio || []).some(c => String(c.date).slice(0, 10) === todayStr);
+  if (workedToday || restedToday || cardioToday) { prompt.hidden = true; return; }
   prompt.hidden = false;
   $("#mark-rest-day").onclick = async () => {
     try {
@@ -210,6 +225,7 @@ function renderRestDayPrompt(sessions, restDays) {
       loadDashboard();
     } catch (e) { toast("Could not mark rest day"); }
   };
+  $("#mark-cardio").onclick = () => openQuickCardio("cycling");
 }
 
 function startOfWeekCount(sessions) {
@@ -299,13 +315,28 @@ function suggestNextDayType(sessions) {
 function renderQuickStart(sessions) {
   const wrap = $("#quick-start"); wrap.innerHTML = "";
   const nextType = suggestNextDayType(sessions);
-  ROUTINES.forEach(r => {
-    const up = r.day_type === nextType;
-    const b = el("button", "qs-btn" + (up ? " up-next" : ""));
-    b.innerHTML = `<span>${esc(r.name)}<br><span class="qs-meta">${esc(r.description||"")}</span></span>
-      ${up ? '<span class="qs-badge">UP NEXT</span>' : '<span class="qs-meta">Start ▶</span>'}`;
-    b.addEventListener("click", () => { switchTab("workout"); startRoutine(r.id); });
-    wrap.appendChild(b);
+  WEEK_SCHEDULE.forEach(slot => {
+    if (slot.kind === "gym") {
+      const r = ROUTINES.find(x => x.day_type === slot.day_type);
+      if (!r) return;
+      const up = r.day_type === nextType;
+      const b = el("button", "qs-btn" + (up ? " up-next" : ""));
+      b.innerHTML = `<span>${esc(r.name)}<br><span class="qs-meta">${esc(r.description||"")}</span></span>
+        ${up ? '<span class="qs-badge">UP NEXT</span>' : '<span class="qs-meta">Start ▶</span>'}`;
+      b.addEventListener("click", () => { switchTab("workout"); startRoutine(r.id); });
+      wrap.appendChild(b);
+    } else if (slot.kind === "cardio") {
+      // Cardio is parallel to the split — logging it never advances the rotation.
+      const b = el("button", "qs-btn qs-cardio");
+      b.innerHTML = `<span>${IC_BIKE} ${esc(slot.name)} · ${esc(slot.day)}<br><span class="qs-meta">Cardio — parallel to the split</span></span>
+        <span class="qs-meta">Log ▶</span>`;
+      b.addEventListener("click", () => openQuickCardio(slot.type || "cycling"));
+      wrap.appendChild(b);
+    } else {
+      const b = el("button", "qs-btn qs-rest disabled");
+      b.innerHTML = `<span>${esc(slot.name)} · ${esc(slot.day)}<br><span class="qs-meta">Recovery day</span></span>`;
+      wrap.appendChild(b);
+    }
   });
 }
 
@@ -2130,6 +2161,43 @@ function initCardio() {
   });
 }
 
+/* ── Quick cardio log — shared by the dashboard "Mark as Cardio" button and the
+   Quick Start cycling cards. Logs straight to the cardio table (no gym session),
+   so it never advances the push/pull rotation or the workout streak. ── */
+function openQuickCardio(type = "cycling") {
+  const dateEl = $("#qc-date");
+  if (dateEl) {
+    const d = new Date();
+    dateEl.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  const typeEl = $("#qc-type"); if (typeEl) typeEl.value = type;
+  openModal("quick-cardio-modal");
+}
+
+function initQuickCardio() {
+  const form = $("#quick-cardio-form"); if (!form) return;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const payload = {
+      date: $("#qc-date").value || undefined,
+      type: $("#qc-type").value,
+      distance_miles: $("#qc-distance").value || null,
+      duration_minutes: $("#qc-duration").value || null,
+      perceived_effort: $("#qc-effort").value || null,
+      notes: ($("#qc-notes").value || "").trim(),
+    };
+    try {
+      await apiPost(CARDIO_API, payload);
+      toast("Cardio logged");
+      ["qc-distance", "qc-duration", "qc-effort", "qc-notes"]
+        .forEach(id => { const elm = $("#" + id); if (elm) elm.value = ""; });
+      closeModal("quick-cardio-modal");
+      loadDashboard();       // re-render Quick Start + hide the rest-day prompt (today now logged)
+      loadCardio();          // keep the Cardio tab list in sync (no-ops if not mounted)
+    } catch (err) { toast("Could not log cardio"); }
+  });
+}
+
 const LOADERS = {
   dashboard: loadDashboard, workout: loadWorkout, history: loadHistory,
   exercises: loadExercises, progress: loadProgress, cardio: loadCardio,
@@ -2375,6 +2443,7 @@ async function boot() {
   initSteps();
   initDiscover();
   initCardio();
+  initQuickCardio();
   wirePreWorkout();
   // restore in-memory session from localStorage if present
   const saved = localStorage.getItem(LS_KEY);
