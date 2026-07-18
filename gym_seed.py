@@ -29,15 +29,15 @@ EXERCISES = [
         "rank_bronze": 10, "rank_silver": 16, "rank_gold": 22, "rank_platinum": 28, "rank_diamond": 35
     },
     {
-        "name": "Cable Chest Fly",
+        "name": "Pec Deck",
         "muscle_group": "chest",
         "secondary_muscles": [],
-        "equipment": "cable",
+        "equipment": "machine",
         "exercise_type": "isolation",
-        "youtube_url": "https://www.youtube.com/watch?v=Iwe6AmxVf7o",
-        "instructions": "1. Set cables at shoulder height\n2. Stand in centre, step forward\n3. Bring handles together in arc motion\n4. Squeeze chest at centre\n5. Return slowly",
-        "tips": "Slight bend in elbows throughout. Focus on chest contraction not arm movement.",
-        "rank_bronze": 10, "rank_silver": 18, "rank_gold": 26, "rank_platinum": 35, "rank_diamond": 45
+        "youtube_url": "https://www.youtube.com/watch?v=Z57CtFmRMxA",
+        "instructions": "1. Sit with your back flat against the pad\n2. Grip the handles at shoulder height, elbows soft\n3. Bring the pads together in a smooth arc\n4. Squeeze the chest hard at the centre\n5. Return slowly under control — keep tension",
+        "tips": "Keep a slight bend in the elbows throughout. Drive with the chest, not the arms.",
+        "rank_bronze": 20, "rank_silver": 35, "rank_gold": 50, "rank_platinum": 65, "rank_diamond": 80
     },
     # PUSH DAY — Shoulders
     {
@@ -108,15 +108,15 @@ EXERCISES = [
         "rank_bronze": 10, "rank_silver": 18, "rank_gold": 26, "rank_platinum": 35, "rank_diamond": 45
     },
     {
-        "name": "Dips",
+        "name": "Seated Triceps Press",
         "muscle_group": "triceps",
         "secondary_muscles": ["chest", "shoulders"],
-        "equipment": "bodyweight",
+        "equipment": "machine",
         "exercise_type": "compound",
-        "youtube_url": "https://www.youtube.com/watch?v=2z8JmcrW-As",
-        "instructions": "1. Grip parallel bars\n2. Lower body until upper arms parallel to floor\n3. Press back up\n4. Keep torso upright for tricep focus\n5. Lean forward for chest focus",
-        "tips": "Use assisted dip machine if needed. Work towards bodyweight dips.",
-        "rank_bronze": 0, "rank_silver": 10, "rank_gold": 20, "rank_platinum": 40, "rank_diamond": 60
+        "youtube_url": "https://www.youtube.com/watch?v=0kBrPqjZQ5s",
+        "instructions": "1. Sit with your back against the pad\n2. Grip the handles at shoulder height\n3. Press down and forward until the arms extend\n4. Squeeze the triceps at the bottom\n5. Return slowly under control — don't let the stack slam",
+        "tips": "Keep elbows tucked and shoulders down. Don't lock out aggressively.",
+        "rank_bronze": 15, "rank_silver": 30, "rank_gold": 45, "rank_platinum": 60, "rank_diamond": 75
     },
     # PULL DAY — Back
     {
@@ -512,7 +512,7 @@ ROUTINE_EXERCISES = {
     "Push · Saturday": [
         ("Barbell Bench Press", 4, 8, 10, 90),
         ("Incline Dumbbell Press", 3, 10, 12, 75),
-        ("Cable Chest Fly", 3, 12, 15, 60),
+        ("Pec Deck", 3, 12, 15, 60),
         ("Seated Dumbbell Shoulder Press", 3, 10, 12, 75),
         ("Lateral Raises", 4, 15, 20, 45),
         ("Tricep Rope Pushdown", 3, 12, 15, 60),
@@ -536,7 +536,7 @@ ROUTINE_EXERCISES = {
         ("Lateral Raises", 4, 15, 20, 45),
         ("Cable Lateral Raises", 3, 15, 20, 45),
         ("Incline Dumbbell Press", 3, 10, 12, 75),
-        ("Cable Chest Fly", 3, 12, 15, 60),
+        ("Pec Deck", 3, 12, 15, 60),
         ("Overhead Tricep Extension", 3, 12, 15, 60),
         ("Tricep Rope Pushdown", 3, 12, 15, 60),
         ("Incline Walk", 1, 25, 25, 0),

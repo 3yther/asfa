@@ -93,6 +93,12 @@ NAME_ALIASES = {
     "reverse pec deck":   "lever seated reverse fly",
     "rear delt machine":  "lever seated reverse fly",
     "rear delt fly":      "lever seated reverse fly",
+    # The seated machine triceps press — the dataset files it as a "lever
+    # triceps extension", so the gym-floor name found nothing (and the athlete
+    # logged bench dips instead). This replaces the retired "Dips" library entry.
+    "seated triceps press":  "lever triceps extension",
+    "triceps press machine": "lever triceps extension",
+    "machine triceps press": "lever triceps extension",
 }
 
 # The name to SHOW for a catalogue row whose dataset name nobody would
@@ -101,6 +107,7 @@ NAME_ALIASES = {
 DISPLAY_ALIASES = {
     "lever seated fly":         "Pec Deck",
     "lever seated reverse fly": "Reverse Pec Deck",
+    "lever triceps extension":  "Seated Triceps Press",
 }
 
 
