@@ -69,6 +69,11 @@ RAW = [
     {"id": "0014", "name": "lever seated fly", "category": "chest",
      "target": "pectorals", "equipment": "leverage machine",
      "gif_url": "videos/0014.gif"},
+    # The seated triceps press, under the mechanical name the dataset uses. Like
+    # the pec deck, nobody calls it this — the gym-floor alias must resolve to it.
+    {"id": "0015", "name": "lever triceps extension", "category": "upper arms",
+     "target": "triceps", "equipment": "leverage machine",
+     "gif_url": "videos/0015.gif"},
 ]
 
 
@@ -135,7 +140,7 @@ def test_4_biceps_triceps_disambiguation():
     rb = em.suggest_exercises(session_muscles=["biceps"], limit=12)
     assert _names(rb) == ["dumbbell biceps curl"], _names(rb)
     rt = em.suggest_exercises(session_muscles=["triceps"], limit=12)
-    assert _names(rt) == ["triceps pushdown"], _names(rt)
+    assert set(_names(rt)) == {"triceps pushdown", "lever triceps extension"}, _names(rt)
     print("  4. biceps/triceps split by target_muscle within 'upper arms'  OK")
 
 
@@ -393,6 +398,79 @@ def test_19_replace_keeps_logged_sets():
     print("  19. Replace re-tags logged sets to the new exercise, numbers kept  OK")
 
 
+def test_20_search_matches_equipment_target_and_category():
+    # Regression: search was a LIKE on name only, so a query for equipment
+    # ("leverage machine"), a target_muscle ("pectorals") or a category ("back")
+    # that never appears in the name returned nothing. It must now match all four.
+    # target_muscle: every chest+machine row files under "pectorals" (none of
+    # which has "pectorals" in its name).
+    assert db.get_exercises(q="pectorals")["total"] == 6, \
+        db.get_exercises(q="pectorals")["total"]
+    # equipment: the leverage-machine rows never carry "leverage machine" in
+    # their name, so a name-only search missed them entirely.
+    lev = db.get_exercises(q="leverage machine")
+    assert lev["total"] == 2, lev
+    assert {"lever seated fly", "lever triceps extension"} == \
+        {e["name"] for e in lev["exercises"]}, lev
+    # category: "back" matches the four back rows by category, not name.
+    assert db.get_exercises(q="back")["total"] >= 4, db.get_exercises(q="back")["total"]
+    # equipment substring still works alongside name matches.
+    assert db.get_exercises(q="body weight")["total"] >= 2
+    # case-insensitive across every field.
+    assert db.get_exercises(q="PECTORALS")["total"] == 6
+    print("  20. search matches name / target_muscle / equipment / category  OK")
+
+
+def test_21_seated_triceps_press_alias():
+    # The retired "Dips" library entry is replaced by "Seated Triceps Press",
+    # which the dataset files as "lever triceps extension" — so the gym-floor
+    # name must resolve and display like the Pec Deck does.
+    assert em.resolve_alias("seated triceps press") == "lever triceps extension"
+    assert em.resolve_alias("Triceps Press Machine") == "lever triceps extension"
+    assert em.display_alias("lever triceps extension") == "Seated Triceps Press"
+
+    import app as app_module
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess["authed"] = True
+    r = client.get("/api/exercises?q=seated+triceps+press")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["total"] == 1, f"seated triceps press unfindable: {body['total']}"
+    assert body["exercises"][0]["aka"] == "Seated Triceps Press"
+    print("  21. 'seated triceps press' resolves + shows as Seated Triceps Press  OK")
+
+
+def test_22_retired_exercises_migrated_onto_replacements():
+    # init_gym_data must retire Cable Chest Fly / Dips onto Pec Deck / Seated
+    # Triceps Press, carrying any logged sets over and leaving no orphans.
+    from datetime import date as _d
+    old_cf = db.get_or_create_gym_exercise(name="Cable Chest Fly", muscle_group="chest")
+    old_dip = db.get_or_create_gym_exercise(name="Dips", muscle_group="triceps")
+    db.get_or_create_gym_exercise(name="Pec Deck", muscle_group="chest")
+    db.get_or_create_gym_exercise(name="Seated Triceps Press", muscle_group="triceps")
+    sid = db.create_session(None, _d.today().isoformat(), "10:00")
+    db.log_set(sid, old_cf["id"], 1, "working", 30, 12)
+    db.log_set(sid, old_dip["id"], 1, "working", 0, 10)
+
+    db._reconcile_gym_exercises()
+
+    names = {e["name"] for e in db.get_all_exercises()}
+    assert "Cable Chest Fly" not in names and "Dips" not in names, "retired rows remain"
+    assert {"Pec Deck", "Seated Triceps Press"} <= names, "replacements missing"
+    # Logged sets re-pointed, none orphaned.
+    live_ids = {e["id"] for e in db.get_all_exercises()}
+    sets = db.get_session_sets(sid)
+    assert all(s["exercise_id"] in live_ids for s in sets), "orphaned set after retire"
+    by_name = {e["name"]: e["id"] for e in db.get_all_exercises()}
+    tagged = {s["exercise_id"] for s in sets}
+    assert by_name["Pec Deck"] in tagged and by_name["Seated Triceps Press"] in tagged
+    # Idempotent: a second pass is a no-op.
+    db._reconcile_gym_exercises()
+    assert {e["name"] for e in db.get_all_exercises()} == names
+    print("  22. Cable Chest Fly/Dips retired onto replacements, sets kept  OK")
+
+
 def main():
     setup_module()
     tests = [
@@ -415,6 +493,9 @@ def main():
         test_17_alias_maps_are_consistent,
         test_18_suggestions_rotate_daily_not_frozen,
         test_19_replace_keeps_logged_sets,
+        test_20_search_matches_equipment_target_and_category,
+        test_21_seated_triceps_press_alias,
+        test_22_retired_exercises_migrated_onto_replacements,
     ]
     print("Gym inline-discovery tests:")
     passed = 0

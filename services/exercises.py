@@ -58,11 +58,13 @@ def api_exercises_suggested():
 @exercises_bp.route("/api/exercises")
 def api_exercises():
     """Filtered + paginated catalogue. Query params: category, equipment
-    (comma-separated), home_only, difficulty, q (name search), page, per_page.
+    (comma-separated), home_only, difficulty, q (text search), page, per_page.
 
-    ``q`` is resolved through NAME_ALIASES first, so searching the gym-floor
-    name of a machine ("pec deck") finds the row the dataset files under its
-    mechanism ("lever seated fly")."""
+    ``q`` matches across name, target_muscle, equipment and category, so
+    "barbell", "pectorals" and "chest" all return rows — not only words that
+    appear in the exercise name. It is resolved through NAME_ALIASES first, so
+    searching the gym-floor name of a machine ("pec deck") finds the row the
+    dataset files under its mechanism ("lever seated fly")."""
     q = request.args.get("q") or None
     result = db.get_exercises(
         category=request.args.get("category") or None,

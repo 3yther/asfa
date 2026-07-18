@@ -4436,6 +4436,58 @@ def _reconcile_gym_routines():
             cur.execute(f"DELETE FROM gym_routines WHERE id = {ph}", (rid,))
 
 
+# Retired library exercises → the entry that replaces them. Existing DBs carry
+# the old rows (and any logged sets against them); fresh DBs never get the old
+# names because the seed itself now lists only the replacements. Both sides are
+# reconciled onto the replacement so search/swap only ever show the new name and
+# no logged history is lost. Keys are removed from gym_seed.EXERCISES; values
+# must exist in it, so the replacement row is guaranteed present after seeding.
+_RETIRED_EXERCISES = {
+    "Cable Chest Fly": "Pec Deck",
+    "Dips": "Seated Triceps Press",
+}
+
+
+def _reconcile_gym_exercises():
+    """Migrate every retired library exercise onto its replacement: re-point all
+    logged sets, PRs and routine references, then delete the retired row. Fully
+    idempotent — once the retired row is gone, later boots find nothing to do.
+
+    Logged history is preserved by re-tagging (never deleting) sets, exactly like
+    the manual Replace swap (see reassign_session_exercise). This is how the
+    "Cable Chest Fly → Pec Deck" / "Dips → Seated Triceps Press" cleanup reaches
+    databases that already have those rows and sessions logged under them."""
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        for old_name, new_name in _RETIRED_EXERCISES.items():
+            old_id = _exercise_id_by_name(cur, old_name)
+            if old_id is None:
+                continue  # already migrated (or never existed) — nothing to do
+            new_id = _exercise_id_by_name(cur, new_name)
+            if new_id is None or new_id == old_id:
+                # Replacement missing (seed didn't run?) — leave the old row in
+                # place rather than orphan its sets. Next boot retries.
+                continue
+            # Logged sets + routine slots: straight re-point, history intact.
+            cur.execute(f"UPDATE gym_sets SET exercise_id = {ph} WHERE exercise_id = {ph}",
+                        (new_id, old_id))
+            cur.execute(
+                f"UPDATE gym_routine_exercises SET exercise_id = {ph} WHERE exercise_id = {ph}",
+                (new_id, old_id))
+            # gym_prs.exercise_id is UNIQUE: only move the PR if the target has
+            # none; otherwise the target already holds a PR and the stale source
+            # one is dropped (PRs never downgrade, same as elsewhere).
+            cur.execute(f"SELECT id FROM gym_prs WHERE exercise_id = {ph}", (new_id,))
+            if cur.fetchone():
+                cur.execute(f"DELETE FROM gym_prs WHERE exercise_id = {ph}", (old_id,))
+            else:
+                cur.execute(f"UPDATE gym_prs SET exercise_id = {ph} WHERE exercise_id = {ph}",
+                            (new_id, old_id))
+            cur.execute(f"DELETE FROM gym_exercises WHERE id = {ph}", (old_id,))
+
+
 def seed_gym_routines():
     """Insert routine templates + their exercise lists once. Idempotent — a
     routine is only populated if it doesn't already exist by name. Routine
@@ -4478,6 +4530,7 @@ def init_gym_data():
     ensures the singleton XP row exists. Safe to call on every boot."""
     _ensure_gym_tables()
     seed_gym_exercises()
+    _reconcile_gym_exercises()   # retire Cable Chest Fly / Dips onto replacements
     seed_gym_routines()
     _ensure_gym_xp_row()
 
@@ -6648,7 +6701,13 @@ def get_exercises(category=None, equipment=None, home_only=False, q=None,
                   difficulty=None, page=1, per_page=48) -> dict:
     """Filtered, paginated catalogue query. ``equipment`` may be a comma-separated
     list (matched with IN). Returns
-    {exercises, total, page, per_page, pages}."""
+    {exercises, total, page, per_page, pages}.
+
+    ``q`` is a free-text search matched (case-insensitively, substring) across
+    name, target_muscle, equipment AND category — so "barbell" (equipment),
+    "pectorals" (target_muscle) and "chest" (category) all find rows, not only
+    words that happen to appear in the exercise name. The caller resolves gym-
+    floor aliases ("pec deck" → "lever seated fly") before passing ``q`` here."""
     _ensure_exercises_table()
     ph = "%s" if USE_POSTGRES else "?"
     where, params = [], []
@@ -6667,8 +6726,13 @@ def get_exercises(category=None, equipment=None, home_only=False, q=None,
         where.append(f"difficulty = {ph}")
         params.append(difficulty)
     if q:
-        where.append(f"LOWER(name) LIKE {ph}")
-        params.append(f"%{str(q).lower()}%")
+        like = f"%{str(q).lower()}%"
+        where.append(
+            f"(LOWER(name) LIKE {ph} "
+            f"OR LOWER(COALESCE(target_muscle, '')) LIKE {ph} "
+            f"OR LOWER(COALESCE(equipment, '')) LIKE {ph} "
+            f"OR LOWER(COALESCE(category, '')) LIKE {ph})")
+        params.extend([like, like, like, like])
     clause = ("WHERE " + " AND ".join(where)) if where else ""
 
     try:
