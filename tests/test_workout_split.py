@@ -1,8 +1,8 @@
 """Workout-split tests — the seeded gym routines that drive the /gym Workout tab's
 Quick Start picker and routine grid. Asserts the live 4-day Push/Pull/Push/Pull
-split (Mon/Wed/Fri/Sat), that the retired Legs/Upper/Lower days are gone (and get
-reconciled away on re-seed), and that each day's set count yields the 60/58/60/58
-target durations the grid shows.
+split whose training week starts on Saturday (Sat/Mon/Wed/Fri), that the retired
+Legs/Upper/Lower days are gone (and get reconciled away on re-seed), and that each
+day's set count yields the 60/58/60/58 target durations the grid shows.
 
 Runs either way — standalone (no pytest dependency) or under pytest:
 
@@ -27,12 +27,12 @@ import database as db  # noqa: E402
 import gym_seed        # noqa: E402
 
 # The Quick Start / routine grid orders by (order_index, id) and the up-next
-# rotation cycles Mon → Wed → Fri → Sat.
+# rotation cycles Sat → Mon → Wed → Fri (the training week starts on Saturday).
 EXPECTED = [
-    ("Push · Monday", "push", 24, 60),
-    ("Pull · Wednesday", "pull", 23, 58),
-    ("Push · Friday", "push_b", 24, 60),
-    ("Pull · Saturday", "pull_b", 23, 58),
+    ("Push · Saturday", "push", 24, 60),
+    ("Pull · Monday", "pull", 23, 58),
+    ("Push · Wednesday", "push_b", 24, 60),
+    ("Pull · Friday", "pull_b", 23, 58),
 ]
 
 
@@ -110,11 +110,11 @@ def test_8_push_days_are_chest_or_shoulder_led_pull_days_back_led():
     def lead(name):
         return db.get_routine_exercises(by_name[name]["id"])[0]["name"]
 
-    assert lead("Push · Monday") == "Barbell Bench Press", "Mon push leads on chest"
-    assert lead("Push · Friday") == "Seated Dumbbell Shoulder Press", \
-        "Fri push leads on shoulders"
-    assert lead("Pull · Wednesday") == "Barbell Row"
-    assert lead("Pull · Saturday") == "Lat Pulldown", "Sat pull leads on back"
+    assert lead("Push · Saturday") == "Barbell Bench Press", "Sat push leads on chest"
+    assert lead("Push · Wednesday") == "Seated Dumbbell Shoulder Press", \
+        "Wed push leads on shoulders"
+    assert lead("Pull · Monday") == "Barbell Row"
+    assert lead("Pull · Friday") == "Lat Pulldown", "Fri pull leads on back"
 
 
 def test_9_every_seeded_exercise_exists_in_the_library():

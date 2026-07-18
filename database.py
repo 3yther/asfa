@@ -4296,6 +4296,18 @@ def _ensure_gym_tables():
             date TEXT NOT NULL UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+        # Standalone cardio (cycling/treadmill/other). Deliberately NOT a
+        # gym_session: cardio never advances the Push/Pull rotation or the streak.
+        """CREATE TABLE IF NOT EXISTS cardio_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'other',
+            distance_miles REAL,
+            duration_minutes REAL,
+            perceived_effort INTEGER CHECK (perceived_effort IS NULL OR perceived_effort BETWEEN 1 AND 5),
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
     ]
     with get_db() as conn:
         cur = conn.cursor()
@@ -4306,6 +4318,10 @@ def _ensure_gym_tables():
         # Optional per-set RPE (reps-in-reserve proxy). NULL = not logged.
         _add_column(cur, "gym_sets", "rpe",
                     "INTEGER CHECK (rpe IS NULL OR rpe BETWEEN 6 AND 10)")
+        # Pre-workout taken before the session this set belongs to. Carried on
+        # every set of the session; 'none' means none taken / not logged.
+        _add_column(cur, "gym_sets", "pre_workout_type",
+                    "TEXT DEFAULT 'none'")
     _GYM_READY = True
 
 
@@ -4592,7 +4608,12 @@ def get_recent_sessions(limit=10) -> list:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
         cur.execute(
-            f"""SELECT s.*, r.name AS routine_name, r.day_type
+            f"""SELECT s.*, r.name AS routine_name, r.day_type,
+                       (SELECT st.pre_workout_type FROM gym_sets st
+                        WHERE st.session_id = s.id
+                          AND st.pre_workout_type IS NOT NULL
+                          AND st.pre_workout_type <> 'none'
+                        ORDER BY st.id LIMIT 1) AS pre_workout_type
                 FROM gym_sessions s
                 LEFT JOIN gym_routines r ON r.id = s.routine_id
                 ORDER BY s.date DESC, s.id DESC LIMIT {ph}""",
@@ -4721,19 +4742,34 @@ def _is_cardio_exercise(ex: dict) -> bool:
     return (ex.get("exercise_type") == "cardio") or (ex.get("muscle_group") == "cardio")
 
 
+# Pre-workout supplement taken before a session. 'none' is the default / not
+# logged; the UI offers an Energy Drink or Origin Pre-Workout.
+PRE_WORKOUT_TYPES = ("none", "energy_drink", "origin_pre_workout")
+
+
+def _clean_pre_workout(value):
+    """Normalise a pre-workout choice to the allowed set. Anything unknown
+    (blank, None, junk) collapses to 'none' rather than storing a bad value."""
+    v = (value or "none")
+    v = str(v).strip().lower()
+    return v if v in PRE_WORKOUT_TYPES else "none"
+
+
 def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps,
-            notes="", rpe=None) -> dict:
+            notes="", rpe=None, pre_workout_type="none") -> dict:
     """Log a single set. Detects a personal record (by estimated 1RM), updates
     the PR table, awards XP, and bumps the exercise's muscle-group rank.
     Cardio sets (Incline Walk etc.) store duration-in-minutes in ``reps`` with
     weight 0; they earn flat XP but are excluded from PR/1RM/rank logic — a 0kg
     cardio set must never register as a personal record.
+    ``pre_workout_type`` records what (if anything) was taken pre-session.
     Returns {id, is_pr, one_rep_max, xp_earned, rank}."""
     _ensure_gym_tables()
     weight_kg = float(weight_kg or 0)
     reps = int(reps or 0)
     ex = get_exercise(exercise_id)
     cardio = _is_cardio_exercise(ex)
+    pre_workout_type = _clean_pre_workout(pre_workout_type)
 
     # Optional RPE (6–10). Blank/invalid → NULL. Cardio never carries RPE.
     try:
@@ -4756,9 +4792,10 @@ def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps,
         cur = conn.cursor()
         set_id = _gym_insert(
             cur, "gym_sets",
-            "session_id, exercise_id, set_number, set_type, weight_kg, reps, is_pr, notes, rpe",
+            "session_id, exercise_id, set_number, set_type, weight_kg, reps, "
+            "is_pr, notes, rpe, pre_workout_type",
             (session_id, exercise_id, set_number, set_type, weight_kg, reps,
-             bool(is_pr), notes or "", rpe))
+             bool(is_pr), notes or "", rpe, pre_workout_type))
 
     today = date.today().isoformat()
     if is_pr:
@@ -4776,7 +4813,8 @@ def log_set(session_id, exercise_id, set_number, set_type, weight_kg, reps,
         update_muscle_rank(ex["muscle_group"], weight_kg, rank)
 
     return {"id": set_id, "is_pr": bool(is_pr), "one_rep_max": one_rm,
-            "xp_earned": xp, "rank": rank, "is_cardio": cardio}
+            "xp_earned": xp, "rank": rank, "is_cardio": cardio,
+            "pre_workout_type": pre_workout_type}
 
 
 def get_session_sets(session_id: int) -> list:
@@ -4793,6 +4831,71 @@ def get_session_sets(session_id: int) -> list:
                 ORDER BY st.id""",
             (session_id,))
         return [dict(r) for r in cur.fetchall()]
+
+
+# ── Cardio sessions ──────────────────────────────────────────────────────────
+# Standalone cardio, tracked separately from the lifting log. Cardio deliberately
+# never touches gym_sessions / the Push-Pull rotation / the streak — it is its own
+# table with its own reads, so a cardio-only day is not a "gym day".
+
+CARDIO_TYPES = ("cycling", "treadmill", "other")
+
+
+def _clean_cardio_type(value):
+    v = str(value or "other").strip().lower()
+    return v if v in CARDIO_TYPES else "other"
+
+
+def log_cardio_session(on_date=None, type="other", distance_miles=None,
+                       duration_minutes=None, perceived_effort=None,
+                       notes="") -> int:
+    """Record one standalone cardio session and return its id. Effort is clamped
+    to 1–5 (None when unset); distance/duration are optional positive numbers."""
+    _ensure_gym_tables()
+
+    def _pos(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if v >= 0 else None
+
+    try:
+        effort = None if perceived_effort in (None, "") else int(perceived_effort)
+    except (TypeError, ValueError):
+        effort = None
+    if effort is not None and not (1 <= effort <= 5):
+        effort = None
+
+    on_date = on_date or date.today().isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        return _gym_insert(
+            cur, "cardio_sessions",
+            "date, type, distance_miles, duration_minutes, perceived_effort, notes",
+            (on_date, _clean_cardio_type(type), _pos(distance_miles),
+             _pos(duration_minutes), effort, notes or ""))
+
+
+def get_recent_cardio_sessions(limit=20) -> list:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"""SELECT * FROM cardio_sessions
+                ORDER BY date DESC, id DESC LIMIT {ph}""",
+            (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def delete_cardio_session(cardio_id: int) -> bool:
+    _ensure_gym_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"DELETE FROM cardio_sessions WHERE id = {ph}", (cardio_id,))
+        return cur.rowcount > 0
 
 
 def get_exercise_history(exercise_id: int, limit=20) -> list:
@@ -5763,9 +5866,10 @@ def _ensure_workout_plan_tables():
 
 
 # ── Plan seed ────────────────────────────────────────────────────────────────
-# Amir's actual training: a 4-day Push/Pull/Push/Pull split (Mon/Wed/Fri/Sat),
-# alternating 2 Push + 2 Pull. Treadmill finisher rides along on every gym day;
-# cycling Tue + Thu. This mirrors the /gym Workout-tab routines (gym_seed.ROUTINES).
+# Amir's actual training: a 4-day Push/Pull/Push/Pull split whose training week
+# starts on Saturday — Sat Push / Mon Pull / Wed Push / Fri Pull, alternating
+# 2 Push + 2 Pull. Treadmill finisher rides along on every gym day; cycling
+# Tue + Thu. This mirrors the /gym Workout-tab routines (gym_seed.ROUTINES).
 
 PLAN_SPLIT_NAME = "4-Day Push/Pull Split"
 PLAN_TARGET_DATE = "2026-09-15"
@@ -5787,13 +5891,15 @@ _PULL_EXERCISES = [
     "Back Finisher",
 ]
 
+# Days stay in calendar order (Mon=1 … Sun=7); the training cycle starts on
+# Saturday's Push, so Sat/Wed are the two Push days and Mon/Fri the two Pull days.
 PLAN_SESSIONS = [
-    (1, "Monday", "Push", _PUSH_EXERCISES, _TREADMILL, None),
+    (1, "Monday", "Pull", _PULL_EXERCISES, _TREADMILL, None),
     (2, "Tuesday", "Cycling", [], _CYCLING, "Stamina work — no lifting."),
-    (3, "Wednesday", "Pull", _PULL_EXERCISES, _TREADMILL, None),
+    (3, "Wednesday", "Push", _PUSH_EXERCISES, _TREADMILL, None),
     (4, "Thursday", "Cycling", [], _CYCLING, "Stamina work — no lifting."),
-    (5, "Friday", "Push", _PUSH_EXERCISES, _TREADMILL, "Same as Monday."),
-    (6, "Saturday", "Pull", _PULL_EXERCISES, _TREADMILL, "Same as Wednesday."),
+    (5, "Friday", "Pull", _PULL_EXERCISES, _TREADMILL, "Same as Monday."),
+    (6, "Saturday", "Push", _PUSH_EXERCISES, _TREADMILL, "Same as Wednesday. Week starts here."),
     (7, "Sunday", "Rest", [], None, "Full recovery day. Weekly weigh-in."),
 ]
 

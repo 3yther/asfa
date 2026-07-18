@@ -944,3 +944,46 @@ body.sheet-open { overflow: hidden; }
   .sheet-overlay { align-items: center; }
   .sheet { border-radius: 20px; border-bottom: 1px solid rgba(0,217,255,.3); }
 }
+
+/* ── Pre-workout bar (session logging) ────────────────────────────────── */
+.preworkout-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 12px 14px; margin: 10px 0 4px; border-radius: 12px;
+}
+.pw-check { display: flex; align-items: center; gap: 8px; color: var(--text);
+  font: 600 .86rem 'Inter', sans-serif; cursor: pointer; }
+.pw-check input { width: 18px; height: 18px; accent-color: var(--gym-cyan); }
+.pw-select {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid rgba(0,217,255,.3); border-radius: 8px;
+  padding: 7px 10px; font: 500 .84rem 'Inter', sans-serif;
+}
+.pw-select:disabled { opacity: .4; cursor: not-allowed; }
+.hist-pw { margin-left: 8px; color: var(--gym-amber); font-size: .72rem; font-weight: 600; }
+.hist-pw-line { margin-top: 8px; color: var(--gym-amber); font-size: .8rem; font-weight: 600; }
+
+/* ── Cardio tab ───────────────────────────────────────────────────────── */
+.cardio-form { display: flex; flex-direction: column; gap: 12px; }
+.cardio-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+.cardio-field { display: flex; flex-direction: column; gap: 5px;
+  color: var(--muted); font: 600 .72rem 'JetBrains Mono', monospace;
+  letter-spacing: .04em; text-transform: uppercase; }
+.cardio-field input, .cardio-field select {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid rgba(0,217,255,.25); border-radius: 8px;
+  padding: 9px 10px; font: 500 .9rem 'Inter', sans-serif;
+}
+.cardio-notes-field { text-transform: none; }
+.cardio-list { display: flex; flex-direction: column; gap: 8px; }
+.cardio-row { display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 10px 12px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid rgba(140,170,200,.12); }
+.cardio-main { display: grid; grid-template-columns: 56px 90px 1fr; gap: 10px;
+  align-items: center; flex: 1; min-width: 0; }
+.cardio-date { color: var(--gym-cyan); font: 700 .82rem 'JetBrains Mono', monospace; }
+.cardio-type { color: var(--text); font: 600 .86rem 'Inter', sans-serif; }
+.cardio-meta { color: var(--muted); font-size: .78rem; }
+.cardio-del { background: rgba(255,77,77,.1); border: 1px solid rgba(255,77,77,.3);
+  color: var(--gym-red); width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
+  flex-shrink: 0; }
+.cardio-del:hover { background: rgba(255,77,77,.2); }

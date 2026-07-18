@@ -33,6 +33,7 @@
   <nav class="gym-subtabs" role="tablist" aria-label="Gym sections">
     <button class="gym-subtab active" data-subtab="dashboard" role="tab">Dashboard</button>
     <button class="gym-subtab" data-subtab="workout" role="tab">Workout</button>
+    <button class="gym-subtab" data-subtab="cardio" role="tab">Cardio</button>
     <button class="gym-subtab" data-subtab="history" role="tab">History</button>
     <button class="gym-subtab" data-subtab="exercises" role="tab">Exercises</button>
     <button class="gym-subtab" data-subtab="progress" role="tab">Progress</button>
@@ -250,6 +251,17 @@
         <button class="btn btn-ghost add-exercise-btn" id="add-exercise-btn">+ Add Exercise</button>
       </div>
 
+      <!-- ── Pre-workout — logged once, carried on every set this session ──── -->
+      <div class="preworkout-bar sci-fi-panel" id="preworkout-bar">
+        <label class="pw-check">
+          <input type="checkbox" id="pw-toggle"> Took pre-workout?
+        </label>
+        <select id="pw-select" class="pw-select" disabled aria-label="Pre-workout type">
+          <option value="energy_drink">Energy Drink</option>
+          <option value="origin_pre_workout">Origin Pre-Workout</option>
+        </select>
+      </div>
+
       <!-- ── Try Something New — inline, muscle-aware discovery ──────────── -->
       <section class="discover sci-fi-panel" id="discover-panel">
         <button class="discover-toggle" id="discover-toggle" aria-expanded="false" aria-controls="discover-body">
@@ -272,6 +284,47 @@
       </section>
 
       <div id="exercise-list" class="exercise-list"></div>
+    </div>
+  </section>
+
+  <!-- ══ TAB — CARDIO (standalone — never counts as a gym day) ═════════ -->
+  <section class="gym-panel" data-panel="cardio">
+    <div class="card sci-fi-panel">
+      <h3>Log Cardio <span class="muted-sub">separate from lifting — doesn't touch your split or streak</span></h3>
+      <form id="cardio-form" class="cardio-form">
+        <div class="cardio-fields">
+          <label class="cardio-field">Date
+            <input type="date" id="cardio-date" required>
+          </label>
+          <label class="cardio-field">Type
+            <select id="cardio-type">
+              <option value="cycling">Cycling</option>
+              <option value="treadmill">Treadmill</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label class="cardio-field">Distance (mi)
+            <input type="number" id="cardio-distance" inputmode="decimal" step="0.1" min="0" placeholder="e.g. 7.9">
+          </label>
+          <label class="cardio-field">Time (min)
+            <input type="number" id="cardio-duration" inputmode="numeric" step="1" min="0" placeholder="e.g. 46">
+          </label>
+          <label class="cardio-field">Effort (1-5)
+            <input type="number" id="cardio-effort" inputmode="numeric" step="1" min="1" max="5" placeholder="1-5">
+          </label>
+        </div>
+        <label class="cardio-field cardio-notes-field">Notes
+          <input type="text" id="cardio-notes" placeholder="Optional" autocomplete="off">
+        </label>
+        <button type="submit" class="btn btn-primary" id="cardio-log-btn">+ Log Cardio</button>
+      </form>
+    </div>
+    <div class="card sci-fi-panel">
+      <h3>Recent Cardio</h3>
+      <div id="cardio-list" class="cardio-list">
+        <div class="skeleton skeleton-row"></div>
+        <div class="skeleton skeleton-row"></div>
+      </div>
     </div>
   </section>
 

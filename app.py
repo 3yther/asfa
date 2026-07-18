@@ -1505,7 +1505,8 @@ def api_gym_log_set():
     result = db.log_set(
         d["session_id"], d["exercise_id"], d["set_number"],
         d.get("set_type", "working"), d.get("weight_kg", 0), d.get("reps", 0),
-        d.get("notes", ""), rpe=d.get("rpe"))
+        d.get("notes", ""), rpe=d.get("rpe"),
+        pre_workout_type=d.get("pre_workout_type", "none"))
     return jsonify({"ok": True, **result})
 
 
@@ -1729,6 +1730,33 @@ def api_gym_session_notes(session_id):
     ok = db.save_session_notes(session_id, d.get("notes", ""))
     if not ok:
         return jsonify({"error": "session not found"}), 404
+    return jsonify({"ok": True})
+
+
+# ── Cardio (standalone — never counts as a gym day) ──────────────────────────
+@app.route("/api/gym/cardio")
+def api_gym_cardio_list():
+    limit = int(request.args.get("limit", 20))
+    return jsonify(db.get_recent_cardio_sessions(limit))
+
+
+@app.route("/api/gym/cardio", methods=["POST"])
+def api_gym_cardio_log():
+    d = request.get_json(force=True) or {}
+    cardio_id = db.log_cardio_session(
+        on_date=d.get("date") or _today(),
+        type=d.get("type", "other"),
+        distance_miles=d.get("distance_miles"),
+        duration_minutes=d.get("duration_minutes"),
+        perceived_effort=d.get("perceived_effort"),
+        notes=d.get("notes", ""))
+    return jsonify({"ok": True, "id": cardio_id})
+
+
+@app.route("/api/gym/cardio/<int:cardio_id>", methods=["DELETE"])
+def api_gym_cardio_delete(cardio_id):
+    if not db.delete_cardio_session(cardio_id):
+        return jsonify({"error": "cardio session not found"}), 404
     return jsonify({"ok": True})
 
 

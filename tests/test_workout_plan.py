@@ -137,9 +137,10 @@ def test_5_days_are_mon_to_sun_in_order():
 
 def test_6_each_day_has_the_right_session_type():
     by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
+    # Training week starts on Saturday's Push: Sat/Wed are Push, Mon/Fri are Pull.
     expected = {
-        "Monday": "Push", "Tuesday": "Cycling", "Wednesday": "Pull",
-        "Thursday": "Cycling", "Friday": "Push", "Saturday": "Pull",
+        "Monday": "Pull", "Tuesday": "Cycling", "Wednesday": "Push",
+        "Thursday": "Cycling", "Friday": "Pull", "Saturday": "Push",
         "Sunday": "Rest",
     }
     for day, stype in expected.items():
@@ -150,20 +151,22 @@ def test_6_each_day_has_the_right_session_type():
 def test_7_push_pull_days_carry_exercises_and_treadmill():
     by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
 
-    monday = by_day["Monday"]
-    assert "Incline Barbell Bench" in monday["exercises"]
-    assert "Triceps" in monday["exercises"]
-    assert "13% incline" in monday["cardio"] and "3.5" in monday["cardio"]
-
+    # Wednesday is a Push day (chest/shoulders/triceps).
     wednesday = by_day["Wednesday"]
-    assert "Lat Pulldown" in wednesday["exercises"]
-    assert "Back Finisher" in wednesday["exercises"]
-    assert "treadmill" in wednesday["cardio"]
+    assert "Incline Barbell Bench" in wednesday["exercises"]
+    assert "Triceps" in wednesday["exercises"]
+    assert "13% incline" in wednesday["cardio"] and "3.5" in wednesday["cardio"]
 
-    # Push/Pull/Push/Pull: Friday mirrors Monday's Push, Saturday mirrors
-    # Wednesday's Pull.
-    assert by_day["Friday"]["exercises"] == monday["exercises"]
+    # Monday is a Pull day (back & biceps).
+    monday = by_day["Monday"]
+    assert "Lat Pulldown" in monday["exercises"]
+    assert "Back Finisher" in monday["exercises"]
+    assert "treadmill" in monday["cardio"]
+
+    # Push/Pull/Push/Pull: Saturday mirrors Wednesday's Push, Friday mirrors
+    # Monday's Pull.
     assert by_day["Saturday"]["exercises"] == wednesday["exercises"]
+    assert by_day["Friday"]["exercises"] == monday["exercises"]
 
 
 def test_8_cycling_and_rest_days_carry_no_lifting():
@@ -536,8 +539,8 @@ def test_24_edit_day_of_the_split():
                     headers={"X-CSRF-Token": "tok"})
     assert r.status_code == 400, "day_number outside 1-7 must 400"
 
-    # restore — Saturday's seed default is now Pull
-    db.update_workout_session(6, session_type="Pull", exercises=db._PULL_EXERCISES)
+    # restore — Saturday's seed default is now Push (week starts on Saturday)
+    db.update_workout_session(6, session_type="Push", exercises=db._PUSH_EXERCISES)
 
 
 def main():

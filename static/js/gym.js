@@ -74,9 +74,13 @@ function loadTargets() { try { return JSON.parse(localStorage.getItem(LS_TARGETS
 function saveTarget(rid, mins) { const t = loadTargets(); t[rid] = mins; localStorage.setItem(LS_TARGETS, JSON.stringify(t)); }
 function aiEnabled() { return localStorage.getItem(LS_AI) === "1"; }
 const CYAN = "#00d9ff", GOLD = "#ffd700", VIOLET = "#7f77dd";
-// 4-day Push/Pull/Push/Pull split (Mon/Wed/Fri/Sat). Two Push + two Pull days,
-// each with its own day_type so the up-next suggestion cycles through all four.
+// 4-day Push/Pull/Push/Pull split, training week starting Saturday (Sat/Mon/Wed/Fri).
+// Two Push + two Pull days, each with its own day_type so the up-next suggestion
+// cycles through all four (push → pull → push_b → pull_b).
 const ROTATION = ["push", "pull", "push_b", "pull_b"];
+// Pre-workout supplement labels — keys mirror db.PRE_WORKOUT_TYPES.
+const PRE_WORKOUT_LABELS = { energy_drink: "Energy Drink", origin_pre_workout: "Origin Pre-Workout" };
+const CARDIO_TYPE_LABELS = { cycling: "Cycling", treadmill: "Treadmill", other: "Other" };
 const PLATES = [25, 20, 15, 10, 5, 2.5, 1.25];
 const PLATE_COLORS = { 25:"#e23", 20:"#25c", 15:"#fb0", 10:"#2a5", 5:"#eee", 2.5:"#888", 1.25:"#c9a" };
 const BAR_KG = 20;
@@ -532,7 +536,8 @@ async function startRoutine(routineId) {
   const target = targets[routineId] || estimateRoutineMinutes(routine);
   S = {
     id: res.session_id, routineId, routineName: routine.name, dayType: routine.day_type,
-    startTime, targetDuration: target, exercises: routine.exercises.map(rex => buildExState(rex)),
+    startTime, targetDuration: target, preWorkout: "none",
+    exercises: routine.exercises.map(rex => buildExState(rex)),
   };
   saveLS();
   switchTab("workout");
@@ -594,10 +599,14 @@ async function resumeSession(active) {
   $("#resume-banner").hidden = true;
   const routine = await getRoutineFull(active.routine_id);
   const targets = loadTargets();
+  const priorPw = (active.sets || [])
+    .map(st => st.pre_workout_type)
+    .find(t => t && t !== "none") || "none";
   S = {
     id: active.id, routineId: active.routine_id, routineName: active.routine_name || routine.name,
     dayType: active.day_type || routine.day_type, startTime: active.start_time,
     targetDuration: targets[active.routine_id] || estimateRoutineMinutes(routine),
+    preWorkout: priorPw,
     exercises: routine.exercises.map(rex => buildExState(rex)),
   };
   // merge already-logged sets from server
@@ -638,10 +647,34 @@ function renderActiveSession() {
   $("#sh-routine").textContent = S.routineName;
   const durInput = $("#sh-dur-input");
   if (durInput) durInput.value = S.targetDuration || estimateRoutineMinutes({ exercises: S.exercises.map(e => ({ sets: e.plannedSets })) });
+  syncPreWorkoutControl();
   const list = $("#exercise-list"); list.innerHTML = "";
   S.exercises.forEach(ex => list.appendChild(buildExerciseCard(ex)));
   updateSessionTotals();
   startSessionTimer();
+}
+
+/* ── Pre-workout control (logged once, carried on every set this session) ── */
+function syncPreWorkoutControl() {
+  const toggle = $("#pw-toggle"), sel = $("#pw-select");
+  if (!toggle || !sel) return;
+  const pw = (S && S.preWorkout) || "none";
+  const on = pw !== "none";
+  toggle.checked = on;
+  sel.disabled = !on;
+  if (on) sel.value = pw;
+}
+function wirePreWorkout() {
+  const toggle = $("#pw-toggle"), sel = $("#pw-select");
+  if (!toggle || !sel) return;
+  const commit = () => {
+    if (!S) return;
+    S.preWorkout = toggle.checked ? (sel.value || "energy_drink") : "none";
+    sel.disabled = !toggle.checked;
+    saveLS();
+  };
+  toggle.addEventListener("change", commit);
+  sel.addEventListener("change", commit);
 }
 
 /* ── Session target-duration stepper (header) ── */
@@ -1214,7 +1247,8 @@ async function completeSet(ex, idx, row, card) {
   CURRENT_EX_ID = ex.exerciseId;
   try {
     const res = await apiPost(`${API}/sets`, { session_id: S.id, exercise_id: ex.exerciseId,
-      set_number: setNumber, set_type: type, weight_kg: weight, reps, notes, rpe });
+      set_number: setNumber, set_type: type, weight_kg: weight, reps, notes, rpe,
+      pre_workout_type: (S && S.preWorkout) || "none" });
     ex.loggedSets[idx] = { setId: res.id, setNumber, setType: type, weight, reps, notes, rpe,
       isPr: res.is_pr, oneRm: res.one_rep_max };
     saveLS();
@@ -1606,9 +1640,11 @@ async function loadHistory() {
 function historyRow(s) {
   const row = el("div", "hist-row");
   const d = new Date(s.date + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const pw = PRE_WORKOUT_LABELS[s.pre_workout_type];
+  const pwBadge = pw ? `<span class="hist-pw" title="Pre-workout">⚡ ${esc(pw)}</span>` : "";
   row.innerHTML = `<div class="hist-summary">
       <span class="hist-date">${d}</span>
-      <span class="hist-routine">${esc(s.routine_name || "Workout")}</span>
+      <span class="hist-routine">${esc(s.routine_name || "Workout")}${pwBadge}</span>
       <span class="hist-meta">${s.duration_minutes||0}m · ${s.total_sets||0} sets<br>${Math.round(s.total_volume_kg||0).toLocaleString()}kg · +${s.xp_earned||0}xp</span>
     </div><div class="hist-detail"></div>`;
   const summ = row.querySelector(".hist-summary");
@@ -1635,6 +1671,9 @@ function renderSessionDetail(full) {
     return `<div class="hist-ex-block"><div class="heb-name">${esc(name)}</div><div class="heb-set">${cardio ? sets : esc(sets)}</div></div>`;
   }).join("");
   if (!html) html = `<div class="muted-sub">No sets recorded.</div>`;
+  const pwType = (full.sets || []).map(st => st.pre_workout_type).find(t => t && t !== "none");
+  const pw = PRE_WORKOUT_LABELS[pwType];
+  if (pw) html += `<div class="hist-pw-line">⚡ Pre-workout: ${esc(pw)}</div>`;
   if (full.notes) html += `<div class="hist-notes">${esc(full.notes)}</div>`;
   return html;
 }
@@ -2022,9 +2061,78 @@ function initTrainer() {
 }
 
 /* ── Loaders registry ── */
+/* ══ CARDIO — standalone tracking, never counts as a gym day ═══════════════
+   Cardio lives in its own table/endpoints. It never creates a gym_session, so
+   it can't advance the Push/Pull rotation or touch the workout streak. */
+const CARDIO_API = `${API}/cardio`;
+
+async function loadCardio() {
+  const dateEl = $("#cardio-date");
+  if (dateEl && !dateEl.value) {
+    const d = new Date();
+    dateEl.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  const wrap = $("#cardio-list"); if (!wrap) return;
+  try {
+    renderCardioList(await apiGet(`${CARDIO_API}?limit=30`));
+  } catch (e) { wrap.innerHTML = `<div class="empty-note">Could not load cardio.</div>`; }
+}
+
+function renderCardioList(list) {
+  const wrap = $("#cardio-list"); wrap.innerHTML = "";
+  if (!list.length) { wrap.innerHTML = `<div class="empty-note">No cardio logged yet.</div>`; return; }
+  list.forEach(c => wrap.appendChild(cardioRow(c)));
+}
+
+function cardioRow(c) {
+  const row = el("div", "cardio-row");
+  const d = new Date(c.date + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const bits = [];
+  if (c.distance_miles != null) bits.push(`${round1(c.distance_miles)} mi`);
+  if (c.duration_minutes != null) bits.push(`${Math.round(c.duration_minutes)} min`);
+  if (c.perceived_effort != null) bits.push(`effort ${c.perceived_effort}/5`);
+  row.innerHTML = `<div class="cardio-main">
+      <span class="cardio-date">${d}</span>
+      <span class="cardio-type">${esc(CARDIO_TYPE_LABELS[c.type] || c.type)}</span>
+      <span class="cardio-meta">${esc(bits.join(" · "))}${c.notes ? "<br>" + esc(c.notes) : ""}</span>
+    </div>
+    <button class="cardio-del" title="Delete" aria-label="Delete cardio session">✕</button>`;
+  row.querySelector(".cardio-del").addEventListener("click", async () => {
+    if (!confirm("Delete this cardio session?")) return;
+    try {
+      await apiDel(`${CARDIO_API}/${c.id}`);
+      row.remove(); toast("Cardio deleted");
+      if (!$("#cardio-list").children.length) loadCardio();
+    } catch (e) { toast("Could not delete"); }
+  });
+  return row;
+}
+
+function initCardio() {
+  const form = $("#cardio-form"); if (!form) return;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const payload = {
+      date: $("#cardio-date").value || undefined,
+      type: $("#cardio-type").value,
+      distance_miles: $("#cardio-distance").value || null,
+      duration_minutes: $("#cardio-duration").value || null,
+      perceived_effort: $("#cardio-effort").value || null,
+      notes: ($("#cardio-notes").value || "").trim(),
+    };
+    try {
+      await apiPost(CARDIO_API, payload);
+      toast("Cardio logged");
+      ["cardio-distance", "cardio-duration", "cardio-effort", "cardio-notes"]
+        .forEach(id => { const elm = $("#" + id); if (elm) elm.value = ""; });
+      loadCardio();
+    } catch (err) { toast("Could not log cardio"); }
+  });
+}
+
 const LOADERS = {
   dashboard: loadDashboard, workout: loadWorkout, history: loadHistory,
-  exercises: loadExercises, progress: loadProgress,
+  exercises: loadExercises, progress: loadProgress, cardio: loadCardio,
 };
 
 /* Download the gym log as CSV. Same-origin GET carries the session cookie, and
@@ -2266,11 +2374,13 @@ async function boot() {
   initExport();
   initSteps();
   initDiscover();
+  initCardio();
+  wirePreWorkout();
   // restore in-memory session from localStorage if present
   const saved = localStorage.getItem(LS_KEY);
   if (saved) { try { S = JSON.parse(saved); } catch (e) { S = null; } }
   const initial = (location.hash || "").replace("#", "");
-  const tab = ["dashboard","workout","history","exercises","progress"].includes(initial) ? initial : "dashboard";
+  const tab = ["dashboard","workout","cardio","history","exercises","progress"].includes(initial) ? initial : "dashboard";
   switchTab(S ? "workout" : tab);
   drainPendingAdds();  // drain any legacy queued adds (pre inline-discovery)
 }
