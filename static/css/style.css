@@ -381,7 +381,10 @@ body {
 
 /* Extra breathing room below Body Composition and Plan a Task, on top of the
    grid's 28px gap. */
-#bodycomp-card,
+#bodycomp-card {
+  grid-column: span 4;
+  margin-bottom: 2rem;
+}
 #request-card { margin-bottom: 2rem; }
 
 /* ── Cards — refined sci-fi (soft shadow, translucent, no neon edges) ──── */
