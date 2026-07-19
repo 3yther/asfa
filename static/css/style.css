@@ -379,6 +379,11 @@ body {
 #goals-card      { grid-column: span 12; }
 #chat-card       { grid-column: span 12; }
 
+/* Extra breathing room below Body Composition and Plan a Task, on top of the
+   grid's 28px gap. */
+#bodycomp-card,
+#request-card { margin-bottom: 2rem; }
+
 /* ── Cards — refined sci-fi (soft shadow, translucent, no neon edges) ──── */
 .card {
   position: relative;

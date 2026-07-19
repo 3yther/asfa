@@ -5919,12 +5919,14 @@ def _ensure_workout_plan_tables():
 
 
 # ── Plan seed ────────────────────────────────────────────────────────────────
-# Amir's actual training: a 4-day Push/Pull/Push/Pull split whose training week
-# starts on Saturday — Sat Push / Mon Pull / Wed Push / Fri Pull, alternating
-# 2 Push + 2 Pull. Treadmill finisher rides along on every gym day; cycling
-# Tue + Thu. This mirrors the /gym Workout-tab routines (gym_seed.ROUTINES).
+# Amir's actual training: a repeating 4-day cycle — Push, Pull, Bike + Core, Rest
+# — with consecutive Push/Pull up front. day_number is the cycle position (1-4),
+# not a calendar weekday; the day_name labels show how the first cycle lands on
+# the week (Sat Push / Sun Pull / Mon Bike + Core / Tue Rest), then it repeats.
+# The weekly weigh-in is a fixed calendar day — every Sunday, which is the Pull
+# day of the first cycle.
 
-PLAN_SPLIT_NAME = "4-Day Push/Pull Split"
+PLAN_SPLIT_NAME = "4-Day Push/Pull Cycle"
 PLAN_TARGET_DATE = "2026-09-15"
 
 _TREADMILL = "30 min treadmill — 13% incline, 3.5 speed"
@@ -5943,28 +5945,34 @@ _PULL_EXERCISES = [
     "Biceps",
     "Back Finisher",
 ]
+_CORE_EXERCISES = [
+    "Hanging Leg Raise",
+    "Cable Crunch",
+    "Plank",
+]
 
-# Days stay in calendar order (Mon=1 … Sun=7); the training cycle starts on
-# Saturday's Push, so Sat/Wed are the two Push days and Mon/Fri the two Pull days.
+# day_number is the cycle position (1-4), not a calendar weekday. The cycle is
+# Push → Pull → Bike + Core → Rest, repeating. The day_name labels anchor the
+# first cycle to the week (Sat/Sun/Mon/Tue). Weekly weigh-in rides on the Pull
+# day (Sunday).
 PLAN_SESSIONS = [
-    (1, "Monday", "Pull", _PULL_EXERCISES, _TREADMILL, None),
-    (2, "Tuesday", "Cycling", [], _CYCLING, "Stamina work — no lifting."),
-    (3, "Wednesday", "Push", _PUSH_EXERCISES, _TREADMILL, None),
-    (4, "Thursday", "Cycling", [], _CYCLING, "Stamina work — no lifting."),
-    (5, "Friday", "Pull", _PULL_EXERCISES, _TREADMILL, "Same as Monday."),
-    (6, "Saturday", "Push", _PUSH_EXERCISES, _TREADMILL, "Same as Wednesday. Week starts here."),
-    (7, "Sunday", "Rest", [], None, "Full recovery day. Weekly weigh-in."),
+    (1, "Saturday", "Push", _PUSH_EXERCISES, _TREADMILL, "Cycle starts here."),
+    (2, "Sunday", "Pull", _PULL_EXERCISES, _TREADMILL, "Weekly weigh-in."),
+    (3, "Monday", "Bike + Core", _CORE_EXERCISES, _CYCLING, "Stamina + core — no heavy lifting."),
+    (4, "Tuesday", "Rest", [], None, "Full recovery day."),
 ]
 
 PLAN_DESCRIPTION = (
-    "Two Push days, two Pull days, two cycling days, one full rest day. "
-    "Every gym day finishes with 30 min on the treadmill at 13% incline, 3.5 speed."
+    "A repeating 4-day cycle — Push, Pull, Bike + Core, Rest — with consecutive "
+    "Push/Pull up front. Push and Pull finish with 30 min on the treadmill at "
+    "13% incline, 3.5 speed."
 )
 
 PLAN_NOTES = (
-    "Abs 2x/week post-gym (any two days). 10k steps daily via Apple Watch. "
-    "Log pre-workout (Energy Drink or Origin Pre-Workout) and an RPE 1-10 "
-    "effort rating each session. Progression: add reps first, then weight."
+    "Abs 2x/week (core rides on the Bike day; add one more anywhere). 10k steps "
+    "daily via Apple Watch. Log pre-workout (Energy Drink or Origin Pre-Workout) "
+    "and an RPE 1-10 effort rating each session. Progression: add reps first, "
+    "then weight. Weigh in weekly, every Sunday."
 )
 
 # ── Personal baselines (environment, never committed) ────────────────────────
@@ -6060,7 +6068,7 @@ def _plan_id(cur):
 
 
 def seed_workout_plan():
-    """Insert the plan, its 7 days, progression targets and goals once.
+    """Insert the plan, its 4 cycle days, progression targets and goals once.
     Idempotent — each row is skipped if already present, so edits made through
     the UI are never stomped by a redeploy."""
     _ensure_workout_plan_tables()
@@ -6138,7 +6146,7 @@ def init_workout_plan():
 # ── Plan reads ───────────────────────────────────────────────────────────────
 
 def get_workout_plan() -> dict:
-    """The plan row + its 7 days, ordered Monday→Sunday. None if unseeded."""
+    """The plan row + its 4 cycle days, ordered by cycle position. None if unseeded."""
     _ensure_workout_plan_tables()
     with get_db() as conn:
         cur = conn.cursor()
@@ -6168,7 +6176,7 @@ def summarise_split(days: list) -> dict:
     """Count the week by session type. 'Gym' is any lifting day (Push/Pull);
     cycling and rest are counted separately."""
     gym = sum(1 for d in days if (d.get("session_type") or "") in ("Push", "Pull"))
-    cardio = sum(1 for d in days if (d.get("session_type") or "") == "Cycling")
+    cardio = sum(1 for d in days if (d.get("session_type") or "") in ("Cycling", "Bike + Core"))
     rest = sum(1 for d in days if (d.get("session_type") or "") == "Rest")
     return {"gym_days": gym, "cardio_days": cardio, "rest_days": rest,
             "total_days": len(days)}

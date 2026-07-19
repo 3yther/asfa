@@ -119,29 +119,30 @@ def test_3_api_returns_all_four_sections():
 
 # ── 2. The split displays correctly ───────────────────────────────────────────
 
-def test_4_split_is_4_gym_2_cardio_1_rest():
+def test_4_split_is_2_gym_1_cardio_1_rest():
     plan = db.get_workout_plan()
     s = plan["summary"]
-    assert s["total_days"] == 7, s
-    assert s["gym_days"] == 4, f"expected 4 gym days, got {s['gym_days']}"
-    assert s["cardio_days"] == 2, f"expected 2 cardio days, got {s['cardio_days']}"
+    assert s["total_days"] == 4, s
+    assert s["gym_days"] == 2, f"expected 2 gym days, got {s['gym_days']}"
+    assert s["cardio_days"] == 1, f"expected 1 cardio day, got {s['cardio_days']}"
     assert s["rest_days"] == 1, f"expected 1 rest day, got {s['rest_days']}"
 
 
-def test_5_days_are_mon_to_sun_in_order():
+def test_5_days_are_the_4day_cycle_in_order():
     days = db.get_workout_plan()["days"]
-    assert [d["day_number"] for d in days] == [1, 2, 3, 4, 5, 6, 7]
+    # day_number is the cycle position (1-4), not a weekday. The first cycle's
+    # labels anchor it to Sat/Sun/Mon/Tue.
+    assert [d["day_number"] for d in days] == [1, 2, 3, 4]
     assert [d["day_name"] for d in days] == [
-        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        "Saturday", "Sunday", "Monday", "Tuesday"]
 
 
 def test_6_each_day_has_the_right_session_type():
     by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
-    # Training week starts on Saturday's Push: Sat/Wed are Push, Mon/Fri are Pull.
+    # Consecutive Push/Pull up front, then Bike + Core, then Rest.
     expected = {
-        "Monday": "Pull", "Tuesday": "Cycling", "Wednesday": "Push",
-        "Thursday": "Cycling", "Friday": "Pull", "Saturday": "Push",
-        "Sunday": "Rest",
+        "Saturday": "Push", "Sunday": "Pull",
+        "Monday": "Bike + Core", "Tuesday": "Rest",
     }
     for day, stype in expected.items():
         assert by_day[day]["session_type"] == stype, \
@@ -151,33 +152,35 @@ def test_6_each_day_has_the_right_session_type():
 def test_7_push_pull_days_carry_exercises_and_treadmill():
     by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
 
-    # Wednesday is a Push day (chest/shoulders/triceps).
-    wednesday = by_day["Wednesday"]
-    assert "Incline Barbell Bench" in wednesday["exercises"]
-    assert "Triceps" in wednesday["exercises"]
-    assert "13% incline" in wednesday["cardio"] and "3.5" in wednesday["cardio"]
+    # Saturday is the Push day (chest/shoulders/triceps).
+    saturday = by_day["Saturday"]
+    assert "Incline Barbell Bench" in saturday["exercises"]
+    assert "Triceps" in saturday["exercises"]
+    assert "13% incline" in saturday["cardio"] and "3.5" in saturday["cardio"]
 
-    # Monday is a Pull day (back & biceps).
-    monday = by_day["Monday"]
-    assert "Lat Pulldown" in monday["exercises"]
-    assert "Back Finisher" in monday["exercises"]
-    assert "treadmill" in monday["cardio"]
-
-    # Push/Pull/Push/Pull: Saturday mirrors Wednesday's Push, Friday mirrors
-    # Monday's Pull.
-    assert by_day["Saturday"]["exercises"] == wednesday["exercises"]
-    assert by_day["Friday"]["exercises"] == monday["exercises"]
-
-
-def test_8_cycling_and_rest_days_carry_no_lifting():
-    by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
-    for day in ("Tuesday", "Thursday"):
-        assert by_day[day]["exercises"] == [], f"{day} should have no lifts"
-        assert "7.9 miles" in by_day[day]["cardio"]
+    # Sunday is the Pull day (back & biceps).
     sunday = by_day["Sunday"]
-    assert sunday["exercises"] == []
-    assert not sunday["cardio"]
-    assert "weigh-in" in (sunday["notes"] or "").lower()
+    assert "Lat Pulldown" in sunday["exercises"]
+    assert "Back Finisher" in sunday["exercises"]
+    assert "treadmill" in sunday["cardio"]
+
+
+def test_8_bike_and_rest_days_carry_no_lifting():
+    by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
+
+    # Bike + Core: cycling stamina plus core work, no barbell lifting.
+    monday = by_day["Monday"]
+    assert "7.9 miles" in monday["cardio"]
+    assert "Plank" in monday["exercises"]
+    assert "Incline Barbell Bench" not in monday["exercises"], "no heavy lifting on the bike day"
+
+    # Tuesday is the full rest day — nothing at all.
+    tuesday = by_day["Tuesday"]
+    assert tuesday["exercises"] == []
+    assert not tuesday["cardio"]
+
+    # Weekly weigh-in rides on the Sunday Pull day (a fixed calendar day).
+    assert "weigh-in" in (by_day["Sunday"]["notes"] or "").lower()
 
 
 def test_9_plan_notes_cover_abs_steps_and_rpe():
@@ -339,7 +342,7 @@ def test_20a_renaming_the_split_does_not_reseed_a_duplicate_plan():
             plans = cur.execute("SELECT COUNT(*) AS n FROM workout_plan").fetchone()["n"]
             days = cur.execute("SELECT COUNT(*) AS n FROM workout_sessions").fetchone()["n"]
         assert plans == 1, f"restart after a rename duplicated the plan ({plans} rows)"
-        assert days == 7, f"restart after a rename duplicated the days ({days} rows)"
+        assert days == 4, f"restart after a rename duplicated the days ({days} rows)"
         assert db.get_workout_plan()["split_name"] == "My Renamed Split", \
             "the rename must survive a restart"
     finally:
@@ -461,7 +464,7 @@ def test_20_seeding_is_idempotent():
     db.init_workout_plan()
     db.init_workout_plan()
     after = db.get_workout_plan()
-    assert len(after["days"]) == 7, "re-seeding must not duplicate days"
+    assert len(after["days"]) == 4, "re-seeding must not duplicate days"
     assert after["id"] == before["id"]
     assert len(db.get_progression_targets()) == 1
     assert len(db.get_workout_goals()) == len(db.plan_goals_seed())
@@ -524,7 +527,8 @@ def test_23_edit_rejects_bad_input():
 
 def test_24_edit_day_of_the_split():
     client = _client()
-    r = client.post("/api/gym/plan/day/6",
+    # Day 1 is Saturday's Push — flip it to Pull.
+    r = client.post("/api/gym/plan/day/1",
                     json={"session_type": "Pull", "exercises": ["Lat Pulldown", "Rows"]},
                     headers={"X-CSRF-Token": "tok"})
     assert r.status_code == 200, r.get_data(as_text=True)
@@ -532,15 +536,15 @@ def test_24_edit_day_of_the_split():
     assert by_day["Saturday"]["session_type"] == "Pull"
     assert by_day["Saturday"]["exercises"] == ["Lat Pulldown", "Rows"]
 
-    # Summary recounts live off the edit.
-    assert db.get_workout_plan()["summary"]["gym_days"] == 4
+    # Summary recounts live off the edit — two lifting days (now Pull + Pull).
+    assert db.get_workout_plan()["summary"]["gym_days"] == 2
 
-    r = client.post("/api/gym/plan/day/9", json={"session_type": "Push"},
+    r = client.post("/api/gym/plan/day/5", json={"session_type": "Push"},
                     headers={"X-CSRF-Token": "tok"})
-    assert r.status_code == 400, "day_number outside 1-7 must 400"
+    assert r.status_code == 400, "day_number outside 1-4 must 400"
 
-    # restore — Saturday's seed default is now Push (week starts on Saturday)
-    db.update_workout_session(6, session_type="Push", exercises=db._PUSH_EXERCISES)
+    # restore — day 1 (Saturday) is the seed's Push day.
+    db.update_workout_session(1, session_type="Push", exercises=db._PUSH_EXERCISES)
 
 
 def main():
@@ -549,11 +553,11 @@ def main():
         test_1_plan_page_renders,
         test_2_plan_page_is_session_gated,
         test_3_api_returns_all_four_sections,
-        test_4_split_is_4_gym_2_cardio_1_rest,
-        test_5_days_are_mon_to_sun_in_order,
+        test_4_split_is_2_gym_1_cardio_1_rest,
+        test_5_days_are_the_4day_cycle_in_order,
         test_6_each_day_has_the_right_session_type,
         test_7_push_pull_days_carry_exercises_and_treadmill,
-        test_8_cycling_and_rest_days_carry_no_lifting,
+        test_8_bike_and_rest_days_carry_no_lifting,
         test_9_plan_notes_cover_abs_steps_and_rpe,
         test_10_percent_complete_is_derived_from_the_logged_pr,
         test_11_percent_complete_clamps_and_hits_100,

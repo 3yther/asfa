@@ -265,13 +265,16 @@
     $("split-desc").textContent = plan.description || "";
     $("plan-notes").textContent = plan.notes || "";
 
-    // JS getDay() is 0=Sun; day_number is 1=Mon..7=Sun.
-    const jsDay = new Date().getDay();
-    const todayNum = jsDay === 0 ? 7 : jsDay;
+    // day_number is the cycle position (1-4), not a weekday, so match the
+    // highlight on the day_name label instead — the first cycle is anchored to
+    // Sat/Sun/Mon/Tue.
+    const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday",
+                      "Thursday", "Friday", "Saturday"];
+    const todayName = WEEKDAYS[new Date().getDay()];
 
     $("week-grid").innerHTML = (plan.days || []).map((d) => {
       const type = String(d.session_type || "").toLowerCase();
-      const isToday = d.day_number === todayNum;
+      const isToday = d.day_name === todayName;
       const ex = (d.exercises || []).map((e) => `<li>${esc(e)}</li>`).join("");
       return `<div class="day-col${isToday ? " is-today" : ""}">
         <div class="day-name">${esc(d.day_name)}${isToday ? " • today" : ""}</div>
