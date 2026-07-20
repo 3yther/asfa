@@ -1743,13 +1743,20 @@ def api_gym_cardio_list():
 @app.route("/api/gym/cardio", methods=["POST"])
 def api_gym_cardio_log():
     d = request.get_json(force=True) or {}
+    # Every field below is optional — an old-style {date,type,distance,duration,
+    # effort,notes} payload still logs exactly as before.
     cardio_id = db.log_cardio_session(
         on_date=d.get("date") or _today(),
         type=d.get("type", "other"),
         distance_miles=d.get("distance_miles"),
         duration_minutes=d.get("duration_minutes"),
         perceived_effort=d.get("perceived_effort"),
-        notes=d.get("notes", ""))
+        notes=d.get("notes", ""),
+        start_time=d.get("time") or d.get("start_time"),
+        elevation_gain=d.get("elevation_gain"),
+        avg_speed=d.get("avg_speed"),
+        max_speed=d.get("max_speed"),
+        steps_equivalent=d.get("steps_equivalent"))
     return jsonify({"ok": True, "id": cardio_id})
 
 

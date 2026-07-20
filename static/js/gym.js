@@ -2098,10 +2098,14 @@ function initTrainer() {
 const CARDIO_API = `${API}/cardio`;
 
 async function loadCardio() {
+  const d = new Date();
   const dateEl = $("#cardio-date");
   if (dateEl && !dateEl.value) {
-    const d = new Date();
     dateEl.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  const timeEl = $("#cardio-time");
+  if (timeEl && !timeEl.value) {
+    timeEl.value = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   }
   const wrap = $("#cardio-list"); if (!wrap) return;
   try {
@@ -2118,14 +2122,26 @@ function renderCardioList(list) {
 function cardioRow(c) {
   const row = el("div", "cardio-row");
   const d = new Date(c.date + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  const bits = [];
-  if (c.distance_miles != null) bits.push(`${round1(c.distance_miles)} mi`);
-  if (c.duration_minutes != null) bits.push(`${Math.round(c.duration_minutes)} min`);
-  if (c.perceived_effort != null) bits.push(`effort ${c.perceived_effort}/5`);
+  // Distance/elevation on one line, speeds on the next — each omitted entirely
+  // when unset, so older sessions logged before these fields render unchanged.
+  const dist = [];
+  if (c.distance_miles != null) dist.push(`${round1(c.distance_miles)} mi`);
+  if (c.duration_minutes != null) dist.push(`${Math.round(c.duration_minutes)} min`);
+  if (c.elevation_gain != null) dist.push(`${Math.round(c.elevation_gain)} ft gain`);
+  const speed = [];
+  if (c.avg_speed != null) speed.push(`avg ${round1(c.avg_speed)} mph`);
+  if (c.max_speed != null) speed.push(`max ${round1(c.max_speed)} mph`);
+
   row.innerHTML = `<div class="cardio-main">
-      <span class="cardio-date">${d}</span>
-      <span class="cardio-type">${esc(CARDIO_TYPE_LABELS[c.type] || c.type)}</span>
-      <span class="cardio-meta">${esc(bits.join(" · "))}${c.notes ? "<br>" + esc(c.notes) : ""}</span>
+      <div class="cardio-head">
+        <span class="cardio-date">${d}${c.start_time ? " " + esc(c.start_time) : ""}</span>
+        <span class="cardio-type">${esc(CARDIO_TYPE_LABELS[c.type] || c.type)}</span>
+        ${c.perceived_effort != null ? `<span class="cardio-effort">RPE ${c.perceived_effort}/10</span>` : ""}
+      </div>
+      ${dist.length ? `<span class="cardio-meta">${esc(dist.join(" · "))}</span>` : ""}
+      ${speed.length ? `<span class="cardio-meta">${esc(speed.join(" · "))}</span>` : ""}
+      ${c.steps_equivalent ? `<span class="cardio-steps">≈ ${Number(c.steps_equivalent).toLocaleString()} steps</span>` : ""}
+      ${c.notes ? `<span class="cardio-note-line">${esc(c.notes)}</span>` : ""}
     </div>
     <button class="cardio-del" title="Delete" aria-label="Delete cardio session">✕</button>`;
   row.querySelector(".cardio-del").addEventListener("click", async () => {
@@ -2140,61 +2156,87 @@ function cardioRow(c) {
 }
 
 function initCardio() {
-  const form = $("#cardio-form"); if (!form) return;
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const payload = {
-      date: $("#cardio-date").value || undefined,
-      type: $("#cardio-type").value,
-      distance_miles: $("#cardio-distance").value || null,
-      duration_minutes: $("#cardio-duration").value || null,
-      perceived_effort: $("#cardio-effort").value || null,
-      notes: ($("#cardio-notes").value || "").trim(),
-    };
-    try {
-      await apiPost(CARDIO_API, payload);
-      toast("Cardio logged");
-      ["cardio-distance", "cardio-duration", "cardio-effort", "cardio-notes"]
-        .forEach(id => { const elm = $("#" + id); if (elm) elm.value = ""; });
-      loadCardio();
-    } catch (err) { toast("Could not log cardio"); }
-  });
+  initCardioForm("cardio", { onDone: loadCardio });
 }
 
 /* ── Quick cardio log — shared by the dashboard "Mark as Cardio" button and the
    Quick Start cycling cards. Logs straight to the cardio table (no gym session),
    so it never advances the push/pull rotation or the workout streak. ── */
+const STEPS_PER_MILE = 1400;  // 1400 steps/mile: realistic for cycling speed
+
+/* Both cardio forms (the Cardio tab's "cardio-*" and the modal's "qc-*") are
+   rendered from one Jinja macro, so a single prefix-driven implementation
+   serves both — the field suffixes below are the contract between them. */
+const CARDIO_CLEARED = ["distance", "duration", "elevation", "avg-speed",
+                        "max-speed", "effort", "steps", "notes"];
+
+function cardioPayload(p) {
+  const val = (suffix) => {
+    const elm = $(`#${p}-${suffix}`);
+    return elm && elm.value !== "" ? elm.value : null;
+  };
+  return {
+    date: val("date") || undefined,
+    time: val("time"),
+    type: val("type") || "other",
+    distance_miles: val("distance"),
+    duration_minutes: val("duration"),
+    elevation_gain: val("elevation"),
+    avg_speed: val("avg-speed"),
+    max_speed: val("max-speed"),
+    perceived_effort: val("effort"),
+    steps_equivalent: val("steps"),
+    notes: (val("notes") || "").trim(),
+  };
+}
+
+/* Steps equivalent tracks distance until the user types their own number; from
+   that point the field is theirs and distance edits stop overwriting it. */
+function initCardioStepsCalc(p) {
+  const dist = $(`#${p}-distance`), steps = $(`#${p}-steps`);
+  if (!dist || !steps) return;
+  steps.addEventListener("input", () => { steps.dataset.overridden = "1"; });
+  dist.addEventListener("input", () => {
+    if (steps.dataset.overridden === "1") return;
+    const miles = parseFloat(dist.value);
+    steps.value = isNaN(miles) || miles < 0 ? "" : Math.round(miles * STEPS_PER_MILE);
+  });
+}
+
+function initCardioForm(p, { onDone } = {}) {
+  const form = $(`#${p}-form`); if (!form) return;
+  initCardioStepsCalc(p);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await apiPost(CARDIO_API, cardioPayload(p));
+      toast("Cardio logged");
+      CARDIO_CLEARED.forEach(s => { const elm = $(`#${p}-${s}`); if (elm) elm.value = ""; });
+      const steps = $(`#${p}-steps`); if (steps) delete steps.dataset.overridden;
+      if (onDone) onDone();
+    } catch (err) { toast("Could not log cardio"); }
+  });
+}
+
 function openQuickCardio(type = "cycling") {
+  const d = new Date();
   const dateEl = $("#qc-date");
   if (dateEl) {
-    const d = new Date();
     dateEl.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
+  const timeEl = $("#qc-time");
+  if (timeEl) timeEl.value = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   const typeEl = $("#qc-type"); if (typeEl) typeEl.value = type;
   openModal("quick-cardio-modal");
 }
 
 function initQuickCardio() {
-  const form = $("#quick-cardio-form"); if (!form) return;
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const payload = {
-      date: $("#qc-date").value || undefined,
-      type: $("#qc-type").value,
-      distance_miles: $("#qc-distance").value || null,
-      duration_minutes: $("#qc-duration").value || null,
-      perceived_effort: $("#qc-effort").value || null,
-      notes: ($("#qc-notes").value || "").trim(),
-    };
-    try {
-      await apiPost(CARDIO_API, payload);
-      toast("Cardio logged");
-      ["qc-distance", "qc-duration", "qc-effort", "qc-notes"]
-        .forEach(id => { const elm = $("#" + id); if (elm) elm.value = ""; });
+  initCardioForm("qc", {
+    onDone: () => {
       closeModal("quick-cardio-modal");
-      loadDashboard();       // re-render Quick Start + hide the rest-day prompt (today now logged)
-      loadCardio();          // keep the Cardio tab list in sync (no-ops if not mounted)
-    } catch (err) { toast("Could not log cardio"); }
+      loadDashboard();     // re-render Quick Start + hide the rest-day prompt (today now logged)
+      loadCardio();        // keep the Cardio tab list in sync (no-ops if not mounted)
+    },
   });
 }
 

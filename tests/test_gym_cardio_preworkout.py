@@ -128,14 +128,19 @@ def test_8_cardio_logs_and_reads_back():
 
 
 def test_9_cardio_type_and_effort_are_validated():
-    cid = db.log_cardio_session("2026-07-18", "moonwalk", perceived_effort=9)
+    cid = db.log_cardio_session("2026-07-18", "moonwalk", perceived_effort=11)
     row = [c for c in db.get_recent_cardio_sessions(50) if c["id"] == cid][0]
     assert row["type"] == "other", "unknown type must fall back to 'other'"
-    assert row["perceived_effort"] is None, "effort outside 1-5 must be dropped"
+    assert row["perceived_effort"] is None, "effort outside 1-10 must be dropped"
 
     cid2 = db.log_cardio_session("2026-07-18", "treadmill", perceived_effort=0)
     row2 = [c for c in db.get_recent_cardio_sessions(50) if c["id"] == cid2][0]
     assert row2["perceived_effort"] is None
+
+    # RPE now runs 1-10 (Strava-style), so 7 and 9 must survive.
+    cid3 = db.log_cardio_session("2026-07-18", "cycling", perceived_effort=7)
+    row3 = [c for c in db.get_recent_cardio_sessions(50) if c["id"] == cid3][0]
+    assert row3["perceived_effort"] == 7, "effort inside 1-10 must be kept"
 
 
 def test_10_cardio_does_not_create_a_gym_session():
@@ -198,6 +203,59 @@ def test_15_cardio_api_does_not_advance_gym_state():
     assert db.get_streak() == streak_before
 
 
+def test_16_strava_metrics_round_trip_and_autocalc_steps():
+    """The full Strava payload persists, and steps_equivalent defaults to
+    distance x 1400 when the caller does not supply one."""
+    client = _client()
+    r = client.post("/api/gym/cardio", json={
+        "date": "2026-07-27", "time": "19:30", "type": "cycling",
+        "distance_miles": 7.93, "elevation_gain": 450, "avg_speed": 10.3,
+        "max_speed": 22.5, "perceived_effort": 7, "notes": "Strava activity #12345",
+        "steps_equivalent": 14274}, headers={"X-CSRF-Token": "tok"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    cid = r.get_json()["id"]
+
+    row = [c for c in db.get_recent_cardio_sessions(50) if c["id"] == cid][0]
+    assert row["start_time"] == "19:30"
+    assert row["elevation_gain"] == 450
+    assert row["avg_speed"] == 10.3 and row["max_speed"] == 22.5
+    assert row["perceived_effort"] == 7, "1-10 RPE must survive the round trip"
+    assert row["steps_equivalent"] == 14274
+
+    # No explicit steps_equivalent -> derived from distance.
+    cid2 = db.log_cardio_session("2026-07-27", "cycling", distance_miles=2.0)
+    row2 = [c for c in db.get_recent_cardio_sessions(50) if c["id"] == cid2][0]
+    assert row2["steps_equivalent"] == 2800, "2.0 mi x 1400 = 2800"
+
+
+def test_17_cardio_steps_add_to_the_day_and_are_reclaimed_on_delete():
+    """Cardio steps must ADD to (never replace) the day's natural step count,
+    and deleting the session must take only its own steps back out."""
+    day = "2026-07-28"
+    db.add_step_entry(day, "manual", 3000, {"src": "watch"})
+    assert db.get_steps_day_total(day) == 3000
+
+    cid = db.log_cardio_session(day, "cycling", distance_miles=5.0)
+    assert db.get_steps_day_total(day) == 3000 + 7000, "cardio steps must add on top"
+
+    assert db.delete_cardio_session(cid) is True
+    assert db.get_steps_day_total(day) == 3000, "watch steps must survive the delete"
+
+
+def test_18_legacy_cardio_payload_still_works():
+    """Backward compatibility: a pre-Strava payload logs exactly as before and
+    contributes no step entry when it carries no distance."""
+    client = _client()
+    r = client.post("/api/gym/cardio", json={
+        "date": "2026-07-29", "type": "treadmill", "duration_minutes": 25,
+        "perceived_effort": 3, "notes": "legacy"}, headers={"X-CSRF-Token": "tok"})
+    assert r.status_code == 200
+    row = [c for c in db.get_recent_cardio_sessions(50) if c["id"] == r.get_json()["id"]][0]
+    assert row["duration_minutes"] == 25 and row["notes"] == "legacy"
+    assert row["start_time"] is None and row["elevation_gain"] is None
+    assert db.get_steps_day_total("2026-07-29") == 0, "no distance -> no steps row"
+
+
 def main():
     setup_module()
     tests = [
@@ -216,6 +274,9 @@ def main():
         test_13_cardio_deletes,
         test_14_cardio_round_trips_through_the_api,
         test_15_cardio_api_does_not_advance_gym_state,
+        test_16_strava_metrics_round_trip_and_autocalc_steps,
+        test_17_cardio_steps_add_to_the_day_and_are_reclaimed_on_delete,
+        test_18_legacy_cardio_payload_still_works,
     ]
     print("Cardio + pre-workout tests:")
     passed = 0

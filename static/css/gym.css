@@ -973,21 +973,33 @@ body.sheet-open { overflow: hidden; }
 .cardio-field { display: flex; flex-direction: column; gap: 5px;
   color: var(--muted); font: 600 .72rem 'JetBrains Mono', monospace;
   letter-spacing: .04em; text-transform: uppercase; }
-.cardio-field input, .cardio-field select {
+.cardio-field input, .cardio-field select, .cardio-field textarea {
   background: var(--panel-2); color: var(--text);
   border: 1px solid rgba(0,217,255,.25); border-radius: 8px;
   padding: 9px 10px; font: 500 .9rem 'Inter', sans-serif;
 }
+.cardio-notes-input { resize: vertical; min-height: 44px; width: 100%; }
 .cardio-notes-field { text-transform: none; }
+/* Steps equivalent sits apart from the metric grid — it is derived, not entered. */
+.cardio-steps-calc { display: flex; flex-direction: column; gap: 4px; }
+.cardio-steps-hint { margin: 0; color: var(--muted);
+  font: 500 .72rem 'Inter', sans-serif; opacity: .8; }
 .cardio-list { display: flex; flex-direction: column; gap: 8px; }
-.cardio-row { display: flex; align-items: center; justify-content: space-between;
+.cardio-row { display: flex; align-items: flex-start; justify-content: space-between;
   gap: 10px; padding: 10px 12px; border-radius: 10px;
   background: var(--panel-2); border: 1px solid rgba(140,170,200,.12); }
-.cardio-main { display: grid; grid-template-columns: 56px 90px 1fr; gap: 10px;
-  align-items: center; flex: 1; min-width: 0; }
+.cardio-main { display: flex; flex-direction: column; gap: 4px;
+  flex: 1; min-width: 0; }
+.cardio-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .cardio-date { color: var(--gym-cyan); font: 700 .82rem 'JetBrains Mono', monospace; }
 .cardio-type { color: var(--text); font: 600 .86rem 'Inter', sans-serif; }
+.cardio-effort { padding: 2px 8px; border-radius: 999px;
+  background: rgba(0,217,255,.12); border: 1px solid rgba(0,217,255,.3);
+  color: var(--gym-cyan); font: 700 .68rem 'JetBrains Mono', monospace; }
 .cardio-meta { color: var(--muted); font-size: .78rem; }
+.cardio-steps { color: var(--muted); font: 600 .7rem 'JetBrains Mono', monospace;
+  opacity: .75; }
+.cardio-note-line { color: var(--muted); font-size: .78rem; font-style: italic; }
 .cardio-del { background: rgba(255,77,77,.1); border: 1px solid rgba(255,77,77,.3);
   color: var(--gym-red); width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
   flex-shrink: 0; }

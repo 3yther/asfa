@@ -1,3 +1,57 @@
+{#- Cardio entry fields, rendered once per form with an id prefix so the Cardio
+    tab form ("cardio-*") and the quick-log modal ("qc-*") stay identical by
+    construction. The JS reads the same suffixes off whichever prefix it is
+    given, so adding a field here wires up both forms at once. -#}
+{% macro cardio_fields(p) -%}
+<form id="{{ p }}-form" class="cardio-form" data-cardio-prefix="{{ p }}">
+  <div class="cardio-fields">
+    <label class="cardio-field">Date
+      <input type="date" id="{{ p }}-date" required>
+    </label>
+    <label class="cardio-field">Start time
+      <input type="time" id="{{ p }}-time">
+    </label>
+    <label class="cardio-field">Type
+      <select id="{{ p }}-type">
+        <option value="cycling">Cycling</option>
+        <option value="treadmill">Treadmill</option>
+        <option value="other">Other</option>
+      </select>
+    </label>
+    <label class="cardio-field">Distance (mi)
+      <input type="number" id="{{ p }}-distance" inputmode="decimal" step="0.01" min="0" placeholder="e.g. 7.93">
+    </label>
+    <label class="cardio-field">Duration (min)
+      <input type="number" id="{{ p }}-duration" inputmode="numeric" step="1" min="0" placeholder="e.g. 46">
+    </label>
+    <label class="cardio-field">Elevation (ft)
+      <input type="number" id="{{ p }}-elevation" inputmode="numeric" step="1" min="0" placeholder="e.g. 450">
+    </label>
+    <label class="cardio-field">Avg speed (mph)
+      <input type="number" id="{{ p }}-avg-speed" inputmode="decimal" step="0.1" min="0" placeholder="e.g. 10.3">
+    </label>
+    <label class="cardio-field">Max speed (mph)
+      <input type="number" id="{{ p }}-max-speed" inputmode="decimal" step="0.1" min="0" placeholder="e.g. 22.5">
+    </label>
+    <label class="cardio-field">Effort (RPE)
+      <select id="{{ p }}-effort">
+        <option value="">—</option>
+        {% for n in range(1, 11) %}<option value="{{ n }}">{{ n }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="cardio-steps-calc">
+    <label class="cardio-field cardio-notes-field">Steps equivalent
+      <input type="number" id="{{ p }}-steps" inputmode="numeric" step="1" min="0" placeholder="0">
+    </label>
+    <p class="cardio-steps-hint">Auto-filled from distance &times; 1400. Edit to override.</p>
+  </div>
+  <label class="cardio-field cardio-notes-field">Notes
+    <textarea id="{{ p }}-notes" class="cardio-notes-input" rows="2" placeholder="Optional" autocomplete="off"></textarea>
+  </label>
+  <button type="submit" class="btn btn-primary" id="{{ p }}-log-btn">+ Log Cardio</button>
+</form>
+{%- endmacro %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -294,33 +348,7 @@
   <section class="gym-panel" data-panel="cardio">
     <div class="card sci-fi-panel">
       <h3>Log Cardio <span class="muted-sub">separate from lifting — doesn't touch your split or streak</span></h3>
-      <form id="cardio-form" class="cardio-form">
-        <div class="cardio-fields">
-          <label class="cardio-field">Date
-            <input type="date" id="cardio-date" required>
-          </label>
-          <label class="cardio-field">Type
-            <select id="cardio-type">
-              <option value="cycling">Cycling</option>
-              <option value="treadmill">Treadmill</option>
-              <option value="other">Other</option>
-            </select>
-          </label>
-          <label class="cardio-field">Distance (mi)
-            <input type="number" id="cardio-distance" inputmode="decimal" step="0.1" min="0" placeholder="e.g. 7.9">
-          </label>
-          <label class="cardio-field">Time (min)
-            <input type="number" id="cardio-duration" inputmode="numeric" step="1" min="0" placeholder="e.g. 46">
-          </label>
-          <label class="cardio-field">Effort (1-5)
-            <input type="number" id="cardio-effort" inputmode="numeric" step="1" min="1" max="5" placeholder="1-5">
-          </label>
-        </div>
-        <label class="cardio-field cardio-notes-field">Notes
-          <input type="text" id="cardio-notes" placeholder="Optional" autocomplete="off">
-        </label>
-        <button type="submit" class="btn btn-primary" id="cardio-log-btn">+ Log Cardio</button>
-      </form>
+      {{ cardio_fields("cardio") }}
     </div>
     <div class="card sci-fi-panel">
       <h3>Recent Cardio</h3>
@@ -446,33 +474,7 @@
   <div class="modal sci-fi-panel">
     <button class="modal-close" data-close-modal="quick-cardio-modal">✕</button>
     <h3>Log Cardio</h3>
-    <form id="quick-cardio-form" class="cardio-form">
-      <div class="cardio-fields">
-        <label class="cardio-field">Date
-          <input type="date" id="qc-date" required>
-        </label>
-        <label class="cardio-field">Type
-          <select id="qc-type">
-            <option value="cycling">Cycling</option>
-            <option value="treadmill">Treadmill</option>
-            <option value="other">Other</option>
-          </select>
-        </label>
-        <label class="cardio-field">Distance (mi)
-          <input type="number" id="qc-distance" inputmode="decimal" step="0.1" min="0" placeholder="e.g. 7.9">
-        </label>
-        <label class="cardio-field">Time (min)
-          <input type="number" id="qc-duration" inputmode="numeric" step="1" min="0" placeholder="e.g. 46">
-        </label>
-        <label class="cardio-field">Effort (1-5)
-          <input type="number" id="qc-effort" inputmode="numeric" step="1" min="1" max="5" placeholder="1-5">
-        </label>
-      </div>
-      <label class="cardio-field cardio-notes-field">Notes
-        <input type="text" id="qc-notes" placeholder="Optional" autocomplete="off">
-      </label>
-      <button type="submit" class="btn btn-primary" id="qc-log-btn">+ Log Cardio</button>
-    </form>
+    {{ cardio_fields("qc") }}
   </div>
 </div>
 

@@ -4304,7 +4304,7 @@ def _ensure_gym_tables():
             type TEXT NOT NULL DEFAULT 'other',
             distance_miles REAL,
             duration_minutes REAL,
-            perceived_effort INTEGER CHECK (perceived_effort IS NULL OR perceived_effort BETWEEN 1 AND 5),
+            perceived_effort INTEGER CHECK (perceived_effort IS NULL OR perceived_effort BETWEEN 1 AND 10),
             notes TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
@@ -4322,7 +4322,71 @@ def _ensure_gym_tables():
         # every set of the session; 'none' means none taken / not logged.
         _add_column(cur, "gym_sets", "pre_workout_type",
                     "TEXT DEFAULT 'none'")
+        # Strava-style ride/run metrics. All nullable so pre-existing cardio rows
+        # (and quick logs that only record distance) stay valid untouched.
+        _widen_cardio_effort_check(cur)
+        _add_column(cur, "cardio_sessions", "start_time", "TEXT")
+        _add_column(cur, "cardio_sessions", "elevation_gain", "REAL")
+        _add_column(cur, "cardio_sessions", "avg_speed", "REAL")
+        _add_column(cur, "cardio_sessions", "max_speed", "REAL")
+        _add_column(cur, "cardio_sessions", "steps_equivalent", "INTEGER")
     _GYM_READY = True
+
+
+# Effort was originally capped at 1–5 by an inline CHECK. Strava-style RPE runs
+# 1–10, so the constraint is widened in place. Every old 1–5 value stays valid
+# (it is a subset of 1–10), so no data is rewritten. Postgres can swap the
+# constraint directly; SQLite cannot ALTER a CHECK, so the table is rebuilt.
+_CARDIO_TARGET_COLUMNS = (
+    "date", "type", "distance_miles", "duration_minutes", "perceived_effort",
+    "notes", "created_at", "start_time", "elevation_gain", "avg_speed",
+    "max_speed", "steps_equivalent",
+)
+
+
+def _widen_cardio_effort_check(cur):
+    if USE_POSTGRES:
+        cur.execute("ALTER TABLE cardio_sessions "
+                    "DROP CONSTRAINT IF EXISTS cardio_sessions_perceived_effort_check")
+        cur.execute("ALTER TABLE cardio_sessions ADD CONSTRAINT "
+                    "cardio_sessions_perceived_effort_check "
+                    "CHECK (perceived_effort IS NULL OR perceived_effort BETWEEN 1 AND 10)")
+        return
+
+    cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='cardio_sessions'")
+    row = cur.fetchone()
+    if not row:
+        return
+    sql = (row["sql"] if isinstance(row, sqlite3.Row) else row[0]) or ""
+    if "BETWEEN 1 AND 5" not in sql:
+        return  # already widened (or a fresh table created at 1–10)
+
+    # Copy only the columns that actually exist today, so this rebuild is safe
+    # whether or not the new metric columns have been added yet.
+    cur.execute("PRAGMA table_info(cardio_sessions)")
+    existing = {(r["name"] if isinstance(r, sqlite3.Row) else r[1]) for r in cur.fetchall()}
+    shared = [c for c in _CARDIO_TARGET_COLUMNS if c in existing]
+    cols = ", ".join(f'"{c}"' for c in shared)
+
+    cur.execute("""CREATE TABLE cardio_sessions_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'other',
+        distance_miles REAL,
+        duration_minutes REAL,
+        perceived_effort INTEGER CHECK (perceived_effort IS NULL OR perceived_effort BETWEEN 1 AND 10),
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        start_time TEXT,
+        elevation_gain REAL,
+        avg_speed REAL,
+        max_speed REAL,
+        steps_equivalent INTEGER
+    )""")
+    cur.execute(f"INSERT INTO cardio_sessions_new (id, {cols}) "
+                f"SELECT id, {cols} FROM cardio_sessions")
+    cur.execute("DROP TABLE cardio_sessions")
+    cur.execute("ALTER TABLE cardio_sessions_new RENAME TO cardio_sessions")
 
 
 def _gym_insert(cur, table: str, cols: str, values: tuple):
@@ -4899,11 +4963,52 @@ def _clean_cardio_type(value):
     return v if v in CARDIO_TYPES else "other"
 
 
+def _clean_cardio_time(value):
+    """Normalise a wall-clock start time to 'HH:MM'. Returns None for anything
+    unparseable, so a bad time never blocks the rest of the session saving."""
+    if value in (None, ""):
+        return None
+    parts = str(value).strip().split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        hh, mm = int(parts[0]), int(parts[1])
+    except (TypeError, ValueError):
+        return None
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return None
+    return f"{hh:02d}:{mm:02d}"
+
+
+# Conversion used to express a ride/run as a step count. Applied only when the
+# caller does not supply its own steps_equivalent override.
+STEPS_PER_MILE = 1400  # 1400 steps/mile: realistic for cycling speed
+
+# Which `steps` source a cardio type reports as, so the day's step total
+# attributes the entry correctly. Anything else falls back to "manual".
+_CARDIO_STEP_SOURCE = {"cycling": "bike", "treadmill": "treadmill"}
+
+
+def steps_equivalent_for(distance_miles) -> int:
+    """distance_miles → whole-step equivalent (0 when distance is missing)."""
+    try:
+        miles = float(distance_miles)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, round(miles * STEPS_PER_MILE))
+
+
 def log_cardio_session(on_date=None, type="other", distance_miles=None,
                        duration_minutes=None, perceived_effort=None,
-                       notes="") -> int:
+                       notes="", start_time=None, elevation_gain=None,
+                       avg_speed=None, max_speed=None,
+                       steps_equivalent=None) -> int:
     """Record one standalone cardio session and return its id. Effort is clamped
-    to 1–5 (None when unset); distance/duration are optional positive numbers."""
+    to 1–10 (None when unset); distance/duration/elevation/speeds are optional
+    positive numbers. steps_equivalent defaults to distance × STEPS_PER_MILE and
+    may be overridden by the caller; when it lands above zero a matching row is
+    written to the `steps` table so the session ADDS to that day's step total
+    (the day total is a SUM, so watch steps are preserved)."""
     _ensure_gym_tables()
 
     def _pos(v):
@@ -4917,17 +5022,36 @@ def log_cardio_session(on_date=None, type="other", distance_miles=None,
         effort = None if perceived_effort in (None, "") else int(perceived_effort)
     except (TypeError, ValueError):
         effort = None
-    if effort is not None and not (1 <= effort <= 5):
+    if effort is not None and not (1 <= effort <= 10):
         effort = None
 
+    miles = _pos(distance_miles)
+    if steps_equivalent in (None, ""):
+        steps = steps_equivalent_for(miles)
+    else:
+        try:
+            steps = max(0, int(float(steps_equivalent)))
+        except (TypeError, ValueError):
+            steps = steps_equivalent_for(miles)
+
+    ctype = _clean_cardio_type(type)
     on_date = on_date or date.today().isoformat()
     with get_db() as conn:
         cur = conn.cursor()
-        return _gym_insert(
+        cardio_id = _gym_insert(
             cur, "cardio_sessions",
-            "date, type, distance_miles, duration_minutes, perceived_effort, notes",
-            (on_date, _clean_cardio_type(type), _pos(distance_miles),
-             _pos(duration_minutes), effort, notes or ""))
+            "date, type, distance_miles, duration_minutes, perceived_effort, "
+            "notes, start_time, elevation_gain, avg_speed, max_speed, steps_equivalent",
+            (on_date, ctype, miles, _pos(duration_minutes), effort, notes or "",
+             _clean_cardio_time(start_time), _pos(elevation_gain),
+             _pos(avg_speed), _pos(max_speed), steps))
+
+    if steps > 0:
+        # Tagged with the cardio id so deleting the session can reclaim it.
+        add_step_entry(on_date, _CARDIO_STEP_SOURCE.get(ctype, "manual"), steps,
+                       {"cardio_id": cardio_id, "miles": miles,
+                        "steps_per_mile": STEPS_PER_MILE})
+    return cardio_id
 
 
 def get_recent_cardio_sessions(limit=20) -> list:
@@ -4943,12 +5067,30 @@ def get_recent_cardio_sessions(limit=20) -> list:
 
 
 def delete_cardio_session(cardio_id: int) -> bool:
+    """Delete a cardio session and any step entry it contributed, so removing a
+    ride also takes its step-equivalents back out of that day's total."""
     _ensure_gym_tables()
+    _ensure_steps_tables()
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"SELECT date FROM cardio_sessions WHERE id = {ph}", (cardio_id,))
+        row = cur.fetchone()
+        if not row:
+            return False
+        on_date = dict(row)["date"]
         cur.execute(f"DELETE FROM cardio_sessions WHERE id = {ph}", (cardio_id,))
-        return cur.rowcount > 0
+        # Match on the cardio_id recorded in the step row's JSON detail.
+        cur.execute(f"SELECT id, detail FROM steps WHERE date = {ph}", (on_date,))
+        for s in cur.fetchall():
+            s = dict(s)
+            try:
+                detail = json.loads(s.get("detail") or "{}")
+            except (TypeError, ValueError):
+                continue
+            if detail.get("cardio_id") == cardio_id:
+                cur.execute(f"DELETE FROM steps WHERE id = {ph}", (s["id"],))
+        return True
 
 
 def get_exercise_history(exercise_id: int, limit=20) -> list:
