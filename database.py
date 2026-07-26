@@ -127,9 +127,13 @@ def init_db():
     with get_db() as conn:
         cursor = conn.cursor()
         stmts = [
+            # One row per day — UNIQUE(date) is what makes the log_water /
+            # log_sleep upserts land on the existing day instead of piling up a
+            # fresh row per call. Pre-existing DBs get the same guarantee from
+            # _dedupe_habits() below.
             """CREATE TABLE IF NOT EXISTS habits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
+                date TEXT NOT NULL UNIQUE,
                 water_ml INTEGER DEFAULT 0,
                 sleep_hours REAL DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
@@ -296,21 +300,93 @@ def init_db():
         # water logs (the common case) leave it NULL. Added idempotently.
         _add_column(cursor, "hydration_log", "meal_id", "INTEGER")
 
+        # habits predates UNIQUE(date); collapse any duplicate days and enforce
+        # it on DBs created before the constraint existed.
+        _dedupe_habits(cursor)
+
 
 # ── Habit helpers ──────────────────────────────────────────────────────────────
 
+def _habits_date_is_unique(cur) -> bool:
+    """True if habits.date already carries a UNIQUE constraint/index."""
+    if USE_POSTGRES:
+        cur.execute(
+            "SELECT 1 FROM pg_index i "
+            "JOIN pg_class c ON c.oid = i.indrelid "
+            "JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey) "
+            "WHERE c.relname = 'habits' AND i.indisunique "
+            "AND i.indnatts = 1 AND a.attname = 'date'")
+        return cur.fetchone() is not None
+    cur.execute("PRAGMA index_list(habits)")
+    for row in cur.fetchall():
+        name = row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        unique = row["unique"] if isinstance(row, sqlite3.Row) else row[2]
+        if not unique:
+            continue
+        cur.execute(f"PRAGMA index_info({name})")
+        cols = [(r["name"] if isinstance(r, sqlite3.Row) else r[2])
+                for r in cur.fetchall()]
+        if cols == ["date"]:
+            return True
+    return False
+
+
+def _dedupe_habits(cur):
+    """Collapse duplicate habits rows per date, then enforce UNIQUE(date).
+
+    Before the constraint existed, every log_water() call inserted a fresh row
+    and then ran `UPDATE ... WHERE date = ?`, which hit *every* row for that
+    day. The oldest row therefore accumulated all the increments and holds the
+    true daily total, while later rows hold partial sums. So: keep the latest
+    row per date (its id/created_at is the most recent), but carry the MAX
+    water_ml / sleep_hours of the group onto it so no logged water is lost.
+
+    Idempotent — a no-op once the unique index is in place.
+    """
+    if _habits_date_is_unique(cur):
+        return
+
+    ph = "%s" if USE_POSTGRES else "?"
+    cur.execute("SELECT date, COUNT(*) AS n, MAX(water_ml) AS w, MAX(sleep_hours) AS s "
+                "FROM habits GROUP BY date HAVING COUNT(*) > 1")
+    dupes = [(r["date"] if isinstance(r, (dict, sqlite3.Row)) else r[0],
+              r["w"] if isinstance(r, (dict, sqlite3.Row)) else r[2],
+              r["s"] if isinstance(r, (dict, sqlite3.Row)) else r[3])
+             for r in cur.fetchall()]
+
+    for date, water, sleep in dupes:
+        cur.execute(f"UPDATE habits SET water_ml = {ph}, sleep_hours = {ph} "
+                    f"WHERE date = {ph} AND id = (SELECT MAX(id) FROM habits WHERE date = {ph})",
+                    (water or 0, sleep or 0, date, date))
+        cur.execute(f"DELETE FROM habits WHERE date = {ph} "
+                    f"AND id < (SELECT MAX(id) FROM habits WHERE date = {ph})",
+                    (date, date))
+
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_habits_date ON habits(date)")
+
+
 def log_water(date: str, ml: int):
+    """Add `ml` to the day's running water total, creating the day if needed.
+
+    Single upsert on UNIQUE(date): the insert either creates the day or is
+    redirected into the update, so a retry lands on the existing row instead of
+    silently doing nothing. Water is cumulative, so the conflict branch ADDS
+    EXCLUDED.water_ml rather than overwriting with it — a plain
+    `SET water_ml = EXCLUDED.water_ml` would throw away everything already
+    logged that day.
+    """
     with get_db() as conn:
         cur = conn.cursor()
         if USE_POSTGRES:
             cur.execute(
                 "INSERT INTO habits (date, water_ml, sleep_hours) VALUES (%s, %s, 0) "
-                "ON CONFLICT DO NOTHING", (date, 0))
-            cur.execute(
-                "UPDATE habits SET water_ml = water_ml + %s WHERE date = %s", (ml, date))
+                "ON CONFLICT (date) DO UPDATE "
+                "SET water_ml = habits.water_ml + EXCLUDED.water_ml", (date, ml))
         else:
-            cur.execute("INSERT OR IGNORE INTO habits (date, water_ml, sleep_hours) VALUES (?, 0, 0)", (date,))
-            cur.execute("UPDATE habits SET water_ml = water_ml + ? WHERE date = ?", (ml, date))
+            cur.execute(
+                "INSERT INTO habits (date, water_ml, sleep_hours) VALUES (?, ?, 0) "
+                "ON CONFLICT (date) DO UPDATE "
+                "SET water_ml = habits.water_ml + EXCLUDED.water_ml", (date, ml))
 
 
 def log_sleep(date: str, hours: float):
