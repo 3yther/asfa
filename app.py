@@ -382,7 +382,10 @@ app.register_blueprint(exercises_bp)
 
 
 def _today():
-    return datetime.now().strftime("%Y-%m-%d")
+    # Canonical local calendar day (Europe/London by default). Shared by writers
+    # and readers via database.today_str() so daily data can never drift across
+    # the UTC/local boundary. See database.py for the full rationale.
+    return db.today_str()
 
 
 # ── Pages ──────────────────────────────────────────────────────────────────────
@@ -2483,14 +2486,19 @@ def api_water_intake():
     if amount <= 0:
         return jsonify({"error": "amount must be positive"}), 400
 
-    when = datetime.now()
+    when = db.now_local()
     ts_raw = d.get("timestamp")
     if ts_raw:
         try:
-            when = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            # The browser sends new Date().toISOString() — always UTC. Convert it
+            # into the app timezone BEFORE deriving the day, otherwise water logged
+            # near local midnight is bucketed under the UTC date and the bot/
+            # scheduler (which read the local date) report 0ml.
+            when = db.to_local_datetime(parsed)
         except ValueError:
-            pass  # fall back to now() on an unparseable timestamp
-    date = when.strftime("%Y-%m-%d")
+            pass  # fall back to now_local() on an unparseable timestamp
+    date = db.to_local_day(when)
 
     db.log_hydration(date, amount, when.isoformat())
     db.log_water(date, amount)  # keep habits gauge / score / briefing consistent

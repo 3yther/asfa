@@ -80,7 +80,7 @@ def proactive_check():
     except Exception as e:
         logger.error(f"proactive check failed: {e}")
         return
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = db.today_str()
     sent_key = f"alerts_sent_{today}"
     already = set((db.kv_get(sent_key) or "").split("||")) - {""}
     for a in fired:
@@ -178,8 +178,8 @@ def _build_daily_summary() -> str:
     tomorrow's calendar, one actionable insight. Each section is safe."""
     from services.gcal import get_tomorrow_events
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    lines = [f"🛰️ ASFA Daily Summary — {datetime.now().strftime('%A, %d %B %Y')}", ""]
+    today = db.today_str()
+    lines = [f"🛰️ ASFA Daily Summary — {db.now_local().strftime('%A, %d %B %Y')}", ""]
 
     # Today's trades / bot performance
     try:
@@ -252,7 +252,7 @@ def daily_summary():
 @audited("supplement", "supplement_reminder")
 def supplement_reminder():
     """Nudge if any daily supplement is still unchecked (09:00 + 20:00 local)."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = db.today_str()
     try:
         taken = db.get_supplements_today(today)
     except Exception as e:
