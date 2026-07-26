@@ -21,7 +21,8 @@ logger = logging.getLogger("asfa.skill_executor")
 
 def _today() -> str:
     """Local calendar day, matching how the rest of ASFA keys daily data."""
-    return datetime.now().strftime("%Y-%m-%d")
+    import database as db
+    return db.today_str()
 
 # Skill implementations registry: "agent_id/skill_name" -> callable(params)->dict
 SKILL_IMPLEMENTATIONS = {}

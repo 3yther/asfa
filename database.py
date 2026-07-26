@@ -7,9 +7,54 @@ import re
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+
+# ── Canonical "today" ────────────────────────────────────────────────────────
+# Every piece of daily data (habits, hydration_log, streaks, summaries) is keyed
+# by a YYYY-MM-DD calendar day. That key MUST be computed the same way by every
+# writer and reader, or a row written under one date becomes invisible to a
+# reader keyed on another.
+#
+# Deriving the day from a bare datetime.now() is unsafe: on Railway the container
+# clock is UTC, while the app's real timezone is Europe/London, and the web water
+# logger derives its date from the browser's UTC toISOString() timestamp. Those
+# three clocks disagree for part of every day, which is why the Telegram bot could
+# read 0ml of water that had actually been logged (under the adjacent date key).
+#
+# now_local()/today_str() are the single source of truth. Override the zone with
+# the ASFA_TZ env var (defaults to Europe/London).
+try:
+    APP_TZ = ZoneInfo(os.environ.get("ASFA_TZ", "Europe/London"))
+except Exception:  # pragma: no cover - missing tzdata; fall back to UTC
+    APP_TZ = timezone.utc
+
+
+def now_local() -> datetime:
+    """Timezone-aware 'now' in the app's canonical timezone."""
+    return datetime.now(APP_TZ)
+
+
+def today_str() -> str:
+    """The canonical local calendar day as 'YYYY-MM-DD'. Use this everywhere a
+    day is written or read so writers and readers can never drift apart."""
+    return now_local().strftime("%Y-%m-%d")
+
+
+def to_local_datetime(dt: datetime) -> datetime:
+    """Return `dt` as an aware datetime in the app timezone. A naive datetime is
+    assumed to already be in the app timezone; an aware one is converted."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=APP_TZ)
+    return dt.astimezone(APP_TZ)
+
+
+def to_local_day(dt: datetime) -> str:
+    """Calendar day (YYYY-MM-DD) of `dt` in the app timezone. A naive datetime is
+    assumed to already be in the app timezone; an aware one is converted first."""
+    return to_local_datetime(dt).strftime("%Y-%m-%d")
 
 # Use PostgreSQL on Railway if DATABASE_URL set, else SQLite
 if DATABASE_URL and DATABASE_URL.startswith("postgres"):

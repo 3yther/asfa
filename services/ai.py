@@ -87,8 +87,8 @@ def _gym_pbs():
 
 
 def build_context_block():
-    today = datetime.now().strftime("%Y-%m-%d")
-    now_str = datetime.now().strftime("%A, %d %B %Y %H:%M")
+    today = db.today_str()
+    now_str = db.now_local().strftime("%A, %d %B %Y %H:%M")
 
     habits = db.get_habits(7)
     today_habit = next((h for h in habits if h["date"] == today), {})

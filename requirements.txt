@@ -13,6 +13,9 @@ apscheduler==3.10.4
 gunicorn==23.0.0
 psycopg2-binary==2.9.9
 werkzeug==3.0.6
+# Ships the IANA tz database so zoneinfo.ZoneInfo("Europe/London") resolves on
+# slim Linux images (Railway) that don't include system tzdata. See database.APP_TZ.
+tzdata==2025.1
 pillow==11.1.0
 beautifulsoup4==4.12.3
 google-search-results==2.4.2
