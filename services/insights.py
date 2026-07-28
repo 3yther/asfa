@@ -36,7 +36,7 @@ def gather_metrics() -> dict:
 
     m = {}
 
-    # ── Hydration & sleep (habits table, last 14 days) ──────────────────────────
+    # ── Hydration (habits table, last 14 days) ──────────────────────────────────
     try:
         habits = db.get_habits(14)
         recent = [h for h in habits if h["date"] > cut]
@@ -49,10 +49,18 @@ def gather_metrics() -> dict:
             "change_pct": _pct_change(w_recent, w_prev),
             "streak": db.get_water_streak(),
         }
-        s_recent = _avg([h.get("sleep_hours") for h in recent if h.get("sleep_hours")])
-        m["sleep"] = {"recent_avg_h": round(s_recent, 1)}
     except Exception as e:
         logger.warning("metrics: habits failed: %s", e)
+
+    # ── Sleep (both stores — see db.get_sleep_hours_by_day) ─────────────────────
+    # Its own try block, not folded in with hydration: these read different
+    # tables, and a hydration failure used to take sleep down with it silently.
+    try:
+        sleep_by_day = db.get_sleep_hours_by_day(14)
+        s_recent = _avg([h for d, h in sleep_by_day.items() if d > cut and h])
+        m["sleep"] = {"recent_avg_h": round(s_recent, 1)}
+    except Exception as e:
+        logger.warning("metrics: sleep failed: %s", e)
 
     # ── Body weight (first vs last over ~14 days) ───────────────────────────────
     try:

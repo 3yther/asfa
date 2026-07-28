@@ -22,7 +22,21 @@ LINKS = {
     "scanner": f"{SCANNER_BASE}/scanner",
 }
 
-TIMEOUT = 8
+# Per-request budget for a single scanner call. Was 8s, which is far longer than
+# a dashboard card should ever wait: gunicorn runs 1 worker / 8 threads, so two
+# sequential 8s calls could pin a thread for 16s and starve the whole app when
+# the scanner is slow rather than cleanly down. Every caller degrades gracefully
+# on timeout, so a short budget costs nothing.
+TIMEOUT = 3
+
+# Live trading snapshot cache — same pattern and TTL as _HEALTH_CACHE below.
+# get_trading_activity() makes TWO sequential HTTP calls and is reached from
+# /api/agents, /api/bots, _mc_live_data(), build_context_block(),
+# gather_metrics(), the briefing and the daily summary — Mission Control polls
+# it. Uncached, that was ~1.2s on every one of those. Failures are cached too:
+# when the scanner is down, the point is to stop hammering it.
+_ACTIVITY_CACHE = {"ts": 0.0, "data": None}
+_ACTIVITY_TTL = 60
 
 
 def _fetch(url, name):
@@ -69,12 +83,19 @@ def _latest_signal(tjr: dict):
     return best
 
 
-def get_trading_activity():
-    """Live trading snapshot for the ASFA briefing card.
+def get_trading_activity(force: bool = False):
+    """Live trading snapshot for the ASFA briefing card. Cached ~60s (see
+    _ACTIVITY_CACHE) so the dashboard fan-out doesn't make two blocking HTTP
+    calls per card. Pass force=True to bypass the cache.
 
     Always returns the dashboard links. Adds live stats (regime, latest signal,
     portfolio P&L) when the scanner endpoints respond. Never raises.
     """
+    now = time.time()
+    if not force and _ACTIVITY_CACHE["data"] is not None \
+            and now - _ACTIVITY_CACHE["ts"] < _ACTIVITY_TTL:
+        return _ACTIVITY_CACHE["data"]
+
     result = {
         "links": dict(LINKS),
         "online": False,
@@ -109,6 +130,7 @@ def get_trading_activity():
             "holdings": portfolio.get("holdings"),
         }
 
+    _ACTIVITY_CACHE.update(ts=now, data=result)
     return result
 
 

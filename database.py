@@ -1377,6 +1377,44 @@ def get_sleep_history(days: int = 14) -> list:
             for r in rows]
 
 
+def get_sleep_hours_by_day(days: int = 14) -> dict:
+    """{'YYYY-MM-DD': hours_slept} over the last `days`, merged across BOTH
+    sleep stores. Days with nothing logged are omitted.
+
+    Sleep has two writers and they never met:
+
+      * the Tier 6 ``sleep`` table  — POST /api/sleep/log, i.e. what the UI uses;
+      * legacy ``habits.sleep_hours`` — POST /api/habits/sleep, still reachable
+        from the chat/Telegram "slept 7h" command.
+
+    The briefing and insights layers historically read ``habits.sleep_hours``
+    only, so every night logged through the current UI averaged to 0.0h — which
+    also permanently disabled the ``0 < avg < 6`` under-sleeping alert in
+    predictive_alerts(). Merge both here, once, so no caller has to know which
+    store a night landed in and the two can never drift apart again.
+
+    The ``sleep`` table wins on conflict: it is the structured entry that carries
+    quality/readiness, and the legacy column is only ever a bare number.
+    """
+    by_day = {}
+    # Legacy first, so the structured `sleep` rows overwrite it below.
+    try:
+        for h in get_habits(days):
+            hours = h.get("sleep_hours")
+            if hours:
+                by_day[str(h["date"])[:10]] = float(hours)
+    except Exception:
+        pass
+    try:
+        for r in get_sleep_history(days):
+            duration = r.get("duration")
+            if duration:
+                by_day[str(r["date"])[:10]] = float(duration)
+    except Exception:
+        pass
+    return by_day
+
+
 # ── Nutrition / meal logging (Tier 7) ──────────────────────────────────────────
 # One row per logged food item. Macros are stored in grams; calories are derived
 # (protein*4 + carbs*4 + fat*9) unless the caller supplies their own. Meals are
