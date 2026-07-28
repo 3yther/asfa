@@ -27,12 +27,16 @@ def _safe(label, fn, default):
 
 
 def _habits_avg():
+    # Sleep comes from db.get_sleep_hours_by_day(), which merges the Tier 6
+    # `sleep` table with the legacy habits.sleep_hours column. Reading `habits`
+    # alone reported 0.0h for every night logged through the current UI.
+    sleep_vals = [h for h in db.get_sleep_hours_by_day(7).values() if h]
+    sleep = sum(sleep_vals) / len(sleep_vals) if sleep_vals else 0
     habits = db.get_habits(7)
     if not habits:
-        return {"water_ml": 0, "sleep_hours": 0, "water_streak": db.get_water_streak()}
+        return {"water_ml": 0, "sleep_hours": sleep,
+                "water_streak": db.get_water_streak()}
     water = sum(h.get("water_ml", 0) or 0 for h in habits) / len(habits)
-    sleep_vals = [h["sleep_hours"] for h in habits if h.get("sleep_hours")]
-    sleep = sum(sleep_vals) / len(sleep_vals) if sleep_vals else 0
     return {
         "water_ml": water,
         "sleep_hours": sleep,
