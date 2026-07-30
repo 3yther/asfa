@@ -36,11 +36,14 @@
   }
   .type-push   { color: var(--cyan);  border-color: rgba(61,225,240,.35); background: rgba(61,225,240,.08); }
   .type-pull   { color: #a78bfa;      border-color: rgba(167,139,250,.35); background: rgba(167,139,250,.08); }
-  .type-cycling{ color: var(--green); border-color: rgba(63,185,80,.35);  background: rgba(63,185,80,.08); }
+  .type-cycling,
+  .type-bike-core { color: var(--green); border-color: rgba(63,185,80,.35);  background: rgba(63,185,80,.08); }
   .type-rest   { color: var(--text-faint); border-color: rgba(140,170,200,.18); background: rgba(140,170,200,.05); }
   .day-ex { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .day-ex li { font-size: .72rem; color: var(--text); line-height: 1.35; padding-left: 9px; position: relative; }
   .day-ex li::before { content: "▸"; position: absolute; left: 0; color: var(--cyan-deep); font-size: .6rem; top: 1px; }
+  /* Prescribed sets/reps/weight, under the movement it belongs to. */
+  .ex-presc { display: block; font: 500 .66rem var(--mono, 'JetBrains Mono', monospace); color: var(--text-faint); }
   .day-cardio { font-size: .68rem; color: var(--green); line-height: 1.35; border-top: 1px dashed rgba(140,170,200,.14); padding-top: 7px; margin-top: auto; }
   .day-note { font-size: .66rem; color: var(--text-faint); line-height: 1.35; font-style: italic; }
   .split-tally { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
@@ -265,17 +268,28 @@
     $("split-desc").textContent = plan.description || "";
     $("plan-notes").textContent = plan.notes || "";
 
-    // day_number is the cycle position (1-4), not a weekday, so match the
-    // highlight on the day_name label instead — the first cycle is anchored to
-    // Sat/Sun/Mon/Tue.
+    // The split is calendar-anchored (day_number 1 = Monday … 7 = Sunday), but
+    // match on day_name so the highlight can't drift if the numbering ever moves.
     const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday",
                       "Thursday", "Friday", "Saturday"];
     const todayName = WEEKDAYS[new Date().getDay()];
 
+    // Entries read "Name — 60kg × 5×5 (warm-up …)". Split on the em dash so the
+    // prescription can sit under the movement instead of wrapping into it.
+    const exLine = (e) => {
+      const i = String(e).indexOf(" — ");
+      if (i < 0) return `<li>${esc(e)}</li>`;
+      return `<li>${esc(String(e).slice(0, i))}` +
+        `<span class="ex-presc">${esc(String(e).slice(i + 3))}</span></li>`;
+    };
+
     $("week-grid").innerHTML = (plan.days || []).map((d) => {
-      const type = String(d.session_type || "").toLowerCase();
+      // "Bike + Core" → "bike-core": a session type with spaces or symbols would
+      // otherwise split into several bogus class names.
+      const type = String(d.session_type || "").toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
       const isToday = d.day_name === todayName;
-      const ex = (d.exercises || []).map((e) => `<li>${esc(e)}</li>`).join("");
+      const ex = (d.exercises || []).map(exLine).join("");
       return `<div class="day-col${isToday ? " is-today" : ""}">
         <div class="day-name">${esc(d.day_name)}${isToday ? " • today" : ""}</div>
         <span class="day-type type-${esc(type)}">${esc(d.session_type)}</span>

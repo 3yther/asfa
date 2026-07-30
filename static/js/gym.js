@@ -74,21 +74,23 @@ function loadTargets() { try { return JSON.parse(localStorage.getItem(LS_TARGETS
 function saveTarget(rid, mins) { const t = loadTargets(); t[rid] = mins; localStorage.setItem(LS_TARGETS, JSON.stringify(t)); }
 function aiEnabled() { return localStorage.getItem(LS_AI) === "1"; }
 const CYAN = "#00d9ff", GOLD = "#ffd700", VIOLET = "#7f77dd";
-// 4-day Push/Pull/Push/Pull split, training week starting Saturday (Sat/Mon/Wed/Fri).
-// Two Push + two Pull days, each with its own day_type so the up-next suggestion
-// cycles through all four (push → pull → push_b → pull_b).
-const ROTATION = ["push", "pull", "push_b", "pull_b"];
-// Weekly Quick Start schedule shown in calendar order. Gym days resolve to a
-// routine by day_type; the Tue/Thu cycling and Sun rest slots are parallel cards
-// that never advance the push/pull rotation (cardio lives in its own table).
+// 6-day split, calendar week Mon–Sun: Mon Push (heavy bench), Tue Pull, Wed Bike
+// + Core, Thu Push (volume bench), Fri Pull (same as Tuesday), Sat + Sun rest.
+// Each trained day has its own day_type so the up-next suggestion cycles through
+// all five (push → pull → bike_core → push_b → pull_b).
+const ROTATION = ["push", "pull", "bike_core", "push_b", "pull_b"];
+// Weekly Quick Start schedule in calendar order. Gym days resolve to a routine by
+// day_type. The bike day is a logged session (it carries core work), so unlike the
+// old parallel cycling cards it does advance the rotation. Rest days are cards
+// only — there is no routine behind them.
 const WEEK_SCHEDULE = [
-  { kind: "gym",    day_type: "push",   day: "Saturday" },
-  { kind: "gym",    day_type: "pull",   day: "Monday" },
-  { kind: "cardio", day: "Tuesday",  type: "cycling", name: "Cycling" },
-  { kind: "gym",    day_type: "push_b", day: "Wednesday" },
-  { kind: "cardio", day: "Thursday", type: "cycling", name: "Cycling" },
-  { kind: "gym",    day_type: "pull_b", day: "Friday" },
-  { kind: "rest",   day: "Sunday",   name: "Rest" },
+  { kind: "gym",  day_type: "push",      day: "Monday" },
+  { kind: "gym",  day_type: "pull",      day: "Tuesday" },
+  { kind: "gym",  day_type: "bike_core", day: "Wednesday" },
+  { kind: "gym",  day_type: "push_b",    day: "Thursday" },
+  { kind: "gym",  day_type: "pull_b",    day: "Friday" },
+  { kind: "rest", day: "Saturday", name: "Rest" },
+  { kind: "rest", day: "Sunday",   name: "Rest" },
 ];
 // Pre-workout supplement labels — keys mirror db.PRE_WORKOUT_TYPES.
 const PRE_WORKOUT_LABELS = { energy_drink: "Energy Drink", origin_pre_workout: "Origin Pre-Workout" };
@@ -334,7 +336,7 @@ function renderQuickStart(sessions) {
       wrap.appendChild(b);
     } else {
       const b = el("button", "qs-btn qs-rest disabled");
-      b.innerHTML = `<span>${esc(slot.name)} · ${esc(slot.day)}<br><span class="qs-meta">Recovery day</span></span>`;
+      b.innerHTML = `<span>${esc(slot.name)} · ${esc(slot.day)}<br><span class="qs-meta">10k steps, mobility only</span></span>`;
       wrap.appendChild(b);
     }
   });
@@ -584,6 +586,10 @@ function buildExState(rex) {
     name: rex.name, muscle_group: rex.muscle_group, equipment: rex.equipment,
     exercise_type: rex.exercise_type, is_cardio: !!rex.is_cardio,
     rep_min: rex.rep_min, rep_max: rex.rep_max, rest_seconds: rex.rest_seconds || 90,
+    // Prescribed working weight + cue from the locked plan. Targets only — they
+    // seed placeholders, never a logged value.
+    targetWeight: rex.target_weight != null ? +rex.target_weight : null,
+    slotNotes: rex.notes || null,
     plannedSets: rex.sets || 3, rowCount: rex.sets || 3,
     lastSession: undefined, loggedSets: [],
     ranks: { bronze: rex.rank_bronze, silver: rex.rank_silver, gold: rex.rank_gold, platinum: rex.rank_platinum, diamond: rex.rank_diamond },
@@ -729,6 +735,27 @@ function commitSessionTarget() {
   if (input) input.addEventListener("change", commitSessionTarget);
 })();
 
+/* The prescribed target for this slot — "PLAN 60kg × 5×5 · warm-up 20×5, 40×3,
+   50×2". Rendered from the routine, so it says what the plan asks for; what was
+   actually lifted always comes from the LAST line and the logged rows below.
+   Exercises added ad-hoc mid-session carry no prescription and show nothing. */
+function planPrescription(ex) {
+  if (isCardioEx(ex)) {
+    if (ex.rep_min == null) return "";
+    return ex.rep_min === ex.rep_max ? `${ex.rep_min} min` : `${ex.rep_min}–${ex.rep_max} min`;
+  }
+  if (ex.rep_min == null) return "";
+  const reps = ex.rep_min === ex.rep_max ? `${ex.rep_min}` : `${ex.rep_min}–${ex.rep_max}`;
+  const sets = `${ex.plannedSets}×${reps}`;
+  return ex.targetWeight ? `${fmtKg(ex.targetWeight)}kg × ${sets}` : sets;
+}
+function planLine(ex) {
+  const p = planPrescription(ex);
+  if (!p && !ex.slotNotes) return "";
+  return `<div class="ec-plan"><span class="plan-label">PLAN</span>${esc(p)}` +
+    (ex.slotNotes ? ` <span class="muted-sub">· ${esc(ex.slotNotes)}</span>` : "") + `</div>`;
+}
+
 /* ── Exercise card ── */
 function buildExerciseCard(ex) {
   const card = el("div", "exercise-card sci-fi-panel"); card.dataset.ex = ex.exerciseId;
@@ -749,6 +776,7 @@ function buildExerciseCard(ex) {
       </div>
     </div>
     <div class="ec-rankline"></div>
+    ${planLine(ex)}
     <div class="ec-lasttime-slot"></div>
     <div class="ec-rec-slot"></div>
     <div class="set-rows"></div>
@@ -1179,8 +1207,12 @@ function renderSetRows(ex, card) {
     const defType = "working";
     const typeOpts = ["warmup", "working", "dropset", "failure"].map(t =>
       `<option value="${t}" ${((logged?logged.setType:defType) === t) ? "selected" : ""}>${t[0].toUpperCase()+t.slice(1)}</option>`).join("");
-    const wGhost = ghost ? `placeholder="${fmtKg(ghost.weight_kg)}"` : `placeholder="kg"`;
-    const rGhost = ghost ? `placeholder="${ghost.reps}"` : `placeholder="reps"`;
+    // Placeholder priority: last time > the plan's prescription > a bare unit
+    // hint. Never a value — the field stays empty until it's typed or filled.
+    const wHint = ghost ? fmtKg(ghost.weight_kg) : (ex.targetWeight ? fmtKg(ex.targetWeight) : "kg");
+    const rHint = ghost ? ghost.reps : (ex.rep_min != null ? ex.rep_min : "reps");
+    const wGhost = `placeholder="${wHint}"`;
+    const rGhost = `placeholder="${rHint}"`;
     row.innerHTML = `
       <div class="set-num">${i + 1}</div>
       <select class="set-type-sel" ${logged ? "disabled" : ""}>${typeOpts}</select>
@@ -1235,7 +1267,9 @@ function renderCardioRows(ex, card) {
     const ghost = lastSets[i];
     const row = el("div", "set-row cardio-row" + (logged ? " done" : "")); row.dataset.idx = i;
     const durVal = logged ? logged.reps : "";
-    const durGhost = ghost ? `placeholder="${ghost.reps}"` : `placeholder="${CARDIO_DEFAULT_MIN}"`;
+    // The plan's prescribed duration beats the generic 30 min default.
+    const planMin = ex.rep_min != null ? ex.rep_min : CARDIO_DEFAULT_MIN;
+    const durGhost = ghost ? `placeholder="${ghost.reps}"` : `placeholder="${planMin}"`;
     const intVal = logged ? (logged.notes || "") : "";
     const intGhost = (ghost && ghost.notes) ? `placeholder="${esc(ghost.notes)}"` : `placeholder="speed / incline e.g. 3.5 / 13"`;
     row.innerHTML = `
@@ -1249,7 +1283,7 @@ function renderCardioRows(ex, card) {
     } else {
       // default the duration to 30 min if left blank on focus-out convenience
       const durEl = row.querySelector(".dur-min");
-      if (!durEl.value && !ghost) durEl.value = CARDIO_DEFAULT_MIN;
+      if (!durEl.value && !ghost) durEl.value = planMin;
       check.addEventListener("click", () => completeSet(ex, i, row, card));
     }
     wrap.appendChild(row);

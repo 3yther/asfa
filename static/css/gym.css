@@ -268,6 +268,14 @@
   padding: 7px 10px; margin-bottom: 8px; line-height: 1.5;
 }
 .ec-lasttime .lt-label { color: var(--muted); font-weight: 700; letter-spacing: .5px; margin-right: 4px; }
+/* Prescribed target from the locked plan — deliberately quieter than LAST, which
+   shows what was actually lifted. */
+.ec-plan {
+  font-size: .74rem; color: var(--text); background: rgba(255,255,255,.03);
+  border: 1px dashed rgba(140,170,200,.18); border-radius: 8px;
+  padding: 6px 10px; margin-bottom: 8px; line-height: 1.45;
+}
+.ec-plan .plan-label { color: var(--muted); font-weight: 700; letter-spacing: .5px; margin-right: 5px; }
 .ec-overload {
   font-size: .76rem; color: var(--gym-green); background: rgba(63,185,80,.12);
   border: 1px solid rgba(63,185,80,.3); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px;

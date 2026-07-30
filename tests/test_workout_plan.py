@@ -119,73 +119,106 @@ def test_3_api_returns_all_four_sections():
 
 # ── 2. The split displays correctly ───────────────────────────────────────────
 
-def test_4_split_is_2_gym_1_cardio_1_rest():
+def test_4_split_is_4_gym_1_cardio_2_rest():
     plan = db.get_workout_plan()
     s = plan["summary"]
-    assert s["total_days"] == 4, s
-    assert s["gym_days"] == 2, f"expected 2 gym days, got {s['gym_days']}"
+    assert s["total_days"] == 7, s
+    assert s["gym_days"] == 4, f"expected 4 gym days, got {s['gym_days']}"
     assert s["cardio_days"] == 1, f"expected 1 cardio day, got {s['cardio_days']}"
-    assert s["rest_days"] == 1, f"expected 1 rest day, got {s['rest_days']}"
+    assert s["rest_days"] == 2, f"expected 2 rest days, got {s['rest_days']}"
 
 
-def test_5_days_are_the_4day_cycle_in_order():
+def test_5_days_are_the_calendar_week_monday_first():
     days = db.get_workout_plan()["days"]
-    # day_number is the cycle position (1-4), not a weekday. The first cycle's
-    # labels anchor it to Sat/Sun/Mon/Tue.
-    assert [d["day_number"] for d in days] == [1, 2, 3, 4]
+    # day_number IS the weekday now (1 = Monday … 7 = Sunday), not a rolling
+    # cycle position — a given weekday always means the same session.
+    assert [d["day_number"] for d in days] == [1, 2, 3, 4, 5, 6, 7]
     assert [d["day_name"] for d in days] == [
-        "Saturday", "Sunday", "Monday", "Tuesday"]
+        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+        "Saturday", "Sunday"]
 
 
 def test_6_each_day_has_the_right_session_type():
     by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
-    # Consecutive Push/Pull up front, then Bike + Core, then Rest.
     expected = {
-        "Saturday": "Push", "Sunday": "Pull",
-        "Monday": "Bike + Core", "Tuesday": "Rest",
+        "Monday": "Push", "Tuesday": "Pull", "Wednesday": "Bike + Core",
+        "Thursday": "Push", "Friday": "Pull",
+        "Saturday": "Rest", "Sunday": "Rest",
     }
     for day, stype in expected.items():
         assert by_day[day]["session_type"] == stype, \
             f"{day} should be {stype}, got {by_day[day]['session_type']}"
 
 
-def test_7_push_pull_days_carry_exercises_and_treadmill():
+def test_7_lifting_days_carry_their_prescriptions():
     by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
 
-    # Saturday is the Push day (chest/shoulders/triceps).
-    saturday = by_day["Saturday"]
-    assert "Incline Barbell Bench" in saturday["exercises"]
-    assert "Triceps" in saturday["exercises"]
-    assert "13% incline" in saturday["cardio"] and "3.5" in saturday["cardio"]
+    # Monday leads on the heavy bench, with the warm-up ramp spelled out.
+    monday = by_day["Monday"]
+    assert monday["exercises"][0].startswith("Barbell Bench Press")
+    assert "5×5" in monday["exercises"][0]
+    assert "warm-up 20×5, 40×3, 50×2" in monday["exercises"][0]
 
-    # Sunday is the Pull day (back & biceps).
-    sunday = by_day["Sunday"]
-    assert "Lat Pulldown" in sunday["exercises"]
-    assert "Back Finisher" in sunday["exercises"]
-    assert "treadmill" in sunday["cardio"]
+    # Thursday is the same lift at volume — different prescription, no warm-up ramp.
+    thursday = by_day["Thursday"]
+    assert thursday["exercises"][0].startswith("Barbell Bench Press")
+    assert "3×8" in thursday["exercises"][0]
+    assert "Pec Deck" in " ".join(thursday["exercises"])
+
+    # Tuesday's pull leads on the lat pulldown and finishes on the curls.
+    tuesday = by_day["Tuesday"]
+    assert tuesday["exercises"][0].startswith("Lat Pulldown")
+    assert tuesday["exercises"][-1].startswith("Hammer Curls")
+    assert any("to failure" in e for e in tuesday["exercises"]), "pull-ups go to failure"
+
+
+def test_7b_incline_walk_is_monday_only():
+    """The 30-min incline walk belongs to the heavy bench day and nowhere else."""
+    days = db.get_workout_plan()["days"]
+    for d in days:
+        text = " ".join(d["exercises"]) + " " + (d["cardio"] or "")
+        if d["day_name"] == "Monday":
+            assert "Incline Walk" in text and "30 min" in text
+        else:
+            assert "Incline Walk" not in text, \
+                f"{d['day_name']} must not carry the incline walk"
+
+
+def test_7c_friday_pull_is_identical_to_tuesday():
+    by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
+    assert by_day["Friday"]["exercises"] == by_day["Tuesday"]["exercises"], \
+        "Friday repeats Tuesday exercise for exercise"
 
 
 def test_8_bike_and_rest_days_carry_no_lifting():
     by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
 
     # Bike + Core: cycling stamina plus core work, no barbell lifting.
-    monday = by_day["Monday"]
-    assert "7.9 miles" in monday["cardio"]
-    assert "Plank" in monday["exercises"]
-    assert "Incline Barbell Bench" not in monday["exercises"], "no heavy lifting on the bike day"
+    wednesday = by_day["Wednesday"]
+    assert "20–30 min" in (wednesday["cardio"] or "")
+    assert any(e.startswith("Plank") for e in wednesday["exercises"])
+    assert not any("Bench" in e for e in wednesday["exercises"]), \
+        "no heavy lifting on the bike day"
 
-    # Tuesday is the full rest day — nothing at all.
-    tuesday = by_day["Tuesday"]
-    assert tuesday["exercises"] == []
-    assert not tuesday["cardio"]
+    # Saturday and Sunday are full rest — nothing to log at all.
+    for day in ("Saturday", "Sunday"):
+        assert by_day[day]["exercises"] == [], f"{day} must carry no exercises"
+        assert not by_day[day]["cardio"], f"{day} must carry no cardio"
+        assert "10k steps" in (by_day[day]["notes"] or "")
 
-    # Weekly weigh-in rides on the Sunday Pull day (a fixed calendar day).
+    # Weekly weigh-in rides on Sunday (a fixed calendar day).
     assert "weigh-in" in (by_day["Sunday"]["notes"] or "").lower()
 
 
-def test_9_plan_notes_cover_abs_steps_and_rpe():
+def test_8b_the_plan_is_marked_locked():
+    plan = db.get_workout_plan()
+    assert plan["locked"] is True, "the plan must advertise its locked order"
+    assert plan["metadata"]["seed_version"] == db.PLAN_SEED_VERSION
+
+
+def test_9_plan_notes_cover_order_steps_and_rpe():
     notes = (db.get_workout_plan()["notes"] or "").lower()
-    for token in ("abs 2x/week", "10k steps", "rpe", "pre-workout"):
+    for token in ("locked", "10k steps", "rpe", "pre-workout"):
         assert token in notes, f"plan notes should mention {token}"
 
 
@@ -342,7 +375,7 @@ def test_20a_renaming_the_split_does_not_reseed_a_duplicate_plan():
             plans = cur.execute("SELECT COUNT(*) AS n FROM workout_plan").fetchone()["n"]
             days = cur.execute("SELECT COUNT(*) AS n FROM workout_sessions").fetchone()["n"]
         assert plans == 1, f"restart after a rename duplicated the plan ({plans} rows)"
-        assert days == 4, f"restart after a rename duplicated the days ({days} rows)"
+        assert days == 7, f"restart after a rename duplicated the days ({days} rows)"
         assert db.get_workout_plan()["split_name"] == "My Renamed Split", \
             "the rename must survive a restart"
     finally:
@@ -464,7 +497,7 @@ def test_20_seeding_is_idempotent():
     db.init_workout_plan()
     db.init_workout_plan()
     after = db.get_workout_plan()
-    assert len(after["days"]) == 4, "re-seeding must not duplicate days"
+    assert len(after["days"]) == 7, "re-seeding must not duplicate days"
     assert after["id"] == before["id"]
     assert len(db.get_progression_targets()) == 1
     assert len(db.get_workout_goals()) == len(db.plan_goals_seed())
@@ -527,24 +560,26 @@ def test_23_edit_rejects_bad_input():
 
 def test_24_edit_day_of_the_split():
     client = _client()
-    # Day 1 is Saturday's Push — flip it to Pull.
+    seeded = {d["day_number"]: d for d in db.get_workout_plan()["days"]}
+    # Day 1 is Monday's Push — flip it to Pull.
     r = client.post("/api/gym/plan/day/1",
                     json={"session_type": "Pull", "exercises": ["Lat Pulldown", "Rows"]},
                     headers={"X-CSRF-Token": "tok"})
     assert r.status_code == 200, r.get_data(as_text=True)
     by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
-    assert by_day["Saturday"]["session_type"] == "Pull"
-    assert by_day["Saturday"]["exercises"] == ["Lat Pulldown", "Rows"]
+    assert by_day["Monday"]["session_type"] == "Pull"
+    assert by_day["Monday"]["exercises"] == ["Lat Pulldown", "Rows"]
 
-    # Summary recounts live off the edit — two lifting days (now Pull + Pull).
-    assert db.get_workout_plan()["summary"]["gym_days"] == 2
+    # Summary recounts live off the edit — still 4 lifting days (now 3 Pull, 1 Push).
+    assert db.get_workout_plan()["summary"]["gym_days"] == 4
 
-    r = client.post("/api/gym/plan/day/5", json={"session_type": "Push"},
+    r = client.post("/api/gym/plan/day/8", json={"session_type": "Push"},
                     headers={"X-CSRF-Token": "tok"})
-    assert r.status_code == 400, "day_number outside 1-4 must 400"
+    assert r.status_code == 400, "day_number outside 1-7 must 400"
 
-    # restore — day 1 (Saturday) is the seed's Push day.
-    db.update_workout_session(1, session_type="Push", exercises=db._PUSH_EXERCISES)
+    # restore — day 1 is the seed's Monday Push.
+    db.update_workout_session(1, session_type=seeded[1]["session_type"],
+                              exercises=seeded[1]["exercises"])
 
 
 def main():
@@ -553,12 +588,15 @@ def main():
         test_1_plan_page_renders,
         test_2_plan_page_is_session_gated,
         test_3_api_returns_all_four_sections,
-        test_4_split_is_2_gym_1_cardio_1_rest,
-        test_5_days_are_the_4day_cycle_in_order,
+        test_4_split_is_4_gym_1_cardio_2_rest,
+        test_5_days_are_the_calendar_week_monday_first,
         test_6_each_day_has_the_right_session_type,
-        test_7_push_pull_days_carry_exercises_and_treadmill,
+        test_7_lifting_days_carry_their_prescriptions,
+        test_7b_incline_walk_is_monday_only,
+        test_7c_friday_pull_is_identical_to_tuesday,
         test_8_bike_and_rest_days_carry_no_lifting,
-        test_9_plan_notes_cover_abs_steps_and_rpe,
+        test_8b_the_plan_is_marked_locked,
+        test_9_plan_notes_cover_order_steps_and_rpe,
         test_10_percent_complete_is_derived_from_the_logged_pr,
         test_11_percent_complete_clamps_and_hits_100,
         test_12_pr_below_the_documented_start_is_flagged_not_hidden,

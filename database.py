@@ -69,10 +69,12 @@ else:
         os.path.dirname(__file__), "asfa.db")
 
 # Canonical daily supplements: (key, display label). Shared by the API,
-# scheduler reminders, and briefing so they never drift.
+# scheduler reminders, and briefing so they never drift. Dropping an entry
+# removes it from the UI, the reminders and the daily total; historical
+# supplements_log rows for it are deliberately left alone — they record what was
+# actually taken at the time, and rewriting that would falsify the log.
 SUPPLEMENTS = [
     ("creatine", "Creatine"),
-    ("omega3", "Omega-3 Fish Oil"),
     ("magnesium", "Magnesium"),
 ]
 
@@ -1150,7 +1152,11 @@ def get_supplements_today(date: str) -> dict:
 
 
 def count_supplements_today(date: str) -> int:
-    return len(get_supplements_today(date))
+    """How many of the *canonical* supplements were taken on `date`. A retired
+    supplement still in the log (omega-3) doesn't count, so the pair this is
+    read with — count/len(SUPPLEMENTS) — can never exceed 100%."""
+    taken = get_supplements_today(date)
+    return sum(1 for key, _ in SUPPLEMENTS if key in taken)
 
 
 def _streak_from_complete(complete, today):
@@ -1168,11 +1174,17 @@ def get_supplements_streak():
     """Consecutive days where ALL supplements were taken. Today counts once
     complete, but a still-pending today won't break the streak."""
     _ensure_supplements_table()
+    keys = [k for k, _ in SUPPLEMENTS]
     with get_db() as conn:
         cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        # Only canonical supplements count towards a complete day — otherwise a
+        # day that logged a since-retired one (omega-3) could reach the total
+        # without every current supplement actually being taken.
         cur.execute(
             "SELECT substr(taken_at,1,10) AS d, COUNT(DISTINCT supplement_name) AS n "
-            "FROM supplements_log GROUP BY substr(taken_at,1,10)")
+            f"FROM supplements_log WHERE supplement_name IN ({','.join([ph] * len(keys))}) "
+            "GROUP BY substr(taken_at,1,10)", keys)
         rows = cur.fetchall()
     total = len(SUPPLEMENTS)
     complete = {r["d"] for r in rows if (r["n"] or 0) >= total}
@@ -4489,6 +4501,13 @@ def _ensure_gym_tables():
         _add_column(cur, "cardio_sessions", "avg_speed", "REAL")
         _add_column(cur, "cardio_sessions", "max_speed", "REAL")
         _add_column(cur, "cardio_sessions", "steps_equivalent", "INTEGER")
+        # Prescribed working weight for a routine slot (kg). NULL = bodyweight or
+        # "whatever you're on" — it is a target the logger shows, never a logged
+        # value, so it can't be confused with what was actually lifted.
+        _add_column(cur, "gym_routine_exercises", "target_weight", "REAL")
+        # Per-routine metadata as JSON — {"locked": true} means the exercise order
+        # is seed-owned and re-imposed on boot (see seed_gym_routines).
+        _add_column(cur, "gym_routines", "metadata", "TEXT")
     _GYM_READY = True
 
 
@@ -4711,41 +4730,96 @@ def _reconcile_gym_exercises():
             cur.execute(f"DELETE FROM gym_exercises WHERE id = {ph}", (old_id,))
 
 
+_ROUTINE_LOCKED_META = json.dumps({"locked": True})
+
+# The columns a slot row is compared on when deciding whether a routine has
+# drifted from the seed. order_index is in the list on purpose: the whole point
+# of the lock is that the order can't move.
+_SLOT_COLUMNS = ("exercise_id", "sets", "rep_min", "rep_max", "rest_seconds",
+                 "order_index", "is_cardio", "target_weight", "notes")
+
+
+def _seed_slot_rows(cur, slots) -> list:
+    """Resolve seed slots to comparable DB tuples. Slots naming an exercise that
+    isn't in the library are dropped (same graceful skip as before)."""
+    rows = []
+    for slot in slots:
+        cur.execute(
+            ("SELECT id, exercise_type FROM gym_exercises WHERE name = "
+             + ("%s" if USE_POSTGRES else "?")), (slot.exercise,))
+        ex = cur.fetchone()
+        if ex is None:
+            continue
+        rows.append((ex["id"], slot.sets, slot.rep_min, slot.rep_max, slot.rest,
+                     len(rows), bool(ex["exercise_type"] == "cardio"),
+                     slot.weight, slot.notes))
+    return rows
+
+
+def _routine_slots_match(cur, routine_id: int, want: list) -> bool:
+    """True if the routine's stored slots are exactly the seed's, in order."""
+    ph = "%s" if USE_POSTGRES else "?"
+    cur.execute(
+        f"SELECT {', '.join(_SLOT_COLUMNS)} FROM gym_routine_exercises "
+        f"WHERE routine_id = {ph} ORDER BY order_index, id", (routine_id,))
+    have = [tuple(bool(r[c]) if c == "is_cardio" else r[c] for c in _SLOT_COLUMNS)
+            for r in cur.fetchall()]
+    return have == want
+
+
 def seed_gym_routines():
-    """Insert routine templates + their exercise lists once. Idempotent — a
-    routine is only populated if it doesn't already exist by name. Routine
-    exercises referencing an unknown exercise name are skipped.
+    """Sync the routine templates + their exercise lists to gym_seed. Idempotent.
 
     Routines are seed-managed templates (there is no create/edit endpoint), so
-    the seed is the source of truth: any routine whose name is no longer in the
-    seed is reconciled away, along with its exercise rows. This is how retired
-    split days (Legs/Upper/Lower, or a renamed day) get removed on the next boot
-    rather than lingering forever because the old idempotent seed only ever
-    added rows. Logged sessions keep their row (routine_id just goes dangling —
-    the reads LEFT JOIN, so history still renders)."""
+    the seed is the source of truth in both directions:
+
+    * any routine whose name is no longer in the seed is reconciled away, along
+      with its exercise rows — that is how retired split days (Legs/Upper/Lower,
+      or a renamed day) disappear on the next boot;
+    * any routine whose slots have drifted from the seed — different exercises,
+      sets, weights, or a different ORDER — is rewritten to match. Each routine
+      is stamped ``metadata = {"locked": true}`` to say so.
+
+    Rewriting replaces gym_routine_exercises rows, so their ids change. Logged
+    history is unaffected (gym_sets references exercise_id, never the slot), but
+    a session left mid-flight across a structural change resumes on the old
+    layout — it re-reads the routine when the next one starts.
+
+    Logged sessions of a deleted routine keep their row (routine_id just goes
+    dangling — the reads LEFT JOIN, so history still renders)."""
     _ensure_gym_tables()
     _reconcile_gym_routines()
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
         for r in gym_seed.ROUTINES:
+            slots = _seed_slot_rows(cur, gym_seed.ROUTINE_EXERCISES.get(r["name"], []))
             cur.execute(f"SELECT id FROM gym_routines WHERE name = {ph}", (r["name"],))
-            if cur.fetchone():
-                continue  # already seeded
-            routine_id = _gym_insert(
-                cur, "gym_routines", "name, day_type, description, order_index",
-                (r["name"], r["day_type"], r.get("description"), r.get("order_index", 0)))
-            for idx, (ex_name, sets, rep_min, rep_max, rest) in enumerate(
-                    gym_seed.ROUTINE_EXERCISES.get(r["name"], [])):
-                ex_id = _exercise_id_by_name(cur, ex_name)
-                if ex_id is None:
-                    continue  # exercise not in library — skip gracefully
-                is_cardio = ex_name == "Incline Walk"
+            row = cur.fetchone()
+            if row is None:
+                routine_id = _gym_insert(
+                    cur, "gym_routines",
+                    "name, day_type, description, order_index, metadata",
+                    (r["name"], r["day_type"], r.get("description"),
+                     r.get("order_index", 0), _ROUTINE_LOCKED_META))
+            else:
+                routine_id = row["id"]
+                cur.execute(
+                    f"UPDATE gym_routines SET day_type = {ph}, description = {ph}, "
+                    f"order_index = {ph}, metadata = {ph} WHERE id = {ph}",
+                    (r["day_type"], r.get("description"), r.get("order_index", 0),
+                     _ROUTINE_LOCKED_META, routine_id))
+                if _routine_slots_match(cur, routine_id, slots):
+                    continue
+                cur.execute(
+                    f"DELETE FROM gym_routine_exercises WHERE routine_id = {ph}",
+                    (routine_id,))
+            for slot in slots:
                 _gym_insert(
                     cur, "gym_routine_exercises",
                     "routine_id, exercise_id, sets, rep_min, rep_max, rest_seconds, "
-                    "order_index, is_cardio",
-                    (routine_id, ex_id, sets, rep_min, rep_max, rest, idx, is_cardio))
+                    "order_index, is_cardio, target_weight, notes",
+                    (routine_id,) + slot)
 
 
 def init_gym_data():
@@ -4791,12 +4865,25 @@ def get_exercises_by_muscle(muscle_group: str) -> list:
 
 # ── Routines ─────────────────────────────────────────────────────────────────
 
+def _routine_row_to_dict(row) -> dict:
+    """Routine row with its metadata JSON parsed. Unparseable/absent metadata
+    reads as {} rather than raising — a bad blob must not hide the routine."""
+    d = dict(row)
+    raw = d.get("metadata")
+    try:
+        d["metadata"] = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        d["metadata"] = {}
+    d["locked"] = bool(d["metadata"].get("locked"))
+    return d
+
+
 def get_all_routines() -> list:
     _ensure_gym_tables()
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM gym_routines ORDER BY order_index, id")
-        return [dict(r) for r in cur.fetchall()]
+        return [_routine_row_to_dict(r) for r in cur.fetchall()]
 
 
 def get_routine(routine_id: int) -> dict:
@@ -4808,7 +4895,7 @@ def get_routine(routine_id: int) -> dict:
         row = cur.fetchone()
         if not row:
             return None
-        routine = dict(row)
+        routine = _routine_row_to_dict(row)
     routine["exercises"] = get_routine_exercises(routine_id)
     return routine
 
@@ -4822,7 +4909,7 @@ def get_routine_exercises(routine_id: int) -> list:
         cur.execute(
             f"""SELECT re.id AS routine_exercise_id, re.routine_id, re.exercise_id,
                        re.sets, re.rep_min, re.rep_max, re.rest_seconds,
-                       re.order_index, re.notes, re.is_cardio,
+                       re.order_index, re.notes, re.is_cardio, re.target_weight,
                        e.name, e.muscle_group, e.secondary_muscles, e.equipment,
                        e.exercise_type, e.youtube_url, e.instructions, e.tips,
                        e.rank_bronze, e.rank_silver, e.rank_gold,
@@ -6216,64 +6303,96 @@ def _ensure_workout_plan_tables():
             if USE_POSTGRES:
                 stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
             cur.execute(stmt)
+        # Plan metadata as JSON — {"locked": true, "seed_version": N}. The version
+        # is what tells a redeploy that the committed split changed and the stored
+        # days need replacing (see seed_workout_plan).
+        _add_column(cur, "workout_plan", "metadata", "TEXT")
     _PLAN_READY = True
 
 
 # ── Plan seed ────────────────────────────────────────────────────────────────
-# Amir's actual training: a repeating 4-day cycle — Push, Pull, Bike + Core, Rest
-# — with consecutive Push/Pull up front. day_number is the cycle position (1-4),
-# not a calendar weekday; the day_name labels show how the first cycle lands on
-# the week (Sat Push / Sun Pull / Mon Bike + Core / Tue Rest), then it repeats.
-# The weekly weigh-in is a fixed calendar day — every Sunday, which is the Pull
-# day of the first cycle.
+# Amir's actual training: a fixed 6-day week — Mon Push (heavy bench), Tue Pull,
+# Wed Bike + Core, Thu Push (volume bench), Fri Pull (identical to Tuesday), then
+# Sat + Sun rest. day_number is the calendar weekday (1 = Monday … 7 = Sunday),
+# not a rolling cycle position, so a given weekday always means the same session.
+#
+# The lifting days are NOT written out here. They are rendered from
+# gym_seed.ROUTINE_EXERCISES — the same list the logger runs off — so the plan
+# page and the Workout tab cannot drift apart, and the Monday-only incline walk
+# stays Monday-only by construction.
 
-PLAN_SPLIT_NAME = "4-Day Push/Pull Cycle"
+PLAN_SPLIT_NAME = "6-Day Push/Pull/Bike Split"
 PLAN_TARGET_DATE = "2026-09-15"
 
-_TREADMILL = "30 min treadmill — 13% incline, 3.5 speed"
-_CYCLING = "7.9 miles, ~46 min"
+# Bumped whenever the committed structure below changes. seed_workout_plan
+# re-seeds the days when the stored version is older, which is the one case where
+# a redeploy is allowed to overwrite UI edits — a new split means the old days
+# describe training that no longer happens.
+PLAN_SEED_VERSION = 2
 
-_PUSH_EXERCISES = [
-    "Incline Barbell Bench",
-    "Pec Deck",
-    "Chest Press",
-    "Shoulder Press",
-    "Triceps",
-]
-_PULL_EXERCISES = [
-    "Lat Pulldown",
-    "Rows",
-    "Biceps",
-    "Back Finisher",
-]
-_CORE_EXERCISES = [
-    "Hanging Leg Raise",
-    "Cable Crunch",
-    "Plank",
+_REST_NOTE = "10k steps, mobility only."
+
+# (day_number, day_name, session_type, routine_name | None, notes)
+# routine_name resolves against gym_seed.ROUTINE_EXERCISES; None = rest day.
+PLAN_DAY_ROUTINES = [
+    (1, "Monday", "Push", "Push · Monday",
+     "Heavy bench — 5×5. The only day with the incline walk."),
+    (2, "Tuesday", "Pull", "Pull · Tuesday", "Back & biceps."),
+    (3, "Wednesday", "Bike + Core", "Bike + Core · Wednesday",
+     "Stamina + core — no heavy lifting."),
+    (4, "Thursday", "Push", "Push · Thursday", "Volume bench — 3×8. No cardio."),
+    (5, "Friday", "Pull", "Pull · Friday", "Identical to Tuesday."),
+    (6, "Saturday", "Rest", None, _REST_NOTE),
+    (7, "Sunday", "Rest", None, f"{_REST_NOTE} Weekly weigh-in."),
 ]
 
-# day_number is the cycle position (1-4), not a calendar weekday. The cycle is
-# Push → Pull → Bike + Core → Rest, repeating. The day_name labels anchor the
-# first cycle to the week (Sat/Sun/Mon/Tue). Weekly weigh-in rides on the Pull
-# day (Sunday).
-PLAN_SESSIONS = [
-    (1, "Saturday", "Push", _PUSH_EXERCISES, _TREADMILL, "Cycle starts here."),
-    (2, "Sunday", "Pull", _PULL_EXERCISES, _TREADMILL, "Weekly weigh-in."),
-    (3, "Monday", "Bike + Core", _CORE_EXERCISES, _CYCLING, "Stamina + core — no heavy lifting."),
-    (4, "Tuesday", "Rest", [], None, "Full recovery day."),
-]
+
+def _plan_day_lines(routine_name):
+    """One day's exercises as display strings, split into (lifts, cardio).
+
+    Cardio slots are pulled out of the exercise list and returned separately so
+    they land in workout_sessions.cardio — that's the field the week grid renders
+    under the lift list, and it's what keeps the Monday incline walk visually
+    distinct from the lifting work."""
+    lifts, cardio = [], []
+    for slot in gym_seed.ROUTINE_EXERCISES.get(routine_name, []):
+        line = f"{slot.exercise} — {gym_seed.describe(slot)}"
+        (cardio if _is_cardio_slot(slot) else lifts).append(line)
+    return lifts, (" · ".join(cardio) or None)
+
+
+_CARDIO_SLOT_NAMES = {e["name"] for e in gym_seed.EXERCISES
+                      if e.get("exercise_type") == "cardio"}
+
+
+def _is_cardio_slot(slot) -> bool:
+    return slot.exercise in _CARDIO_SLOT_NAMES
+
+
+def _build_plan_sessions():
+    """(day_number, day_name, session_type, exercises, cardio, notes) per day."""
+    sessions = []
+    for day_number, day_name, stype, routine_name, notes in PLAN_DAY_ROUTINES:
+        lifts, cardio = _plan_day_lines(routine_name) if routine_name else ([], None)
+        sessions.append((day_number, day_name, stype, lifts, cardio, notes))
+    return sessions
+
+
+PLAN_SESSIONS = _build_plan_sessions()
 
 PLAN_DESCRIPTION = (
-    "A repeating 4-day cycle — Push, Pull, Bike + Core, Rest — with consecutive "
-    "Push/Pull up front. Push and Pull finish with 30 min on the treadmill at "
-    "13% incline, 3.5 speed."
+    "A fixed 6-day week — Mon Push (heavy bench 5×5), Tue Pull, Wed Bike + Core, "
+    "Thu Push (volume bench 3×8), Fri Pull (same as Tuesday), Sat + Sun rest. "
+    "The 30 min incline walk belongs to Monday only."
 )
 
 PLAN_NOTES = (
-    "Abs 2x/week (core rides on the Bike day; add one more anywhere). 10k steps "
-    "daily via Apple Watch. Log pre-workout (Energy Drink or Origin Pre-Workout) "
-    "and an RPE 1-10 effort rating each session. Progression: add reps first, "
-    "then weight. Weigh in weekly, every Sunday."
+    "Exercise order is locked — the seed re-imposes it on every boot, so the "
+    "logger always presents a day in the order above. Abs ride on the Wednesday "
+    "bike day. 10k steps daily via Apple Watch on rest days too. Log pre-workout "
+    "(Energy Drink or Origin Pre-Workout) and an RPE 1-10 effort rating each "
+    "session. Progression: add reps first, then weight. Weigh in weekly, every "
+    "Sunday."
 )
 
 # ── Personal baselines (environment, never committed) ────────────────────────
@@ -6368,26 +6487,57 @@ def _plan_id(cur):
     return row["id"] if row else None
 
 
+def _plan_seed_version(cur, plan_id: int) -> int:
+    """The seed version the stored plan was written from. 1 = pre-versioning
+    (the old 4-day cycle), which is also what an unreadable blob reads as."""
+    ph = "%s" if USE_POSTGRES else "?"
+    cur.execute(f"SELECT metadata FROM workout_plan WHERE id = {ph}", (plan_id,))
+    row = cur.fetchone()
+    try:
+        return int((json.loads(row["metadata"]) or {}).get("seed_version", 1))
+    except (TypeError, ValueError, KeyError):
+        return 1
+
+
+_PLAN_LOCKED_META = json.dumps({"locked": True, "seed_version": PLAN_SEED_VERSION})
+
+
 def seed_workout_plan():
-    """Insert the plan, its 4 cycle days, progression targets and goals once.
-    Idempotent — each row is skipped if already present, so edits made through
-    the UI are never stomped by a redeploy."""
+    """Insert the plan, its 7 week days, progression targets and goals.
+
+    Normally idempotent — each row is skipped if already present, so edits made
+    through the UI are never stomped by a redeploy. The one exception is a
+    PLAN_SEED_VERSION bump: the committed split itself changed, so the stored
+    days describe training that no longer happens and are replaced wholesale
+    (headline fields included). That is a deliberate, one-off overwrite per
+    version, not a per-boot reset."""
     _ensure_workout_plan_tables()
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
         plan_id = _plan_id(cur)
+        restructured = False
         if plan_id is None:
             plan_id = _gym_insert(
-                cur, "workout_plan", "split_name, description, notes",
-                (PLAN_SPLIT_NAME, PLAN_DESCRIPTION, PLAN_NOTES))
+                cur, "workout_plan", "split_name, description, notes, metadata",
+                (PLAN_SPLIT_NAME, PLAN_DESCRIPTION, PLAN_NOTES, _PLAN_LOCKED_META))
+        elif _plan_seed_version(cur, plan_id) < PLAN_SEED_VERSION:
+            restructured = True
+            cur.execute(
+                f"UPDATE workout_plan SET split_name = {ph}, description = {ph}, "
+                f"notes = {ph}, metadata = {ph}, updated_at = CURRENT_TIMESTAMP "
+                f"WHERE id = {ph}",
+                (PLAN_SPLIT_NAME, PLAN_DESCRIPTION, PLAN_NOTES, _PLAN_LOCKED_META,
+                 plan_id))
+            cur.execute(f"DELETE FROM workout_sessions WHERE plan_id = {ph}", (plan_id,))
 
         for day_number, day_name, stype, exercises, cardio, notes in PLAN_SESSIONS:
-            cur.execute(
-                f"SELECT id FROM workout_sessions WHERE plan_id = {ph} AND day_number = {ph}",
-                (plan_id, day_number))
-            if cur.fetchone():
-                continue
+            if not restructured:
+                cur.execute(
+                    f"SELECT id FROM workout_sessions WHERE plan_id = {ph} AND day_number = {ph}",
+                    (plan_id, day_number))
+                if cur.fetchone():
+                    continue
             _gym_insert(
                 cur, "workout_sessions",
                 "plan_id, day_number, day_name, session_type, exercises, cardio, notes",
@@ -6447,7 +6597,7 @@ def init_workout_plan():
 # ── Plan reads ───────────────────────────────────────────────────────────────
 
 def get_workout_plan() -> dict:
-    """The plan row + its 4 cycle days, ordered by cycle position. None if unseeded."""
+    """The plan row + its 7 week days, Monday first. None if unseeded."""
     _ensure_workout_plan_tables()
     with get_db() as conn:
         cur = conn.cursor()
@@ -6456,6 +6606,11 @@ def get_workout_plan() -> dict:
         if not row:
             return None
         plan = dict(row)
+        try:
+            plan["metadata"] = json.loads(plan.get("metadata") or "{}")
+        except (TypeError, ValueError):
+            plan["metadata"] = {}
+        plan["locked"] = bool(plan["metadata"].get("locked"))
         ph = "%s" if USE_POSTGRES else "?"
         cur.execute(
             f"SELECT * FROM workout_sessions WHERE plan_id = {ph} ORDER BY day_number",

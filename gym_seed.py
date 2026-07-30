@@ -3,6 +3,7 @@ exercise list for each routine. Imported by ``database.init_gym_data`` to
 populate the ``gym_*`` tables on boot (idempotent — existing rows are left
 alone). This module is pure data with no DB or app imports.
 """
+from collections import namedtuple
 
 EXERCISES = [
     # PUSH DAY — Chest
@@ -490,66 +491,157 @@ EXERCISES = [
         "tips": "Only the forearms move — keep elbows glued to your sides. Straight bar hits the triceps a little differently to the rope.",
         "rank_bronze": 15, "rank_silver": 25, "rank_gold": 35, "rank_platinum": 45, "rank_diamond": 55
     },
+    # ── CORE + BIKE DAY — the Wednesday session ──────────────────────────────
+    # Mostly bodyweight, so the rank thresholds are *added* load (a plate held or
+    # a belt), not total weight. 0 added weight is a legitimate Bronze.
+    {
+        "name": "Ab Wheel Rollout",
+        "muscle_group": "core",
+        "secondary_muscles": ["shoulders", "back"],
+        "equipment": "bodyweight",
+        "exercise_type": "compound",
+        "youtube_url": "https://www.youtube.com/watch?v=rqiTPdK1c_I",
+        "instructions": "1. Kneel with the wheel under your shoulders\n2. Brace the core and tuck the pelvis\n3. Roll out as far as you can hold a flat back\n4. Pull back with the abs, not the arms\n5. Stop short of any lower-back sag",
+        "tips": "Range is earned — shorten the rollout rather than letting the hips drop. Breathe out on the way back.",
+        "rank_bronze": 0, "rank_silver": 5, "rank_gold": 10, "rank_platinum": 15, "rank_diamond": 20
+    },
+    {
+        "name": "Hanging Leg Raise",
+        "muscle_group": "core",
+        "secondary_muscles": ["forearms"],
+        "equipment": "bodyweight",
+        "exercise_type": "compound",
+        "youtube_url": "https://www.youtube.com/watch?v=Pr1ieGZ5atk",
+        "instructions": "1. Hang from the bar, shoulders active\n2. Raise the legs with the abs, knees soft\n3. Lift to hip height or higher\n4. Lower slowly — no swinging\n5. Reset the hang before the next rep",
+        "tips": "If you swing, you're using momentum. Bend the knees to make it easier rather than kipping.",
+        "rank_bronze": 0, "rank_silver": 5, "rank_gold": 10, "rank_platinum": 15, "rank_diamond": 20
+    },
+    {
+        "name": "Pallof Press",
+        "muscle_group": "core",
+        "secondary_muscles": ["shoulders"],
+        "equipment": "cable",
+        "exercise_type": "isolation",
+        "youtube_url": "https://www.youtube.com/watch?v=AH_QZLm_0-s",
+        "instructions": "1. Set the cable at chest height, stand side-on\n2. Hold the handle at the sternum with both hands\n3. Press straight out and resist the rotation\n4. Hold 2 seconds at full extension\n5. Return under control, then switch sides",
+        "tips": "An anti-rotation hold, not a chest press — the work is in not twisting. Do both sides every set.",
+        "rank_bronze": 5, "rank_silver": 10, "rank_gold": 20, "rank_platinum": 30, "rank_diamond": 40
+    },
+    {
+        "name": "Plank",
+        "muscle_group": "core",
+        "secondary_muscles": ["shoulders"],
+        "equipment": "bodyweight",
+        "exercise_type": "isolation",
+        "youtube_url": "https://www.youtube.com/watch?v=pSHjTRCQxIw",
+        "instructions": "1. Forearms under the shoulders, feet hip-width\n2. Squeeze glutes and tuck the pelvis\n3. Hold a straight line from head to heels\n4. Breathe normally throughout\n5. Stop the set when the hips start to sag",
+        "tips": "Logged in seconds, not reps. Add a plate on the back before adding time past 60 seconds.",
+        "rank_bronze": 0, "rank_silver": 5, "rank_gold": 10, "rank_platinum": 15, "rank_diamond": 20
+    },
+    {
+        "name": "Cycling",
+        "muscle_group": "cardio",
+        "secondary_muscles": [],
+        "equipment": "bike",
+        "exercise_type": "cardio",
+        "youtube_url": "https://www.youtube.com/watch?v=nJ5nB4rwLcE",
+        "instructions": "1. Set the saddle so the knee is slightly bent at the bottom\n2. Ride 20-30 minutes at a steady, conversational effort\n3. Keep cadence around 80-90 rpm\n4. Raise resistance rather than mashing a heavy gear slowly\n5. Cool down for the last 2 minutes",
+        "tips": "This is the stamina day — steady state, not intervals. Effort should stay talkable.",
+        "rank_bronze": 10, "rank_silver": 20, "rank_gold": 30, "rank_platinum": 45, "rank_diamond": 60
+    },
 ]
 
-# The live 4-day Push/Pull/Push/Pull split, in training-cycle order starting the
-# week on Saturday: Sat Push (chest-led), Mon Pull, Wed Push (shoulder-led),
-# Fri Pull (back-led). Two Push + two Pull days share the push/pull pattern but
-# carry distinct day_type values so the up-next rotation in gym.js cycles through
-# all four (push → pull → push_b → pull_b → …). The card's target duration is
-# derived from set count in gym.js (round(totalSets × 2.5)): 24 sets → 60 min for
-# the Push days, 23 sets → 58 min for the Pull days.
+# ── The live 6-day split ──────────────────────────────────────────────────────
+# Calendar-anchored (not a rolling cycle): Mon Push heavy, Tue Pull, Wed Bike +
+# Core, Thu Push volume, Fri Pull (identical to Tuesday), Sat/Sun rest. The two
+# Push days and the two Pull days carry distinct day_type values so the up-next
+# rotation in gym.js cycles through all five trained days
+# (push → pull → bike_core → push_b → pull_b → …). Rest days are not routines —
+# there is nothing to log — so they live in gym.js's WEEK_SCHEDULE only.
+#
+# This list is the single source of truth for the split: database.seed_gym_routines
+# rewrites any routine that drifts from it, and database.PLAN_SESSIONS renders the
+# same slots on /gym/plan. Order here IS the logging order (see LOCKED below).
 ROUTINES = [
-    {"name": "Push · Saturday", "day_type": "push", "description": "Chest, shoulders & triceps", "order_index": 0},
-    {"name": "Pull · Monday", "day_type": "pull", "description": "Back & biceps", "order_index": 1},
-    {"name": "Push · Wednesday", "day_type": "push_b", "description": "Shoulders (primary), chest & triceps", "order_index": 2},
-    {"name": "Pull · Friday", "day_type": "pull_b", "description": "Back (primary) & biceps", "order_index": 3},
+    {"name": "Push · Monday", "day_type": "push", "description": "Heavy bench, shoulders & triceps", "order_index": 0},
+    {"name": "Pull · Tuesday", "day_type": "pull", "description": "Back & biceps", "order_index": 1},
+    {"name": "Bike + Core · Wednesday", "day_type": "bike_core", "description": "Steady-state bike & core", "order_index": 2},
+    {"name": "Push · Thursday", "day_type": "push_b", "description": "Volume bench, chest & triceps", "order_index": 3},
+    {"name": "Pull · Friday", "day_type": "pull_b", "description": "Back & biceps — same as Tuesday", "order_index": 4},
 ]
 
-# (exercise_name, sets, rep_min, rep_max, rest_seconds)
+# Exercise order within a day is fixed and must not drift — the seed is
+# authoritative and re-imposes it on every boot (see database.seed_gym_routines).
+LOCKED = True
+
+# One prescribed exercise slot in a routine.
+#   sets/rep_min/rep_max/rest  — what the logger pre-fills
+#   weight                     — the prescribed working weight in kg (None = bodyweight
+#                                or "whatever you're on"); shown as the target, never
+#                                as a logged value
+#   notes                      — warm-up ramp or execution cue, shown under the slot
+#   prescription               — display override for slots that reps can't express
+#                                (holds, time, to-failure); auto-generated when None
+Slot = namedtuple(
+    "Slot", "exercise sets rep_min rep_max rest weight notes prescription")
+Slot.__new__.__defaults__ = (None, None, None)   # weight, notes, prescription
+
+
+def describe(slot) -> str:
+    """The human prescription for a slot — "60kg × 5×5 (warm-up …)". Used by the
+    /gym/plan week grid so the plan page and the logger can't disagree."""
+    if slot.prescription:
+        base = slot.prescription
+    else:
+        reps = (str(slot.rep_min) if slot.rep_min == slot.rep_max
+                else f"{slot.rep_min}–{slot.rep_max}")
+        base = f"{slot.sets}×{reps}"
+        if slot.weight:
+            base = f"{slot.weight:g}kg × {base}"
+    return f"{base} ({slot.notes})" if slot.notes else base
+
+
 ROUTINE_EXERCISES = {
-    # Sat — Push, chest-led. 24 working+cardio sets → 60 min target.
-    "Push · Saturday": [
-        ("Barbell Bench Press", 4, 8, 10, 90),
-        ("Incline Dumbbell Press", 3, 10, 12, 75),
-        ("Pec Deck", 3, 12, 15, 60),
-        ("Seated Dumbbell Shoulder Press", 3, 10, 12, 75),
-        ("Lateral Raises", 4, 15, 20, 45),
-        ("Tricep Rope Pushdown", 3, 12, 15, 60),
-        ("Overhead Tricep Extension", 3, 12, 15, 60),
-        ("Incline Walk", 1, 25, 25, 0),
+    # Mon — Push, heavy bench (5×5). 15 sets → 38 min target. The incline walk is
+    # deliberately on this day ONLY; no other day carries treadmill work.
+    "Push · Monday": [
+        Slot("Barbell Bench Press", 5, 5, 5, 150, weight=60,
+             notes="warm-up 20×5, 40×3, 50×2"),
+        Slot("Incline Dumbbell Press", 3, 8, 8, 90, weight=24),
+        Slot("Seated Dumbbell Shoulder Press", 3, 10, 10, 75, weight=14),
+        Slot("Tricep Rope Pushdown", 3, 8, 8, 60, weight=24),
+        Slot("Incline Walk", 1, 30, 30, 0, prescription="30 min"),
     ],
-    # Mon — Pull, back + biceps. 23 sets → 58 min target.
-    "Pull · Monday": [
-        ("Barbell Row", 4, 8, 10, 90),
-        ("Lat Pulldown", 3, 10, 12, 75),
-        ("Seated Cable Row", 3, 10, 12, 75),
-        ("Face Pulls", 3, 15, 20, 45),
-        ("Incline Dumbbell Curl", 3, 10, 12, 60),
-        ("Hammer Curls", 3, 12, 15, 60),
-        ("Pull-ups", 3, 1, 20, 90),
-        ("Incline Walk", 1, 25, 25, 0),
+    # Tue — Pull. 20 sets → 50 min target. Friday is the same session, exercise
+    # for exercise.
+    "Pull · Tuesday": [
+        Slot("Lat Pulldown", 4, 8, 8, 90, weight=73, notes="warm-up 45kg × 8"),
+        Slot("Barbell Row", 4, 10, 10, 90, weight=50),
+        Slot("Seated Cable Row", 3, 8, 8, 75, weight=66),
+        Slot("Pull-ups", 3, 1, 20, 90, prescription="3 sets to failure"),
+        Slot("Incline Dumbbell Curl", 3, 10, 10, 60, weight=14),
+        Slot("Hammer Curls", 3, 10, 10, 60, weight=14),
     ],
-    # Wed — Push, shoulder-led (chest secondary). 24 sets → 60 min target.
-    "Push · Wednesday": [
-        ("Seated Dumbbell Shoulder Press", 4, 8, 10, 90),
-        ("Lateral Raises", 4, 15, 20, 45),
-        ("Cable Lateral Raises", 3, 15, 20, 45),
-        ("Incline Dumbbell Press", 3, 10, 12, 75),
-        ("Pec Deck", 3, 12, 15, 60),
-        ("Overhead Tricep Extension", 3, 12, 15, 60),
-        ("Tricep Rope Pushdown", 3, 12, 15, 60),
-        ("Incline Walk", 1, 25, 25, 0),
+    # Wed — Bike + Core. 13 sets → 33 min target. Stamina and midsection only:
+    # no barbell work, so it never competes with the heavy bench days.
+    "Bike + Core · Wednesday": [
+        Slot("Cycling", 1, 20, 30, 0, prescription="20–30 min"),
+        Slot("Ab Wheel Rollout", 3, 10, 10, 60),
+        Slot("Hanging Leg Raise", 3, 12, 12, 60),
+        Slot("Pallof Press", 3, 8, 8, 45, prescription="3×8 each side"),
+        Slot("Plank", 3, 45, 45, 45, prescription="3×45 sec",
+             notes="logged in seconds"),
     ],
-    # Fri — Pull, back-led (biceps secondary). 23 sets → 58 min target.
-    "Pull · Friday": [
-        ("Lat Pulldown", 4, 8, 10, 90),
-        ("Seated Cable Row", 3, 10, 12, 75),
-        ("Dumbbell Row", 3, 10, 12, 75),
-        ("Lat Pulldown Close Grip", 3, 10, 12, 75),
-        ("Face Pulls", 3, 15, 20, 45),
-        ("Hammer Curls", 3, 12, 15, 60),
-        ("Cable Bicep Curl", 3, 12, 15, 60),
-        ("Incline Walk", 1, 25, 25, 0),
+    # Thu — Push, volume bench (3×8 at the same 60kg). 12 sets → 30 min target.
+    # No incline walk here — that belongs to Monday.
+    "Push · Thursday": [
+        Slot("Barbell Bench Press", 3, 8, 8, 120, weight=60),
+        Slot("Pec Deck", 3, 8, 8, 60, weight=73),
+        Slot("Lateral Raises", 3, 8, 8, 45, weight=4.5),
+        Slot("Seated Triceps Press", 3, 8, 8, 60, weight=54),
     ],
 }
+
+# Friday repeats Tuesday exactly — one definition, referenced twice, so the two
+# can never drift apart.
+ROUTINE_EXERCISES["Pull · Friday"] = ROUTINE_EXERCISES["Pull · Tuesday"]

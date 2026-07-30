@@ -1927,9 +1927,9 @@ def api_gym_plan_update():
 
 @app.route("/api/gym/plan/day/<int:day_number>", methods=["POST"])
 def api_gym_plan_day_update(day_number):
-    """Edit one day of the split."""
-    if not 1 <= day_number <= 4:
-        return jsonify({"error": "day_number must be 1-4"}), 400
+    """Edit one day of the split. day_number is the weekday: 1 = Monday … 7 = Sunday."""
+    if not 1 <= day_number <= 7:
+        return jsonify({"error": "day_number must be 1-7"}), 400
     d = request.get_json(force=True) or {}
     exercises = d.get("exercises")
     if exercises is not None and not isinstance(exercises, list):
@@ -2936,7 +2936,10 @@ def _supplements_status():
         streak = db.get_supplements_streak()
     except Exception:
         pass
-    return {"items": items, "taken_count": len(taken), "total": len(db.SUPPLEMENTS),
+    # Count only supplements still on the canonical list: a retired one (omega-3)
+    # may already be logged for today, and counting it would show "3 of 2".
+    taken_count = sum(1 for key, _ in db.SUPPLEMENTS if key in taken)
+    return {"items": items, "taken_count": taken_count, "total": len(db.SUPPLEMENTS),
             "streak": streak}
 
 
