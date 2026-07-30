@@ -1,8 +1,12 @@
 """Weekly CSV export tests — window maths, per-table filtering, email assembly.
 
-The window is the interesting part: the job fires Sunday noon ET and must export
-the week that *just ended*, never a partial in-flight one, and successive runs
-must tile the calendar without gaps or overlap.
+The window is the interesting part: the job fires Sunday noon London and must
+export the week that *just ended*, never a partial in-flight one, and successive
+runs must tile the calendar without gaps or overlap.
+
+The window zone must stay equal to ASFA_TZ, since that is what stamps the `date`
+columns being filtered — `test_window_zone_matches_the_stored_date_zone` guards
+that, and the BST cases guard the DST transitions specific to London.
 """
 import csv
 import io
@@ -16,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import database as db  # noqa: E402
 from services import weekly_export  # noqa: E402
 
-ET = ZoneInfo("America/New_York")
+LONDON = ZoneInfo("Europe/London")
 
 
 def _rows(csv_text):
@@ -30,14 +34,21 @@ def _headers(csv_text):
 # ── Window maths ───────────────────────────────────────────────────────────────
 
 def test_sunday_noon_exports_the_week_that_just_ended():
-    now = datetime(2026, 8, 2, 12, 0, tzinfo=ET)  # a Sunday
+    now = datetime(2026, 8, 2, 12, 0, tzinfo=LONDON)  # a Sunday
     start, end = weekly_export.week_window(now)
     assert (start, end) == ("2026-07-26", "2026-08-01")
 
 
+def test_window_zone_matches_the_stored_date_zone():
+    """The window is sliced in EXPORT_TZ but filters `date` columns stamped in
+    ASFA_TZ. If the two ever diverge, entries at the edge of the week land in
+    the wrong export — so the defaults must agree."""
+    assert str(weekly_export._tz()) == str(db.APP_TZ) == "Europe/London"
+
+
 def test_window_is_sunday_to_saturday_and_seven_days_long():
     for iso in ("2026-08-02", "2026-08-09", "2026-08-16", "2026-11-01"):
-        now = datetime.fromisoformat(iso + "T12:00").replace(tzinfo=ET)
+        now = datetime.fromisoformat(iso + "T12:00").replace(tzinfo=LONDON)
         start, end = weekly_export.week_window(now)
         s = datetime.fromisoformat(start)
         e = datetime.fromisoformat(end)
@@ -49,7 +60,7 @@ def test_window_is_sunday_to_saturday_and_seven_days_long():
 def test_successive_weeks_tile_without_gap_or_overlap():
     prev_end = None
     for week in range(6):
-        now = datetime(2026, 8, 2, 12, 0, tzinfo=ET) + timedelta(weeks=week)
+        now = datetime(2026, 8, 2, 12, 0, tzinfo=LONDON) + timedelta(weeks=week)
         start, end = weekly_export.week_window(now)
         if prev_end is not None:
             assert (datetime.fromisoformat(start)
@@ -57,10 +68,31 @@ def test_successive_weeks_tile_without_gap_or_overlap():
         prev_end = end
 
 
+def test_window_math_holds_across_the_bst_transitions():
+    """BST begins Sun 29 Mar 2026 and ends Sun 25 Oct 2026 — both are trigger
+    days, and both are days where local time skips or repeats an hour."""
+    for iso, expected in (("2026-03-29", ("2026-03-22", "2026-03-28")),
+                          ("2026-10-25", ("2026-10-18", "2026-10-24"))):
+        now = datetime.fromisoformat(iso + "T12:00").replace(tzinfo=LONDON)
+        assert weekly_export.week_window(now) == expected, iso
+
+
+def test_late_saturday_night_entry_stays_in_that_week():
+    """The reason the window zone matches ASFA_TZ: a set logged at 23:30 UK on
+    the closing Saturday is stamped that Saturday and must land in that week's
+    export, not the next one."""
+    _seed_gym("2026-02-14", exercise_name="Late Saturday")  # a Saturday
+    trigger = datetime(2026, 2, 15, 12, 0, tzinfo=LONDON)   # the next day, Sunday
+    start, end = weekly_export.week_window(trigger)
+    assert (start, end) == ("2026-02-08", "2026-02-14")
+    _, content = weekly_export.export_gym(start, end)
+    assert "Late Saturday" in {r["exercise"] for r in _rows(content)}
+
+
 def test_window_never_includes_today():
     """A partial in-flight day must never leak into the export."""
     for iso in ("2026-08-01", "2026-08-02", "2026-08-05"):
-        now = datetime.fromisoformat(iso + "T12:00").replace(tzinfo=ET)
+        now = datetime.fromisoformat(iso + "T12:00").replace(tzinfo=LONDON)
         _, end = weekly_export.week_window(now)
         assert end < iso
 
@@ -191,7 +223,7 @@ def test_recipient_defaults_to_owner_and_env_overrides(monkeypatch):
     assert res["to"] == "someone.else@example.com"
 
 
-def test_scheduler_registers_the_job_for_sunday_noon_eastern():
+def test_scheduler_registers_the_job_for_sunday_noon_london():
     from apscheduler.schedulers.background import BackgroundScheduler
     from services import scheduler as sched_mod
 
@@ -204,4 +236,4 @@ def test_scheduler_registers_the_job_for_sunday_noon_eastern():
     assert fields["day_of_week"] == "sun"
     assert fields["hour"] == "12"
     assert fields["minute"] == "0"
-    assert str(job.trigger.timezone) == "America/New_York"
+    assert str(job.trigger.timezone) == "Europe/London"

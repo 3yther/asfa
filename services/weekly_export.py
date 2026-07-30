@@ -1,11 +1,17 @@
-"""Weekly CSV export — Sunday noon ET, the week that just ended, by email.
+"""Weekly CSV export — Sunday noon London, the week that just ended, by email.
 
 Builds five CSVs (gym, nutrition, steps, sleep, cardio) covering the completed
 Sunday 00:00 → Saturday 23:59 week and emails them as attachments.
 
-Window: the job fires Sunday 12:00 America/New_York, so the week it exports is
-the one that ended *yesterday* — last Sunday through last Saturday. It never
+Window: the job fires Sunday 12:00 Europe/London, so the week it exports is the
+one that ended *yesterday* — last Sunday through last Saturday. It never
 exports a partial in-flight week.
+
+The window timezone deliberately matches ASFA_TZ (Europe/London), which is what
+`db.today_str()` stamps every `date` column with. Computing the window in any
+other zone would slice the week on a boundary the stored dates don't share — a
+workout logged late Saturday night UK time would be stamped Saturday but fall
+outside a window that had already rolled over to Sunday.
 
 Table mapping (the obvious names don't all exist — see module notes):
   gym       → gym_sets ⋈ gym_sessions (date lives on the session) ⋈ gym_exercises
@@ -20,7 +26,9 @@ scheduler jobs degrade.
 
 Env vars:
   EXPORT_EMAIL_TO   recipient (defaults to DEFAULT_RECIPIENT below)
-  EXPORT_TZ         window/trigger timezone (defaults to America/New_York)
+  EXPORT_TZ         window/trigger timezone (defaults to Europe/London, matching
+                    ASFA_TZ — override both together or the window will not line
+                    up with the stored dates)
 """
 import csv
 import io
@@ -42,8 +50,12 @@ DEFAULT_RECIPIENT = "ami.salax08@gmail.com"
 
 
 def _tz():
-    """The timezone the Sunday-noon trigger and the week window are defined in."""
-    name = os.environ.get("EXPORT_TZ", "America/New_York")
+    """The timezone the Sunday-noon trigger and the week window are defined in.
+
+    Defaults to Europe/London so the window boundaries agree with the
+    London-stamped `date` columns; see the module docstring.
+    """
+    name = os.environ.get("EXPORT_TZ", "Europe/London")
     if ZoneInfo is None:
         return None
     try:

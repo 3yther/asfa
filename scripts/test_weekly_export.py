@@ -25,7 +25,7 @@ def main():
     args = ap.parse_args()
 
     auto_start, auto_end = weekly_export.week_window()
-    print(f"Export timezone : {os.environ.get('EXPORT_TZ', 'America/New_York')}")
+    print(f"Export timezone : {os.environ.get('EXPORT_TZ', 'Europe/London')}")
     print(f"Computed window : {auto_start} (Sun) → {auto_end} (Sat)")
     if args.start or args.end:
         print(f"Overridden to   : {args.start or auto_start} → {args.end or auto_end}")

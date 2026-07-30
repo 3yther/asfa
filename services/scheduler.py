@@ -22,7 +22,7 @@ _scheduler = None
 
 # Timezone for the weekly CSV export trigger. Kept in sync with
 # services.weekly_export._tz() so the job fires exactly when the window closes.
-EXPORT_TZ = os.environ.get("EXPORT_TZ", "America/New_York")
+EXPORT_TZ = os.environ.get("EXPORT_TZ", "Europe/London")
 
 
 def _notify(message: str, kind: str = "info", telegram: bool = True):
@@ -342,8 +342,8 @@ def weekly_digest():
 
 @audited("summary", "weekly_csv_export")
 def weekly_csv_export():
-    """Sunday 12:00 America/New_York — email the five CSVs for the week that
-    just ended (last Sun 00:00 → Sat 23:59). Never raises."""
+    """Sunday 12:00 Europe/London — email the five CSVs for the week that just
+    ended (last Sun 00:00 → Sat 23:59 local). Never raises."""
     from services.weekly_export import send_weekly_export
     try:
         res = send_weekly_export()
@@ -393,10 +393,12 @@ def start_scheduler():
     sched.add_job(weekly_digest, "cron", day_of_week="sun", hour=18, minute=0,
                   timezone="Europe/London", id="weekly_digest", replace_existing=True,
                   misfire_grace_time=60)
-    # Weekly CSV export — Sunday 12:00 America/New_York. Explicit tz: the
-    # scheduler's default is Europe/London, so a bare hour=12 would fire at
-    # 07:00 ET and drift twice a year as the two zones change DST on different
-    # dates. Fires after the Sat 23:59 window closes, so the week is complete.
+    # Weekly CSV export — Sunday 12:00 Europe/London, matching ASFA_TZ so the
+    # week boundaries line up with the London-stamped date columns. The tz is
+    # passed explicitly rather than inherited from the scheduler default: it is
+    # EXPORT_TZ-overridable, and the trigger must not silently disagree with the
+    # window weekly_export computes. Fires well after the Sat 23:59 window
+    # closes, so the exported week is always complete.
     sched.add_job(weekly_csv_export, "cron", day_of_week="sun", hour=12, minute=0,
                   timezone=EXPORT_TZ, id="weekly_csv_export",
                   replace_existing=True, misfire_grace_time=60)
