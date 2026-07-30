@@ -6,6 +6,7 @@ notifications always stored so the dashboard bell still works.
 import functools
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -18,6 +19,10 @@ from services.heartbeat import run_heartbeat
 
 logger = logging.getLogger(__name__)
 _scheduler = None
+
+# Timezone for the weekly CSV export trigger. Kept in sync with
+# services.weekly_export._tz() so the job fires exactly when the window closes.
+EXPORT_TZ = os.environ.get("EXPORT_TZ", "America/New_York")
 
 
 def _notify(message: str, kind: str = "info", telegram: bool = True):
@@ -335,6 +340,20 @@ def weekly_digest():
         logger.error(f"weekly digest failed: {e}")
 
 
+@audited("summary", "weekly_csv_export")
+def weekly_csv_export():
+    """Sunday 12:00 America/New_York — email the five CSVs for the week that
+    just ended (last Sun 00:00 → Sat 23:59). Never raises."""
+    from services.weekly_export import send_weekly_export
+    try:
+        res = send_weekly_export()
+        logger.info("weekly CSV export %s→%s: %d rows, emailed=%s%s",
+                    res["start"], res["end"], res["rows"], res["emailed"],
+                    f" ({res['skipped']})" if res.get("skipped") else "")
+    except Exception as e:
+        logger.error(f"weekly CSV export failed: {e}")
+
+
 # ── Startup ────────────────────────────────────────────────────────────────────
 
 def start_scheduler():
@@ -374,6 +393,13 @@ def start_scheduler():
     sched.add_job(weekly_digest, "cron", day_of_week="sun", hour=18, minute=0,
                   timezone="Europe/London", id="weekly_digest", replace_existing=True,
                   misfire_grace_time=60)
+    # Weekly CSV export — Sunday 12:00 America/New_York. Explicit tz: the
+    # scheduler's default is Europe/London, so a bare hour=12 would fire at
+    # 07:00 ET and drift twice a year as the two zones change DST on different
+    # dates. Fires after the Sat 23:59 window closes, so the week is complete.
+    sched.add_job(weekly_csv_export, "cron", day_of_week="sun", hour=12, minute=0,
+                  timezone=EXPORT_TZ, id="weekly_csv_export",
+                  replace_existing=True, misfire_grace_time=60)
     # Daily production-DB backup at 03:00 Europe/London (quiet hours).
     sched.add_job(db_backup, "cron", hour=3, minute=0,
                   timezone="Europe/London", id="db_backup", misfire_grace_time=60)

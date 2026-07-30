@@ -12,6 +12,7 @@ Env vars (all optional):
 import logging
 import os
 import smtplib
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import requests
@@ -36,22 +37,21 @@ def email_configured() -> bool:
     return bool(os.environ.get("SMTP_HOST") and os.environ.get("SUMMARY_EMAIL_TO"))
 
 
-def send_email(subject: str, body: str) -> bool:
-    """Send a plain-text email via SMTP. Returns True on success."""
-    if not email_configured():
-        return False
+def smtp_configured() -> bool:
+    """SMTP alone, without requiring SUMMARY_EMAIL_TO. Senders that carry their
+    own recipient (e.g. the weekly CSV export) check this instead."""
+    return bool(os.environ.get("SMTP_HOST"))
+
+
+def _smtp_send(msg, from_addr: str, to_addr: str) -> bool:
+    """Open an SMTP session, STARTTLS + auth where available, send. Returns
+    True on success; logs and returns False on any failure."""
     host = os.environ["SMTP_HOST"]
     port = int(os.environ.get("SMTP_PORT", 587))
     user = os.environ.get("SMTP_USER", "")
     password = os.environ.get("SMTP_PASSWORD", "")
-    to_addr = os.environ["SUMMARY_EMAIL_TO"]
-    from_addr = os.environ.get("SUMMARY_EMAIL_FROM", user or to_addr)
     try:
-        msg = MIMEText(body, "plain", "utf-8")
-        msg["Subject"] = subject
-        msg["From"] = from_addr
-        msg["To"] = to_addr
-        with smtplib.SMTP(host, port, timeout=15) as server:
+        with smtplib.SMTP(host, port, timeout=30) as server:
             server.ehlo()
             try:
                 server.starttls()
@@ -65,6 +65,49 @@ def send_email(subject: str, body: str) -> bool:
     except Exception as e:
         logger.warning("Email send failed: %s", e)
         return False
+
+
+def send_email_with_attachments(subject: str, body: str, attachments,
+                                to_addr: str = None) -> bool:
+    """Send a plain-text email with file attachments.
+
+    `attachments` is a sequence of (filename, text) pairs; each is attached as
+    UTF-8 text/csv. Returns True on success.
+    """
+    if not smtp_configured():
+        return False
+    user = os.environ.get("SMTP_USER", "")
+    to_addr = to_addr or os.environ.get("SUMMARY_EMAIL_TO", "")
+    if not to_addr:
+        logger.warning("No recipient for %r; skipping send.", subject)
+        return False
+    from_addr = os.environ.get("SUMMARY_EMAIL_FROM", user or to_addr)
+
+    msg = MIMEMultipart()
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+    for filename, content in attachments:
+        # text/csv (not application/csv) so mail clients offer an inline preview.
+        part = MIMEText(content, "csv", "utf-8")
+        part.add_header("Content-Disposition", "attachment", filename=filename)
+        msg.attach(part)
+    return _smtp_send(msg, from_addr, to_addr)
+
+
+def send_email(subject: str, body: str) -> bool:
+    """Send a plain-text email via SMTP. Returns True on success."""
+    if not email_configured():
+        return False
+    user = os.environ.get("SMTP_USER", "")
+    to_addr = os.environ["SUMMARY_EMAIL_TO"]
+    from_addr = os.environ.get("SUMMARY_EMAIL_FROM", user or to_addr)
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    return _smtp_send(msg, from_addr, to_addr)
 
 
 def send_alert(message: str, kind: str = "alert", subject: str = None,
