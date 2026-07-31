@@ -373,8 +373,11 @@
     return {
       type: "webgl",
       arrival() {
-        if (reduce) { uniforms.uCamDist.value = 6.0; return; }
-        tween(uniforms.uCamDist.value, 6.0, 1300, easeOutBack, (v) => { uniforms.uCamDist.value = v; });
+        // 11.0 sits outside the disk's outer edge (rr < 9.0 in diskEmission), so the
+        // whole Gargantua silhouette + lensed far side frames up. 6.0 put the camera
+        // inside the disk and blew out the framing.
+        if (reduce) { uniforms.uCamDist.value = 11.0; return; }
+        tween(uniforms.uCamDist.value, 11.0, 1300, easeOutBack, (v) => { uniforms.uCamDist.value = v; });
       },
       fallIn(cb) {
         if (reduce) { uniforms.uFlash.value = 1.0; cb(); return; }
