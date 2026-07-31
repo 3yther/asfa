@@ -1328,6 +1328,38 @@ body.locked-in #main-grid .card:hover { opacity: .9; }
   text-shadow: 0 0 8px rgba(34,211,238,.4);
 }
 
+/* ── Guest / demo mode ──────────────────────────────────────────────────────
+   Rendered by nav.html whenever the session is a guest (see _guest_gate in
+   app.py). Amber rather than cyan so "you are not looking at real data" reads
+   as a state change, not as another HUD element. */
+.asfa-nav .nav-guest-chip {
+  font-family: 'JetBrains Mono', monospace; font-size: .55rem; letter-spacing: 1.6px;
+  color: var(--amber); border: 1px solid rgba(245,158,11,.45); border-radius: 3px;
+  padding: 3px 7px; background: rgba(245,158,11,.08); white-space: nowrap;
+}
+.guest-banner {
+  position: fixed; right: 16px; bottom: 16px; z-index: 1300;
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 14px; border-radius: 999px;
+  background: rgba(9,15,24,.92); border: 1px solid rgba(245,158,11,.35);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 8px 26px rgba(0,0,0,.55);
+  font-family: 'JetBrains Mono', monospace; font-size: .62rem; letter-spacing: .8px;
+  color: var(--text); max-width: calc(100vw - 32px);
+}
+.guest-banner .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--amber);
+  box-shadow: 0 0 8px rgba(245,158,11,.8); flex: 0 0 auto;
+  animation: guest-pulse 2.4s ease-in-out infinite;
+}
+.guest-banner a { color: var(--cyan); text-decoration: none; border-bottom: 1px solid rgba(34,211,238,.3); }
+.guest-banner a:hover { color: var(--cyan-hi); }
+@keyframes guest-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+@media (max-width: 680px) {
+  .guest-banner { left: 10px; right: 10px; bottom: 10px; justify-content: center; font-size: .55rem; }
+}
+@media (prefers-reduced-motion: reduce) { .guest-banner .dot { animation: none; } }
+
 /* Command screen also carries the mission-bar, so push everything below BOTH bars */
 body.nav-with-mission { padding-top: 88px; }
 body.nav-with-mission .mission-bar { top: 44px; }

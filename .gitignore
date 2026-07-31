@@ -23,3 +23,5 @@ static/uploads/gym-photos/
 scripts/data/
 *.db-wal
 *.db-shm
+# CV PDF served by /cv — personal document, this repo is public
+static/cv/

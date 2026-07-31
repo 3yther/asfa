@@ -12,10 +12,16 @@
   * { box-sizing:border-box; }
   html, body { height:100%; }
   body {
-    margin:0; min-height:100vh; overflow:hidden;
-    display:flex; align-items:center; justify-content:center;
+    /* Two stacked cards (passphrase + guest) can exceed a short viewport, so
+       the shell scrolls vertically instead of clipping. */
+    margin:0; min-height:100vh; overflow-x:hidden; overflow-y:auto;
+    display:flex; align-items:center; justify-content:center; padding:24px 0;
     background:#000408;
     font-family:'Inter',-apple-system,sans-serif; color:#cfe9f2;
+  }
+  .stack {
+    position:relative; z-index:3;
+    display:flex; flex-direction:column; align-items:center; width:100%;
   }
 
   /* Deep-space starfield + faint nebula */
@@ -70,6 +76,25 @@
   }
   button:hover { filter:brightness(1.08); box-shadow:0 0 26px rgba(0,217,255,.28); }
   .err { color:#ff5d6c; font-size:12px; letter-spacing:.05em; margin-bottom:14px; min-height:16px; }
+
+  /* Guest / demo entry — deliberately secondary: outlined, no glow, so the
+     passphrase button stays the primary action. */
+  .or {
+    display:flex; align-items:center; gap:10px;
+    margin:22px 0 16px; color:#3f5963; font-size:10px; letter-spacing:.2em;
+  }
+  .or::before, .or::after { content:""; flex:1; height:1px; background:rgba(0,217,255,.12); }
+  button.ghost {
+    background:transparent; border:1px solid rgba(0,217,255,.30);
+    color:var(--cyan-hi); box-shadow:none; letter-spacing:.16em;
+  }
+  button.ghost:hover {
+    background:rgba(0,217,255,.07); border-color:var(--cyan);
+    box-shadow:0 0 18px rgba(0,217,255,.14); filter:none;
+  }
+  .guest-note { margin-top:12px; font-size:10.5px; line-height:1.5; color:#4d6874; letter-spacing:.04em; }
+  .guest-note a { color:#6f97a3; text-decoration:none; border-bottom:1px dotted rgba(0,217,255,.25); }
+  .guest-note a:hover { color:var(--cyan-hi); }
 </style>
 </head>
 <body>
@@ -77,6 +102,7 @@
   <div class="nebula"></div>
   <div class="nebula n2"></div>
 
+  <div class="stack">
   <form class="lock" method="POST" action="{{ url_for('login', next=next_url) }}">
     <div class="title">INITIALIZE<br>MISSION CONTROL</div>
     <div class="sub">Authentication required</div>
@@ -84,6 +110,17 @@
     <input type="password" name="password" placeholder="passphrase" autofocus autocomplete="current-password">
     <button type="submit">Engage</button>
   </form>
+
+  <form class="lock" method="POST" action="{{ url_for('login_guest') }}"
+        style="margin-top:14px; padding:22px 34px 24px;">
+    <div class="or">DEMO ACCESS</div>
+    <button type="submit" class="ghost">Login as Guest</button>
+    <div class="guest-note">
+      Read-only tour: the full interface with every personal number removed.<br>
+      Or jump straight to the <a href="{{ url_for('portfolio') }}">portfolio</a>.
+    </div>
+  </form>
+  </div>
 
 <script>
 (function () {

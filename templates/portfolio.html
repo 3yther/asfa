@@ -1,0 +1,202 @@
+{#- ── PORTFOLIO / CV ────────────────────────────────────────────────────────
+    Public screen (endpoint `portfolio` is in _PUBLIC_ENDPOINTS): reachable
+    with a session, with a guest session, or with none at all, because the
+    point of it is to be linkable from an application form. It reads no
+    database — every value is either static copy or passed in by the route.
+
+    Navigation adapts: signed-in and guest visitors get the full ASFA nav so
+    they can hop back to the dashboard; anonymous visitors get a minimal bar
+    with a way in, since every nav tab would only bounce them to /login. -#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>Amir Salah // Portfolio</title>
+<meta name="description" content="Amir Salah — aspiring cloud security engineer and full-stack builder. T Level student at Leigh UTC Dartford.">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/portfolio.css') }}">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+<canvas id="starfield-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;"></canvas>
+
+{% if is_guest or is_authed %}
+  {% include "nav.html" with context %}
+{% else %}
+  <div class="pf-topbar">
+    <a class="pf-logo" href="{{ url_for('portfolio') }}"><span class="br">[</span>ASFA<span class="br">]</span></a>
+    <a class="pf-btn ghost" href="{{ url_for('login') }}" style="padding:6px 14px">Sign in / Demo</a>
+  </div>
+{% endif %}
+
+<main class="pf-screen">
+
+  <!-- ── Hero ──────────────────────────────────────────────────────────── -->
+  <header class="pf-hero">
+    <p class="pf-eyebrow">Portfolio // Operator</p>
+    <h1 class="pf-name">AMIR SALAH</h1>
+    <p class="pf-headline">Aspiring Cloud Security Engineer &nbsp;|&nbsp; Full-Stack Builder</p>
+
+    <div class="pf-contact">
+      {% if phone %}
+      <a class="pf-chip" href="tel:{{ phone | replace(' ', '') }}"><span class="ic">☏</span>{{ phone }}</a>
+      {% endif %}
+      {% if email %}
+      <a class="pf-chip" href="mailto:{{ email }}"><span class="ic">✉</span>{{ email }}</a>
+      {% endif %}
+      {% if linkedin %}
+      <a class="pf-chip" href="{{ linkedin }}" target="_blank" rel="noopener noreferrer"><span class="ic">in</span>LinkedIn</a>
+      {% endif %}
+    </div>
+
+    <div class="pf-actions">
+      {% if cv_available %}
+        <a class="pf-btn primary" href="{{ url_for('cv_download') }}">↓ Download CV</a>
+      {% else %}
+        {# static/cv/Amir_Salah_CV.pdf is gitignored — the button appears once
+           the PDF is dropped in (see /cv in app.py). #}
+        <span class="pf-btn disabled" title="Add static/cv/Amir_Salah_CV.pdf to enable">CV PDF — not uploaded</span>
+      {% endif %}
+      {% if is_guest or is_authed %}
+        <a class="pf-btn ghost" href="/">← Back to dashboard</a>
+      {% else %}
+        <a class="pf-btn ghost" href="{{ url_for('login') }}">View the ASFA demo</a>
+      {% endif %}
+    </div>
+  </header>
+
+  <!-- ── About ─────────────────────────────────────────────────────────── -->
+  <section class="pf-section">
+    <h2 class="pf-section-title">About</h2>
+    <p class="pf-about">
+      Dedicated T Level student at Leigh UTC Dartford with a passion for cloud
+      security engineering. I'm a hands-on, iterative builder who learns by
+      deploying real-world projects — ranging from personal operating systems to
+      automated trading systems. Seeking a degree apprenticeship where I can
+      combine technical rigor with creative problem-solving.
+    </p>
+  </section>
+
+  <!-- ── Experience ────────────────────────────────────────────────────── -->
+  <section class="pf-section">
+    <h2 class="pf-section-title">Experience</h2>
+    <ul class="pf-timeline">
+      <li>
+        <p class="pf-role">Security Engineer Intern</p>
+        <p class="pf-where">Worldpay &nbsp;·&nbsp; April 2026</p>
+      </li>
+      <li>
+        <p class="pf-role">Sales Associate</p>
+        <p class="pf-where">TK Maxx &nbsp;·&nbsp; Oct 2025 – Feb 2026</p>
+      </li>
+      <li>
+        <p class="pf-role">IT Support</p>
+        <p class="pf-where">Financial Times &nbsp;·&nbsp; June 2024</p>
+      </li>
+    </ul>
+  </section>
+
+  <!-- ── Skills ────────────────────────────────────────────────────────── -->
+  <section class="pf-section">
+    <h2 class="pf-section-title">Skills</h2>
+    <div class="pf-skills">
+      <div class="pf-skillgroup">
+        <h3>Cloud &amp; Security</h3>
+        <div class="pf-tags">
+          <span class="pf-tag">AWS — Cloud Practitioner certified</span>
+          <span class="pf-tag">Authentication</span>
+          <span class="pf-tag">SQL injection prevention</span>
+        </div>
+      </div>
+      <div class="pf-skillgroup">
+        <h3>AI &amp; Automation</h3>
+        <div class="pf-tags">
+          <span class="pf-tag">AI agents</span>
+          <span class="pf-tag">Claude API</span>
+          <span class="pf-tag">Task automation</span>
+        </div>
+      </div>
+      <div class="pf-skillgroup">
+        <h3>Programming</h3>
+        <div class="pf-tags">
+          <span class="pf-tag">Python</span>
+          <span class="pf-tag">Flask</span>
+          <span class="pf-tag">PostgreSQL</span>
+          <span class="pf-tag">React</span>
+          <span class="pf-tag">Git</span>
+          <span class="pf-tag">GitHub</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Projects ──────────────────────────────────────────────────────── -->
+  <section class="pf-section">
+    <h2 class="pf-section-title">Projects</h2>
+    <div class="pf-grid">
+      <article class="pf-card">
+        <h3>ASFA</h3>
+        <p class="pf-meta">Flask · PostgreSQL · AWS · Strava API</p>
+        <p>
+          A personal operating system: one password-gated dashboard aggregating
+          mail, calendar, training, nutrition and trading activity, with an AI
+          layer for daily briefings and scheduled background jobs. 173+ tests.
+          You are looking at it.
+        </p>
+      </article>
+      <article class="pf-card">
+        <h3>NQ ORB Bot</h3>
+        <p class="pf-meta">Python · Trading research</p>
+        <p>
+          An opening-range-breakout backtest engine for NQ futures — strategy
+          rules, historical validation and performance reporting over real
+          market data.
+        </p>
+      </article>
+      <article class="pf-card">
+        <h3>Gym Website</h3>
+        <p class="pf-meta">PHP · MySQL · T Level project</p>
+        <p>
+          A full membership site built for the T Level programme: server-rendered
+          pages backed by a relational schema, with authentication and
+          input-sanitised forms.
+        </p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ── Education ─────────────────────────────────────────────────────── -->
+  <section class="pf-section">
+    <h2 class="pf-section-title">Education</h2>
+    <ul class="pf-timeline">
+      <li>
+        <p class="pf-role">T Level — Digital Software Development</p>
+        <p class="pf-where">Leigh UTC Dartford &nbsp;·&nbsp; Sept 2025 – May 2027</p>
+      </li>
+      <li>
+        <p class="pf-role">AWS Certified Cloud Practitioner</p>
+        <p class="pf-where">In progress</p>
+      </li>
+      <li>
+        <p class="pf-role">GCSEs</p>
+        <p class="pf-where">Leigh Academy Blackheath</p>
+      </li>
+    </ul>
+  </section>
+
+  <footer class="pf-foot">
+    <span>ASFA // PORTFOLIO</span>
+    {% if not (is_guest or is_authed) %}
+    <span><a href="{{ url_for('login') }}">Guest demo of the dashboard →</a></span>
+    {% endif %}
+  </footer>
+
+</main>
+<script src="/static/js/starfield.js" defer></script>
+</body>
+</html>

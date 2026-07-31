@@ -158,7 +158,11 @@ def _log_duration(response):
 APP_PASSWORD = os.environ.get("APP_PASSWORD")
 # Endpoints reachable without a session. Everything else requires login.
 _PUBLIC_ENDPOINTS = {"login", "static", "mission_control_health", "api_system_health",
-                     "api_csp_report"}
+                     "api_csp_report",
+                     # Guest/demo entry + the public portfolio page. The portfolio
+                     # is a CV showcase meant to be linkable by recruiters, so it
+                     # renders without any session; it reads no personal data.
+                     "login_guest", "portfolio", "cv_download"}
 
 # Read-only API keys let external clients (the MCP server) reach the endpoints
 # below without the session passphrase — but ONLY these, and only via GET/HEAD.
@@ -203,7 +207,9 @@ def _authenticate_api_key():
 def _require_login():
     if request.endpoint in _PUBLIC_ENDPOINTS:
         return None
-    if session.get("authed"):
+    # Guests are let through here and then constrained by _guest_gate below,
+    # which runs immediately after this hook (registration order).
+    if session.get("authed") or session.get("is_guest"):
         # Sessions created before CSRF protection shipped have no token yet;
         # mint one on their next (page-load) request so the meta tag and the
         # header check below agree.
@@ -232,6 +238,177 @@ def _require_login():
     if request.path.startswith("/api/"):
         return jsonify({"error": "unauthorized"}), 401
     return redirect(url_for("login", next=request.path))
+
+
+# ── Guest / demo mode ──────────────────────────────────────────────────────────
+# "Login as Guest" on the login screen mints a session with is_guest=True instead
+# of authed=True. A guest gets the real UI — nav, cards, charts, layout — with
+# every personal number stripped out, so the dashboard can be shown to a
+# recruiter without exposing meals, weights, finances or inbox.
+#
+# The gate below is deliberately *pre-dispatch*: a guest request never reaches a
+# view function, so it can never touch the database, Gmail, Spotify or the
+# Anthropic API (that last one also matters for the bill — /api/briefing calls
+# Claude on a cache miss). Instead the gate answers with a fixed empty payload
+# shaped like the real one, which is what the endpoint would return against an
+# empty database.
+#
+# Three rules, in order:
+#   1. writes (POST/PUT/DELETE/PATCH) → 403, always;
+#   2. /api/... GETs → empty payload from _GUEST_EMPTY_PAYLOADS ({} by default);
+#   3. page routes → only the demo allowlist, everything else lands on /portfolio.
+_GUEST_PAGES = {
+    "command",          # /            — demo dashboard (steps, sleep, habits…)
+    "gym", "gym_plan", "gym_photos",
+    "nutrition",
+    "portfolio", "cv_download",
+    "logout",
+}
+
+# Endpoints whose real payload is a JSON array. Anything not listed here and not
+# in _GUEST_EMPTY_SHAPES falls back to {} — an object is the safer default
+# because the frontend reads named fields off it rather than iterating.
+_GUEST_EMPTY_LISTS = frozenset({
+    # gym
+    "api_gym_sessions", "api_gym_session_sets", "api_gym_cardio_list",
+    "api_gym_history", "api_gym_prs", "api_gym_body_stats", "api_gym_rest_days",
+    "api_gym_weekly_volume", "api_gym_muscle_recovery", "api_gym_ranks",
+    "api_gym_routines", "api_gym_exercises",
+    # sleep / nutrition
+    "api_sleep_history", "api_nutrition_history", "api_nutrition_favorites",
+    "api_nutrition_templates", "api_meal_prep_list", "api_nutrition_previous_foods",
+    "api_nutrition_frequent_at_hour", "api_nutrition_insights",
+    # everything else the demo screens poll
+    "api_finance_recent", "api_goals", "api_reflection", "api_missions_today",
+    "api_conversation", "api_audit", "api_agents_energy", "api_fragrances",
+    "api_scout_jobs", "api_scout_pipeline_reminders",
+})
+
+_GUEST_NUTRITION_GOALS = {"calorie_goal": 2500, "protein_goal": 160,
+                          "carbs_goal": 200, "fat_goal": 70}
+_GUEST_STEPS_GOAL = 10000
+
+
+def _guest_recent_dates(days=7):
+    """The last `days` calendar dates ending today — chart axes with no series."""
+    today = datetime.strptime(_today(), "%Y-%m-%d")
+    return [(today - timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range(days - 1, -1, -1)]
+
+
+def _guest_zero_macros():
+    return {"date": _today(), "meal_count": 0, "total_calories": 0.0,
+            "total_protein": 0.0, "total_carbs": 0.0, "total_fat": 0.0}
+
+
+def _guest_nutrition_day():
+    return {"date": _today(), "totals": _guest_zero_macros(), "meals": [],
+            "goals": dict(_GUEST_NUTRITION_GOALS)}
+
+
+# Endpoints whose real payload is an object the frontend destructures. Values are
+# either a literal or a zero-arg callable (for the date-bearing ones), and mirror
+# the empty-database response so charts render their axes/rings at zero rather
+# than erroring on a missing key. Keep in sync via tests/test_guest_mode.py,
+# which diffs these against the live endpoints on an empty database.
+_GUEST_EMPTY_SHAPES = {
+    # ── gym ──
+    "api_gym": {"body_weight": [], "pbs": []},
+    "api_gym_photos": {"photos": []},
+    "api_gym_streak": {"streak": 0},
+    "api_gym_xp": {"total_xp": 0, "overall_rank": "Bronze", "streak_days": 0,
+                   "last_workout_date": None},
+    "api_gym_deload_check": {"deload_recommended": False,
+                             "weeks_trained_consecutively": 0},
+    "api_gym_sessions_calendar": {},
+    "api_gym_plan": {"goals": [], "plan": None, "progression": [], "stats": {}},
+    # ── steps ──
+    "api_steps_date": lambda: {"date": _today(), "entries": [], "total": 0,
+                               "goal": _GUEST_STEPS_GOAL},
+    "api_steps_week": lambda: {"days": [{"date": d, "total": 0}
+                                        for d in _guest_recent_dates(7)],
+                               "goal": _GUEST_STEPS_GOAL},
+    "api_steps_goal_get": {"steps_goal": _GUEST_STEPS_GOAL},
+    # ── sleep ──
+    "api_sleep_readiness": lambda: {"readiness": None, "date": _today(),
+                                    "status": "no data"},
+    # ── nutrition ──
+    "api_nutrition_today": lambda: dict(_guest_zero_macros(), meals=[]),
+    "api_nutrition_goals_get": dict(_GUEST_NUTRITION_GOALS),
+    "api_nutrition_date": _guest_nutrition_day,
+    "api_nutrition_yesterday": _guest_nutrition_day,
+    "api_nutrition_trends": lambda: {
+        "dates": _guest_recent_dates(7),
+        "kcal": [0] * 7, "protein": [0] * 7, "carbs": [0] * 7, "fat": [0] * 7,
+        "goals": dict(_GUEST_NUTRITION_GOALS),
+    },
+    "api_nutrition_score": lambda: {"date": _today(), "grade": "—", "hits": 0,
+                                    "logged": False, "misses": [], "streak": 0},
+    # ── dashboard cards ──
+    "api_habits": {"today": {"water_ml": 0, "sleep_hours": 0}, "history": [],
+                   "water_streak": 0},
+    "api_body_composition": {"latest": None, "scans": []},
+    "api_supplements": {"items": [], "streak": 0, "taken_count": 0, "total": 0},
+    "api_notifications": {"notifications": [], "unread": 0},
+    "api_score": {"score": 0, "history": [],
+                  "breakdown": {"water": 0, "sleep": 0, "workout": 0, "spending": 0}},
+    "api_finance_summary": {"total_spent": 0.0, "total_income": 0.0, "net": 0.0,
+                            "by_category": {}, "transaction_count": 0},
+    "api_finance_pace": {"spent_so_far": 0.0, "daily_avg": 0.0,
+                         "projected_month_total": 0.0},
+    "api_finance_accounts_summary": {
+        "checking": {"current": 0.0, "start_30d": 0.0, "trend": 0.0, "has_data": False},
+        "savings": {"current": 0.0, "start_30d": 0.0, "trend": 0.0, "has_data": False},
+        "net_worth": {"current": 0.0, "trend": 0.0},
+    },
+}
+
+
+def _guest_empty_payload(endpoint):
+    """The demo-safe stand-in for one endpoint. Never reads the database."""
+    shape = _GUEST_EMPTY_SHAPES.get(endpoint)
+    if shape is not None:
+        return shape() if callable(shape) else shape
+    if endpoint in _GUEST_EMPTY_LISTS:
+        return []
+    return {}
+
+
+@app.before_request
+def _guest_gate():
+    """Constrain guest sessions to the read-only demo. Registered directly after
+    _require_login (which lets guests past the passphrase) and before
+    _csrf_protect, so a guest write is refused for being a guest write rather
+    than for a token mismatch."""
+    if not session.get("is_guest"):
+        return None
+    if request.endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    is_api = request.path.startswith("/api/")
+    # 1. Read-only, no exceptions. Logging out is the one state change allowed.
+    if request.method not in ("GET", "HEAD"):
+        if request.endpoint == "logout":
+            return None
+        if is_api:
+            return jsonify({"error": "guest session is read-only"}), 403
+        return redirect(url_for("portfolio"))
+    # 2. API reads answer with an empty payload — the view never runs, so no
+    #    personal data is loaded and no paid API is called.
+    if is_api:
+        return jsonify(_guest_empty_payload(request.endpoint))
+    # 3. Pages: the demo surface only.
+    if request.endpoint not in _GUEST_PAGES:
+        return redirect(url_for("portfolio"))
+    return None
+
+
+@app.context_processor
+def _inject_guest_flag():
+    """`is_guest` drives the demo banner + the trimmed nav in every template;
+    `is_authed` lets the public portfolio decide whether to render the nav at
+    all (an anonymous visitor's every tab would just bounce to /login)."""
+    return {"is_guest": bool(session.get("is_guest")),
+            "is_authed": bool(session.get("authed"))}
 
 
 # ── CSRF protection ────────────────────────────────────────────────────────────
@@ -315,6 +492,20 @@ def login():
             logger.error("auth failure tracking failed: %s", e)
         return render_template("login.html", error="Incorrect passphrase.", next_url=next_url), 401
     return render_template("login.html", error=None, next_url=next_url)
+
+
+@app.route("/login/guest", methods=["POST"])
+@limiter.limit("10 per minute")
+def login_guest():
+    """Mint a read-only demo session. Deliberately NOT `authed` — the guest gate
+    keys off is_guest and every personal payload is replaced before dispatch.
+    Public + CSRF-exempt for the same reason /login is: it is the request that
+    creates the session and its token."""
+    session.clear()
+    session["is_guest"] = True
+    session.permanent = True
+    session["csrf_token"] = secrets.token_hex(32)
+    return redirect(url_for("command"))
 
 
 @app.errorhandler(429)
@@ -421,6 +612,40 @@ def export_all_data():
         as_attachment=True,
         download_name=f"asfa-export-{today}.zip",
     )
+
+
+# ── Portfolio / CV ─────────────────────────────────────────────────────────────
+# Public (in _PUBLIC_ENDPOINTS): the point of the page is to be linkable from a
+# CV or an application form, so it must render without the passphrase and
+# without a guest session. It reads nothing from the database.
+#
+# Contact details default to the values on the CV and can be overridden (or
+# blanked) with PORTFOLIO_* env vars — useful because this repo is public.
+CV_FILENAME = "Amir_Salah_CV.pdf"
+CV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "cv", CV_FILENAME)
+
+
+@app.route("/portfolio")
+def portfolio():
+    return render_template(
+        "portfolio.html",
+        active="portfolio",
+        phone=os.environ.get("PORTFOLIO_PHONE", "07398 396363"),
+        email=os.environ.get("PORTFOLIO_EMAIL", "ami.salax08@gmail.com"),
+        linkedin=os.environ.get("PORTFOLIO_LINKEDIN",
+                                "https://www.linkedin.com/in/amir-salah"),
+        cv_available=os.path.exists(CV_PATH),
+    )
+
+
+@app.route("/cv")
+def cv_download():
+    """Serve the CV PDF if it has been dropped into static/cv/. The file is
+    gitignored (public repo), so a fresh clone simply has no download button."""
+    if not os.path.exists(CV_PATH):
+        return "CV not uploaded yet.", 404
+    return send_file(CV_PATH, mimetype="application/pdf",
+                     as_attachment=True, download_name=CV_FILENAME)
 
 
 @app.route("/agents")

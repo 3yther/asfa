@@ -581,6 +581,10 @@ body.rest-active .exercise-list { padding-bottom: 210px; }
 }
 .rest-day-prompt span { color: var(--muted); font-size: .85rem; }
 .rest-day-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* `display:flex` outranks the [hidden] attribute the markup ships with, so the
+   banner was showing on every load — including with no training logged at all.
+   renderDeloadBanner() owns the visibility; this keeps [hidden] authoritative. */
+.deload-banner[hidden] { display: none; }
 .deload-banner {
   display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; margin-bottom: 16px;
   border-radius: 12px; border-left: 3px solid var(--gym-amber); background: rgba(245,185,66,.08);

@@ -9,18 +9,26 @@
     <a class="nav-logo" href="/"><span class="lb">[</span><span data-decode>ASFA</span><span class="rb">]</span></a>
     <span class="nav-day" id="nav-day" data-decode>DAY --</span>
   </div>
+  {# Guests only see the screens the demo covers (_GUEST_PAGES in app.py);
+     the rest would just bounce them back to /portfolio. #}
   <div class="nav-tabs">
     <a class="nav-tab {{ 'active' if active == 'command' }}"    href="/">COMMAND</a>
+    {% if not is_guest %}
     <a class="nav-tab {{ 'active' if active == 'agents' }}"     href="/agents">AGENTS</a>
     <a class="nav-tab {{ 'active' if active == 'approvals' }}"  href="/approvals">APPROVALS</a>
     <a class="nav-tab {{ 'active' if active == 'system' }}"     href="/system">SYSTEM</a>
+    {% endif %}
     <a class="nav-tab {{ 'active' if active == 'gym' }}"        href="/gym">GYM</a>
     <a class="nav-tab {{ 'active' if active == 'nutrition' }}"  href="/nutrition">FUEL</a>
+    {% if not is_guest %}
     <a class="nav-tab {{ 'active' if active == 'fragrances' }}" href="/fragrances">SCENTS</a>
     <a class="nav-tab {{ 'active' if active == 'interview' }}"  href="/interview">INTERVIEW</a>
     <a class="nav-tab {{ 'active' if active == 'mission' }}"    href="/mission-control">MISSION&nbsp;CONTROL</a>
+    {% endif %}
+    <a class="nav-tab {{ 'active' if active == 'portfolio' }}"  href="/portfolio">PORTFOLIO</a>
   </div>
   <div class="nav-right">
+    {% if is_guest %}<span class="nav-guest-chip" title="Read-only demo session">GUEST</span>{% endif %}
     <button id="sound-toggle" type="button" title="Toggle UI sounds"
       onclick="if(window.SoundFX){SoundFX.toggle(); this.textContent = SoundFX.isEnabled() ? '🔊' : '🔇';}">🔇</button>
     <span class="nav-clock" id="nav-clock">--:--:-- UTC</span>
@@ -29,6 +37,15 @@
              border-radius:4px;padding:2px 8px;cursor:pointer;font:inherit;font-size:.8em;">⏻</button>
   </div>
 </nav>
+{% if is_guest %}
+{# Demo watermark. Floats bottom-right rather than sitting under the nav so it
+   costs no layout maths on pages that already offset for the fixed navbar. #}
+<div class="guest-banner">
+  <span class="dot"></span>
+  <span>DEMO MODE — live layout, personal data hidden.</span>
+  <a href="/portfolio">Portfolio</a>
+</div>
+{% endif %}
 <script>
 (function () {
   // Day 0 — 2026-06-11 (matches initMission() in main.js)
