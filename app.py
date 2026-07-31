@@ -69,6 +69,7 @@ os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 import requests
 from flask import Flask, Response, g, jsonify, redirect, render_template, request, send_file, session, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import database as db
 from flask_limiter.util import get_remote_address
@@ -91,6 +92,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("asfa")
 
 app = Flask(__name__)
+
+# Railway terminates TLS and proxies to us, so every request arrives with the
+# proxy's IP in REMOTE_ADDR and the real client in X-Forwarded-For. Without this,
+# `get_remote_address()` returns the proxy for everyone: all visitors share one
+# rate-limit bucket (so a busy guest demo 429s real users) and the DB-backed
+# login lockout in `login()` would ban every visitor at once after 10 failures
+# from anybody. One proxy hop in front of us → x_for=1, which trusts only the
+# last entry the proxy appended and ignores any X-Forwarded-For the client sent.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 # Session signing key. Never fall back to a hardcoded value — a predictable
 # secret lets anyone forge session cookies. Use the env var if set; otherwise
