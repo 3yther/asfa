@@ -26,10 +26,9 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass, field, asdict
-from datetime import date, datetime
+from dataclasses import dataclass, asdict
+from datetime import date
 from typing import Optional
-from urllib.parse import quote_plus
 
 import requests
 from bs4 import BeautifulSoup
