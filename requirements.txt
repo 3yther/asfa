@@ -1,6 +1,10 @@
 flask==3.0.3
 flask-cors==4.0.1
 flask-limiter==3.8.0
+# Scout apprenticeships (models.py). Points at the SAME database as database.py's
+# raw sqlite3/psycopg2 layer — see INTEGRATION_NOTES.md "Finding 1".
+flask-sqlalchemy==3.1.1
+sqlalchemy==2.0.51
 anthropic==0.109.1
 google-auth==2.34.0
 google-auth-oauthlib==1.2.1

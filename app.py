@@ -548,6 +548,18 @@ db.init_workout_plan()
 db.init_fragrance_data()
 # Scout pipeline — Kanban stage board; create table + backfill from scout_jobs.
 db.init_scout_pipeline()
+# Scout apprenticeships — merged from the standalone Apprenticeship Radar app.
+# Two ordered steps, and the order is load-bearing:
+#   1. add the apprenticeship columns to the existing scout_jobs table (raw SQL,
+#      idempotent — ASFA has no Alembic);
+#   2. bind Flask-SQLAlchemy, which then create_all()s only the genuinely new
+#      `employers` / `scan_logs` tables and leaves the now-complete scout_jobs
+#      alone. Both point at the same database as `db` — see INTEGRATION_NOTES.md.
+# The ORM instance is imported as `orm_models`, NEVER as `db`: that name is the
+# `database` module app-wide and shadowing it reintroduces NameError: 'db'.
+db.init_apprenticeships()
+import models as orm_models
+orm_models.init_app(app)
 # Bottle photos live outside git (see .gitignore); recreate the dir on boot so
 # a fresh clone/deploy can accept uploads immediately.
 FRAGRANCE_UPLOAD_DIR = os.path.join(app.static_folder, "uploads", "fragrances")
