@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>SCOUT // EMPLOYERS</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<style>
+  /* Employer watchlist — same neon-green Scout language as scout.html. */
+  :root { --scout: #39ff14; --scout-dim: rgba(57,255,20,.45); }
+  body {
+    background:
+      radial-gradient(circle at 50% -10%, rgba(57,255,20,.07), transparent 55%),
+      var(--bg);
+    color: var(--text); font-family: 'Inter', system-ui, sans-serif;
+    padding: 20px; min-height: 100vh;
+  }
+  .scout-wrap { max-width: 1180px; margin: 0 auto; }
+  .scout-topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .return-btn {
+    font-family: 'JetBrains Mono', monospace; font-size: .68rem; letter-spacing: 1.5px;
+    color: var(--scout); text-decoration: none; padding: 9px 16px;
+    border: 1px solid var(--scout-dim); border-radius: var(--radius);
+    background: rgba(57,255,20,.05);
+  }
+  .return-btn:hover { background: rgba(57,255,20,.14); box-shadow: 0 0 14px rgba(57,255,20,.25); }
+  .scout-brand { text-align: right; }
+  .scout-brand .t { font-family: 'JetBrains Mono', monospace; font-size: 1.05rem; font-weight: 700; letter-spacing: 3px; color: var(--scout); text-shadow: 0 0 10px rgba(57,255,20,.5); }
+  .scout-brand .s { font-size: .55rem; letter-spacing: 3px; color: var(--muted); }
+
+  .panel {
+    background: rgba(4,10,6,.7); border: 1px solid var(--scout-dim);
+    border-radius: var(--radius); padding: 16px 18px; margin-top: 22px;
+    box-shadow: 0 0 18px rgba(57,255,20,.08);
+  }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+  .panel-head h2 { font-family: 'JetBrains Mono', monospace; font-size: .8rem; letter-spacing: 2px; color: var(--scout); text-transform: uppercase; }
+  .counts { font-family: 'JetBrains Mono', monospace; font-size: .62rem; letter-spacing: 1.2px; color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+  th, td { text-align: left; padding: 9px 11px; vertical-align: middle; }
+  thead th { font-family: 'JetBrains Mono', monospace; font-size: .58rem; letter-spacing: 1.5px; color: var(--scout); text-transform: uppercase; border-bottom: 1px solid var(--scout-dim); }
+  tbody tr { border-bottom: 1px solid rgba(57,255,20,.08); }
+  tbody tr:nth-child(odd) { background: rgba(57,255,20,.035); }
+  tbody tr:hover { background: rgba(57,255,20,.09); }
+  tbody tr.off { opacity: .45; }
+  .muted { color: var(--muted); }
+  .aliases { font-family: 'JetBrains Mono', monospace; font-size: .62rem; color: var(--muted); }
+  .empty { color: var(--muted); font-size: .8rem; padding: 16px 4px; text-align: center; }
+
+  .prio { font-family: 'JetBrains Mono', monospace; font-size: .56rem; letter-spacing: 1px; padding: 3px 9px; border-radius: 20px; border: 1px solid currentColor; }
+  .prio.p1 { color: #ff4d4d; background: rgba(255,77,77,.12); }
+  .prio.p2 { color: var(--gold); background: rgba(245,197,66,.1); }
+  .prio.p3 { color: var(--muted); background: rgba(255,255,255,.05); }
+
+  .toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .toggle input { display: none; }
+  .toggle .track { width: 38px; height: 18px; border-radius: 10px; background: #0a1f12; border: 1px solid var(--scout-dim); position: relative; transition: background .2s; }
+  .toggle .track::after { content: ""; position: absolute; top: 1px; left: 1px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .2s, background .2s; }
+  .toggle input:checked + .track { background: rgba(57,255,20,.25); }
+  .toggle input:checked + .track::after { transform: translateX(20px); background: var(--scout); box-shadow: 0 0 8px var(--scout); }
+
+  .add-toggle {
+    font-family: 'JetBrains Mono', monospace; font-size: .6rem; letter-spacing: 1.5px;
+    background: rgba(57,255,20,.1); color: var(--scout); border: 1px solid var(--scout-dim);
+    border-radius: var(--radius); padding: 7px 14px; cursor: pointer;
+  }
+  .add-toggle:hover { background: rgba(57,255,20,.25); box-shadow: 0 0 10px rgba(57,255,20,.4); }
+  .add-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .add-form input, .add-form select {
+    background: #02110a; color: var(--scout); border: 1px solid var(--scout-dim);
+    border-radius: var(--radius); padding: 8px 10px;
+    font-family: 'JetBrains Mono', monospace; font-size: .7rem;
+  }
+  .add-form button {
+    font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: .7rem; letter-spacing: 2px;
+    color: #051a02; background: linear-gradient(180deg, #6dff4f, #39ff14);
+    border: none; border-radius: 6px; padding: 9px 20px; cursor: pointer;
+  }
+  .form-msg { font-family: 'JetBrains Mono', monospace; font-size: .62rem; color: #ff4d4d; min-height: 1em; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+{# Standalone page (no nav), so it wires up CSRF itself — the patched fetch
+   must be in place before the inline script below issues any PUT/POST. #}
+{% include "_csrf.html" %}
+<div class="scout-wrap">
+
+  <div class="scout-topbar">
+    <a class="return-btn" href="/scout">← BACK TO SCOUT</a>
+    <div class="scout-brand">
+      <div class="t">EMPLOYERS</div>
+      <div class="s">APPRENTICESHIP WATCHLIST</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Watchlist</h2>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span class="counts" id="counts">—</span>
+        <button class="add-toggle" id="add-toggle" type="button" aria-expanded="false">＋ ADD EMPLOYER</button>
+      </div>
+    </div>
+
+    <div class="form-msg" id="form-msg"></div>
+    <form class="add-form" id="add-form" hidden>
+      <input id="f-name" placeholder="Name (e.g. Monzo)" required>
+      <input id="f-aliases" placeholder="Aliases, comma-separated">
+      <input id="f-sector" placeholder="Sector">
+      <select id="f-priority">
+        <option value="1">Priority 1 — high</option>
+        <option value="2" selected>Priority 2 — medium</option>
+        <option value="3">Priority 3 — low</option>
+      </select>
+      <input id="f-notes" placeholder="Notes">
+      <button type="submit">ADD</button>
+    </form>
+
+    <table>
+      <thead>
+        <tr><th>Watching</th><th>Name</th><th>Aliases</th><th>Sector</th><th>Priority</th><th>Notes</th></tr>
+      </thead>
+      <tbody id="emp-body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+  /* Session-cookie auth gate — every fetch must send credentials. */
+  async function apiGet(url) { return (await fetch(url, { credentials: "include" })).json(); }
+  async function apiSend(url, body, method = "POST") {
+    const r = await fetch(url, {
+      method,
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    return r.json();
+  }
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  async function loadEmployers() {
+    const emps = await apiGet("/api/scout/employers");
+    const body = document.getElementById("emp-body");
+    if (!Array.isArray(emps) || !emps.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">No employers yet — run scripts/seed_employers.py.</td></tr>';
+      document.getElementById("counts").textContent = "—";
+      return;
+    }
+    const watching = emps.filter((e) => e.watching).length;
+    document.getElementById("counts").textContent =
+      `${watching} watching / ${emps.length} total`;
+
+    body.innerHTML = emps.map((e) => `
+      <tr class="${e.watching ? "" : "off"}">
+        <td>
+          <label class="toggle">
+            <input type="checkbox" data-id="${e.id}" ${e.watching ? "checked" : ""}>
+            <span class="track"></span>
+          </label>
+        </td>
+        <td>${esc(e.name)}</td>
+        <td class="aliases">${esc(e.aliases) || "—"}</td>
+        <td class="muted">${esc(e.sector) || "—"}</td>
+        <td><span class="prio p${e.priority || 2}">P${e.priority || 2}</span></td>
+        <td class="muted">${esc(e.notes) || "—"}</td>
+      </tr>`).join("");
+
+    /* Only watched employers get scanned and alerted on, so this toggle is
+       the main control on how much gov.uk noise reaches the inbox. */
+    body.querySelectorAll('input[type="checkbox"]').forEach((cb) =>
+      cb.addEventListener("change", async () => {
+        await apiSend(`/api/scout/employers/${cb.dataset.id}`,
+                      { watching: cb.checked }, "PUT");
+        loadEmployers();
+      }));
+  }
+
+  document.getElementById("add-toggle").addEventListener("click", () => {
+    const f = document.getElementById("add-form");
+    f.hidden = !f.hidden;
+    document.getElementById("add-toggle").setAttribute("aria-expanded", String(!f.hidden));
+  });
+
+  document.getElementById("add-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const msg = document.getElementById("form-msg");
+    msg.textContent = "";
+    const res = await apiSend("/api/scout/employers", {
+      name: document.getElementById("f-name").value,
+      aliases: document.getElementById("f-aliases").value,
+      sector: document.getElementById("f-sector").value,
+      priority: document.getElementById("f-priority").value,
+      notes: document.getElementById("f-notes").value,
+    });
+    if (!res.ok) { msg.textContent = (res.error || "failed").toUpperCase(); return; }
+    ev.target.reset();
+    ev.target.hidden = true;
+    loadEmployers();
+  });
+
+  loadEmployers();
+</script>
+</body>
+</html>

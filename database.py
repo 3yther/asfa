@@ -3111,6 +3111,63 @@ def get_scout_jobs(location=None, new_only=False) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
+_APPRENTICESHIPS_READY = False
+
+
+def init_apprenticeships():
+    """Add the apprenticeship columns to scout_jobs. Idempotent.
+
+    ASFA has no Alembic — schema evolves through CREATE TABLE IF NOT EXISTS and
+    the idempotent _add_column helper, so this is safe to run on every boot
+    against both a populated SQLite file and a fresh Railway Postgres.
+
+    Every column is nullable or defaulted: existing job rows are untouched and
+    simply read back as listing_type='job'. MUST run before models.init_app()'s
+    create_all() so SQLAlchemy sees a fully-formed scout_jobs and leaves it be.
+    """
+    global _APPRENTICESHIPS_READY
+    if _APPRENTICESHIPS_READY:
+        return
+    _ensure_scout_tables()
+
+    # SQLAlchemy's Date/DateTime types round-trip ISO strings on SQLite (TEXT
+    # affinity) and native date/timestamps on Postgres.
+    date_t = "DATE" if USE_POSTGRES else "TEXT"
+    dt_t = "TIMESTAMP" if USE_POSTGRES else "TEXT"
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        # NOTE: `source` is NOT reused for the job/apprenticeship split — it
+        # already holds the provider (reed / google_jobs / gov_uk) and
+        # overloading it would break services/scout.py. See INTEGRATION_NOTES.md.
+        _add_column(cur, "scout_jobs", "listing_type", "TEXT DEFAULT 'job'")
+        _add_column(cur, "scout_jobs", "external_ref", "TEXT")
+        _add_column(cur, "scout_jobs", "employer_id", "INTEGER")
+        _add_column(cur, "scout_jobs", "employer_name_raw", "TEXT")
+        _add_column(cur, "scout_jobs", "level", "INTEGER")
+        _add_column(cur, "scout_jobs", "training_course", "TEXT")
+        _add_column(cur, "scout_jobs", "closing_text", "TEXT")
+        _add_column(cur, "scout_jobs", "closing_date", date_t)
+        _add_column(cur, "scout_jobs", "start_date", date_t)
+        _add_column(cur, "scout_jobs", "status", "TEXT DEFAULT 'open'")
+        _add_column(cur, "scout_jobs", "last_seen", dt_t)
+        _add_column(cur, "scout_jobs", "alerted", "INTEGER DEFAULT 0")
+
+        # Rows that predate the column (SQLite backfills the DEFAULT, but a
+        # pre-existing NULL from an earlier partial run would break filtering).
+        cur.execute("UPDATE scout_jobs SET listing_type = 'job' "
+                    "WHERE listing_type IS NULL")
+
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_scout_jobs_listing_type "
+                    "ON scout_jobs (listing_type)")
+        # Partial unique index: the VAC reference is the apprenticeship dedup
+        # key, but every existing job row has external_ref NULL and multiple
+        # NULLs must stay legal.
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_scout_jobs_external_ref "
+                    "ON scout_jobs (external_ref) WHERE external_ref IS NOT NULL")
+    _APPRENTICESHIPS_READY = True
+
+
 def mark_scout_job_applied(job_id) -> None:
     _ensure_scout_tables()
     with get_db() as conn:

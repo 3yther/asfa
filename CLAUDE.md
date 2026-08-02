@@ -14,7 +14,9 @@ for proactive reminders and daily summaries.
 - **AI:** anthropic 0.109
 - **Integrations:** Google API client + google-auth-oauthlib (Gmail, Calendar),
   Spotify (OAuth), python-telegram-bot, NewsAPI, OpenWeatherMap
-- **Storage:** SQLite locally (`asfa.db`), PostgreSQL via `DATABASE_URL` in prod (psycopg2)
+- **Storage:** SQLite locally (`asfa.db`), PostgreSQL via `DATABASE_URL` in prod (psycopg2).
+  Primary layer is raw SQL in `database.py`. Scout's apprenticeship half adds
+  Flask-SQLAlchemy 3.1 (`models.py`) over the **same** database — see Critical Rules.
 - **Frontend:** vanilla JS (`static/js/main.js`), server-rendered Jinja templates
 - **Deploy:** Railway, `Procfile` → `gunicorn app:app`
 
@@ -70,7 +72,25 @@ for proactive reminders and daily summaries.
   must be added there explicitly. The gate **fails closed**: if `APP_PASSWORD`
   is unset the app returns 503 and stays locked.
 
+- **Never name the SQLAlchemy instance `db`.** `models.py` defines
+  `db = SQLAlchemy()` *internally* (so Radar's ported models read naturally),
+  but it must be imported as `orm_models` in `app.py` and `orm` in services.
+  `db` is the `database` module app-wide; shadowing it reintroduces the
+  `NameError: 'db'` below. Equally, no SQLAlchemy column may be named `query`
+  or `metadata` — `ScanLog` maps `query_text` onto a DB column called `"query"`
+  for exactly this reason.
+- **`db.init_apprenticeships()` must run before `orm_models.init_app(app)`.**
+  The first adds the apprenticeship columns to `scout_jobs` with raw DDL; the
+  second runs `create_all()`, which must see a fully-formed table so it creates
+  only `employers` / `scan_logs` and leaves `scout_jobs` alone.
+
 ## Architecture Notes
+- **Scout covers jobs *and* apprenticeships.** One `scout_jobs` table split by
+  `listing_type` (`job` | `apprenticeship`), one dashboard (`/scout`, filtered
+  by `?source=`), one notifier (`services/scout_notify.py`), one scheduler.
+  `scout_jobs.source` is the **provider** (`reed` / `google_jobs` / `gov_uk`),
+  not the split. Employer watchlist lives at `/scout/employers`; only *watched*
+  employers generate alerts. See `INTEGRATION_NOTES.md`.
 - **`db` must be imported before routes.** `app.py` does `import database as db`
   near the top and calls `db.init_db()` during startup, before/while the route
   functions reference `db`. Reordering this caused a `NameError: 'db'`

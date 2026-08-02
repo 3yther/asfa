@@ -73,6 +73,7 @@ _INIT_STEPS = (
     db.init_workout_plan,
     db.init_fragrance_data,
     db.init_scout_pipeline,
+    db.init_apprenticeships,
 )
 
 
@@ -104,6 +105,24 @@ def _isolate_module_db(tmp_path_factory, request):
     _reset_lazy_table_latches()
     for step in _INIT_STEPS:
         step()
+
+    # Scout's apprenticeship half is SQLAlchemy-backed (see models.py). Its
+    # engine is bound once at import against the session database, and unlike
+    # get_db() it will NOT follow a later db.SQLITE_PATH swap — so re-point the
+    # URI and rebuild the engine, or ORM tests silently read the wrong file.
+    # Re-registering via init_app() raises ("already registered on this Flask
+    # app"), so swap the engine inside Flask-SQLAlchemy's own registry instead.
+    import sqlalchemy as sa
+
+    from models import db as orm
+    app_module.app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + db.SQLITE_PATH
+    engines = orm._app_engines[app_module.app]
+    for engine in engines.values():
+        engine.dispose()               # drop pooled connections to the old file
+    engines[None] = sa.create_engine("sqlite:///" + db.SQLITE_PATH)
+    with app_module.app.app_context():
+        orm.session.remove()           # scoped per app context, so clear inside
+        orm.create_all()
 
     # app.py captures APP_PASSWORD into a module global at import; a module that
     # sets its own passphrase (test_api_keys.py) needs it re-read here.
