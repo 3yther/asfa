@@ -3716,7 +3716,7 @@ def api_scout_employer_item(emp_id):
     from models import Employer
     from models import db as orm
 
-    emp = Employer.query.get(emp_id)
+    emp = orm.session.get(Employer, emp_id)  # Query.get() is legacy in SA 2.0
     if not emp:
         return jsonify({"ok": False, "error": "not found"}), 404
 

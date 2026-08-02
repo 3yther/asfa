@@ -29,23 +29,43 @@ The only SQLAlchemy in the tree is `odysseus/` — a separate vendored FastAPI
 project, explicitly excluded from pytest collection via `norecursedirs` in
 `pytest.ini`. It is not part of the Flask app and is not relevant here.
 
-**Decision:** per the brief's own constraint — *"When Radar and Scout disagree
-on convention, Scout wins"* — Radar's `db.Model` classes are **rewritten as raw
-SQL** in ASFA's `database.py` style, not copied. Adding Flask-SQLAlchemy to ASFA
-would mean a second ORM/session layer alongside 366k of working raw SQL, which
-directly violates *"one database"* and *"additive changes only"*.
+**Decision (user, overriding my recommendation): add Flask-SQLAlchemy to ASFA.**
 
-Concretely this means the brief's literal code snippets do not survive verbatim:
+I recommended rewriting Radar's models as raw SQL to match Scout, on the
+grounds that a second ORM alongside 366k of working raw SQL sits awkwardly with
+*"one database"*. The call was to add Flask-SQLAlchemy instead so Radar's
+models port intact. That is what's implemented.
 
-| Brief says | Actual implementation |
+How the two layers coexist without becoming two databases:
+
+- `models.py` holds `db = SQLAlchemy()` and derives its URI **from
+  `database.py`** (`models.database_uri()`), not from the environment. It
+  therefore cannot drift onto a different database than the raw layer, even
+  when `ASFA_DB_PATH` redirects SQLite during tests. Same SQLite file in dev,
+  same `DATABASE_URL` on Railway.
+- **Ownership is split, not duplicated.** SQLAlchemy owns only the two new
+  tables (`employers`, `scan_logs`). Every pre-existing table stays owned by
+  `database.py`. `scout_jobs` is the one table both touch: its DDL (including
+  the new apprenticeship columns) is raw SQL, and `ScoutJob` in `models.py` is
+  a mapping over that existing table, not a `create_all()` target.
+- **Boot order is load-bearing.** `db.init_apprenticeships()` must run *before*
+  `orm_models.init_app(app)`, so `create_all()` sees a fully-formed
+  `scout_jobs` and leaves it alone. Both calls are adjacent in `app.py` with a
+  comment saying so.
+
+⚠️ **The ORM instance must never be imported into `app.py` as `db`.** That name
+is bound to the `database` module across the whole app; shadowing it
+reintroduces the `NameError: 'db'` recorded in CLAUDE.md's Known Issues. It is
+imported as `orm_models` in `app.py` and `orm` inside services.
+
+Consequences worth knowing:
+
+| Concern | Status |
 |---|---|
-| `class Employer(db.Model)` | `CREATE TABLE scout_employers` + `db.*_scout_employer()` functions |
-| `Employer.query.filter_by(watching=True)` | `db.get_scout_employers(watching_only=True)` |
-| `nullable=True`, `db.Column(...)` | `_add_column(cur, "scout_jobs", ..., "TEXT")` |
-| Alembic migration | idempotent `_add_column` in `_ensure_scout_tables()` — see Migration below |
-
-The `alias_list` property becomes a helper `db.employer_alias_list(row)` /
-inline expansion, since rows come back as plain dicts.
+| New runtime deps | `flask-sqlalchemy==3.1.1`, `sqlalchemy==2.0.51`, both pinned |
+| Two connection pools on one SQLite file | Fine in practice — WAL is already on (`get_db()` sets it) and the Procfile pins `--workers 1`. Postgres is unaffected. |
+| Test isolation | `conftest.py` swaps `db.SQLITE_PATH` per module; the SQLAlchemy engine does **not** follow that, so the fixture now also swaps the engine. Without it ORM tests silently read the wrong file. |
+| Legacy `Model.query` | Works in Flask-SQLAlchemy 3.1 (deprecated but functional), so Radar's query style ports unchanged. |
 
 ### Finding 2 — `source` column name collision
 
@@ -118,8 +138,8 @@ Not a class — the table **`scout_jobs`** (`database.py:3017`). Exact columns:
 Related existing tables: `scout_applications`, `scout_pipeline` (Kanban board
 with `cv_match_score`, `missing_keywords`, `match_analysis_at`).
 
-**There is no employer/company/watchlist table** — so `scout_employers` is
-created new, per the brief.
+**There is no employer/company/watchlist table** — so `employers` is created
+new, per the brief.
 
 ### 3. Existing scraper interface
 **Module-level functions, not classes.** `services/scout.py` exposes:
@@ -223,7 +243,7 @@ unaffected):
 |---|---|---|
 | `listing_type` | TEXT DEFAULT `'job'`, indexed | `'job'` \| `'apprenticeship'` — see Finding 2 |
 | `external_ref` | TEXT, unique, indexed | gov.uk `VAC…` reference; dedup key for apprenticeships |
-| `employer_id` | INTEGER | FK → `scout_employers.id` |
+| `employer_id` | INTEGER | FK → `employers.id` |
 | `employer_name_raw` | TEXT | raw gov.uk employer string, kept regardless of match |
 | `level` | INTEGER | 3/4/6/7; NULL for jobs |
 | `training_course` | TEXT | e.g. "Digital and technology solutions professional (level 6)" |
@@ -234,24 +254,27 @@ unaffected):
 | `last_seen` | TEXT | refreshed every poll; drives closure detection |
 | `alerted` | INTEGER DEFAULT 0 | set after a successful alert |
 
-Dates are stored as **ISO `TEXT`**, not a `Date` type — every other date in
-ASFA's schema is TEXT, and it sorts/compares correctly in both SQLite and
-Postgres. The brief's `Date` type is a SQLAlchemy concept that doesn't apply
-here.
+Dates are declared as SQLAlchemy `Date` / `DateTime` on the model, and the raw
+`ALTER TABLE` picks the matching physical type per backend — `DATE`/`TIMESTAMP`
+on Postgres, `TEXT` on SQLite (where SQLAlchemy round-trips ISO strings against
+TEXT affinity). So `closing_date <= threshold` compares correctly on both.
 
-`unique` on `external_ref` is enforced by a `CREATE UNIQUE INDEX … WHERE
-external_ref IS NOT NULL` (partial index) so the thousands of existing job rows
-with `NULL` don't collide.
+`unique` on `external_ref` is enforced by a partial index —
+`CREATE UNIQUE INDEX … WHERE external_ref IS NOT NULL` — so the thousands of
+existing job rows with `NULL` don't collide.
 
-**New tables:**
+**New tables (SQLAlchemy-owned, created by `create_all()`):**
 
-- `scout_employers` — the watchlist. Same shape as Radar's `Employer`, named
-  with the `scout_` prefix to match every other Scout table. `created_at` is
-  TEXT, `watching` is INTEGER 0/1 (no native bool in SQLite).
-- `scout_scan_logs` — Radar's `ScanLog`. **The column holding the search term is
-  named `query_text`**, per the brief's critical-bug warning. Since there is no
-  ORM here the shadowing bug cannot occur, but the name is kept for consistency
-  with Radar and to avoid `query` being a reserved-ish word in raw SQL.
+- `employers` — the watchlist, exactly Radar's `Employer` including the
+  `alias_list` property. Kept at Radar's table name rather than a `scout_`
+  prefix, since the brief supplied the model verbatim.
+- `scan_logs` — Radar's `ScanLog`. **The attribute holding the search term is
+  `query_text`, mapped onto a DB column still named `"query"`**
+  (`db.Column("query", db.String(200))`), per the brief's critical-bug warning.
+  Because we *are* on Flask-SQLAlchemy, this bug is live rather than
+  theoretical: naming the attribute `query` shadows `Model.query` and raises
+  `AttributeError: 'Comparator' object has no attribute 'order_by'`. There is a
+  regression test for it (`test_scanlog_query_text_does_not_shadow_model_query`).
 
 **No `scout_alerts` table.** Scout logs alert outcomes through
 `db.log_audit(...)` + `db.add_notification(...)`; adding Radar's `Alert` table
@@ -261,27 +284,35 @@ would be a parallel second system, against *"one notifier."*
 
 **`RawVacancy` is kept as an internal DTO.** The dataclass stays exactly as
 Radar has it (it's what the parser is written against and what makes the dedup
-readable), and conversion to Scout's convention — a plain `dict` handed to
-`db.add_scout_job(...)` — happens in the persist step
+readable), and conversion to a `ScoutJob` row happens in the persist step
 (`services/apprenticeships.py:_persist_vacancies`). This preserves the tested
-parsing behaviour byte-for-byte while matching Scout's `dict → db.add_*`
-convention at the boundary.
+parsing behaviour byte-for-byte and keeps the HTTP/parsing layer free of any
+model import, so the scraper stays unit-testable without a database.
 
 ## Migration
 
-ASFA has no Alembic. Schema changes land as idempotent DDL inside
-`_ensure_scout_tables()` — `CREATE TABLE IF NOT EXISTS` for the two new tables
-and `_add_column()` for each new `scout_jobs` column. This runs automatically on
-first use in both SQLite and Postgres, so **no manual migration command is
-needed** on Railway; the redeploy applies it.
+ASFA has no Alembic, so there is **no manual migration command** — a redeploy
+applies everything. Two mechanisms, run in this order at boot:
+
+1. `database.init_apprenticeships()` — idempotent raw DDL: `_add_column()` for
+   each of the 12 new `scout_jobs` columns, a backfill of `listing_type='job'`,
+   an index on `listing_type`, and the partial unique index on `external_ref`.
+   Safe against both a populated SQLite file and a fresh Railway Postgres.
+2. `models.init_app(app)` — `create_all()`, which creates only `employers` and
+   `scan_logs`.
+
+Verified on the real `asfa.db`: all 12 columns added, both indexes created, all
+48 pre-existing job rows backfilled to `listing_type='job'`, and a second run is
+a clean no-op.
 
 ## Scheduler decision
 
 **Two jobs on separate cadences**, not one merged cycle:
 
 - `scout_daily_scan` (existing, 06:00 daily) — untouched.
-- `scout_apprenticeship_scan` — `interval`, `APPRENTICESHIP_POLL_MINUTES`
-  (default **360** = 6h).
+- `apprenticeship_scan` — `interval`, `APPRENTICESHIP_POLL_MINUTES`
+  (default **360** = 6h). Registered next to `scout_daily_scan` in
+  `app.py:_start_background()`, on the same scheduler object.
 
 Rationale: Scout's job scan is daily, so it does *not* poll more often than 6h
 and the brief's own rule would allow reuse — but the two have genuinely
@@ -290,8 +321,16 @@ and apprenticeship closure detection needs multiple polls per day to work). Two
 jobs on the same `sched` object keeps it *one scheduler*, which is what the
 constraint actually protects.
 
-The closing-soon pass rides on the same job, guarded to once per day via
-`log_audit` lookup.
+Single-worker safety is already handled: the Procfile pins `--workers 1` and
+`_start_background()` is guarded by the `ASFA_BG_STARTED` env flag, so the job
+registers once. If the worker count ever rises, that flag must become a real
+lock.
+
+The closing-soon pass rides inside the same job, guarded to once per calendar
+day by a `kv` flag (`apprenticeship_closing_soon_sent`) rather than a scan of
+sent alerts — Scout has no alerts table, and a kv flag survives restarts. The
+flag is only set once something has actually been sent, so a posting that
+starts closing later the same day is still caught on the next poll.
 
 ## New env vars
 
@@ -301,4 +340,20 @@ The closing-soon pass rides on the same job, guarded to once per day via
 | `APPRENTICESHIP_POLL_MINUTES` | `360` | poll interval |
 | `APPRENTICESHIP_MIN_LEVEL` | `4` | minimum apprenticeship level |
 
-Email reuses the existing `SCOUT_EMAIL_USER` / `SCOUT_EMAIL_PASS`.
+Email reuses the existing `SCOUT_EMAIL_USER` / `SCOUT_EMAIL_PASS`; Discord is
+optional via the existing `DISCORD_WEBHOOK_URL`. All three new vars have working
+defaults, so **nothing has to be set for this to run**.
+
+## Deliberate deviations from the brief
+
+Two, both flagged in code comments and covered by tests:
+
+1. **Short-alias word boundary** (`services/apprenticeships.py:_alias_matches`).
+   The brief specifies plain bidirectional substring matching. Verified that
+   this makes the `EY` alias match `"SURREY COUNTY COUNCIL"` and `MOD` match
+   `"MODUS LTD"` — false employer matches produce exactly the alert spam the
+   watchlist exists to prevent. Aliases of ≤3 chars therefore also require a
+   word-boundary hit. All six required assertions still pass, and `JLR` still
+   matches `"JLR HOLDINGS LTD"`.
+2. **`start_date` column**, which the brief's table doesn't list. `RawVacancy`
+   already parses it and it costs one nullable column to keep.
