@@ -217,7 +217,7 @@ def render_email(jobs: list, apprenticeships: list, heading: str = None,
       {_render_group("Apprenticeships", apprenticeships)}
       <tr>
         <td style="padding:16px 24px;color:#868e96;font-size:12px;">
-          Sent by ASFA Scout. Manage the employer watchlist at /scout.
+          Sent by ASFA Scout. Manage the employer watchlist at /scout/employers.
         </td>
       </tr>
     </table>
