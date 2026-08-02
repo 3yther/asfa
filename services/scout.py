@@ -22,9 +22,7 @@ Optional — email notification on new finds (Gmail SMTP):
 import logging
 import os
 import re
-import smtplib
 from datetime import datetime, timedelta
-from email.mime.text import MIMEText
 
 import requests
 
@@ -40,10 +38,9 @@ logger = logging.getLogger("asfa.scout")
 REED_BASE = "https://www.reed.co.uk/api/1.0/search"
 SERPAPI_BASE = "https://serpapi.com/search"
 
-# Email notification (Gmail SMTP) for new finds.
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
-NOTIFY_EMAIL_TO = "ami.salax08@gmail.com"
+# Email notification for new finds is handled by services/scout_notify, the
+# single alert path shared with the apprenticeship scanner (SMTP host, port and
+# recipient live there).
 
 # South-East London / North Kent catchment.
 LOCATIONS = [
@@ -255,46 +252,20 @@ def _store(job: dict, found_date: str, seen_urls: set, collected: list) -> bool:
 
 
 def _send_email(jobs: list) -> bool:
-    """Email the list of newly-found jobs via Gmail SMTP. No-op (returns False)
-    unless both SCOUT_EMAIL_USER and SCOUT_EMAIL_PASS are set and jobs is
-    non-empty. Best-effort: any failure is logged and swallowed."""
+    """Email the list of newly-found jobs.
+
+    Delegates to services/scout_notify, the single alert path shared with the
+    apprenticeship scanner — one notification can carry both sources, so there
+    is no second email system here. Same Gmail SMTP transport and the same
+    SCOUT_EMAIL_USER / SCOUT_EMAIL_PASS credentials as before; the body is now
+    the shared HTML template with a JOB badge per row.
+
+    Best-effort: returns False rather than raising if SMTP isn't configured.
+    """
     if not jobs:
         return False
-    user = os.getenv("SCOUT_EMAIL_USER")
-    password = os.getenv("SCOUT_EMAIL_PASS")
-    if not (user and password):
-        logger.info("scout: SCOUT_EMAIL_USER/SCOUT_EMAIL_PASS not set — "
-                    "skipping email notification")
-        return False
-
-    n = len(jobs)
-    subject = f"SCOUT — {n} new job{'s' if n != 1 else ''} found"
-    lines = []
-    for j in jobs:
-        lines.append(
-            f"• {j.get('title', '') or 'Untitled'} — {j.get('company', '') or 'Unknown'}\n"
-            f"  {j.get('location', '') or '—'}  |  posted: {j.get('posted_date', '') or 'n/a'}\n"
-            f"  {j.get('url', '') or '(no link)'}"
-        )
-    body = f"Scout found {n} new part-time role{'s' if n != 1 else ''}:\n\n" \
-           + "\n\n".join(lines)
-
-    try:
-        msg = MIMEText(body, "plain", "utf-8")
-        msg["Subject"] = subject
-        msg["From"] = user
-        msg["To"] = NOTIFY_EMAIL_TO
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(user, password)
-            server.sendmail(user, [NOTIFY_EMAIL_TO], msg.as_string())
-        logger.info("scout: emailed %d new job(s) to %s", n, NOTIFY_EMAIL_TO)
-        return True
-    except Exception as e:
-        logger.warning("scout email send failed: %s", e)
-        return False
+    from services import scout_notify
+    return scout_notify.alert_new_listings(jobs=jobs)
 
 
 def scan_jobs_reed(keywords, location="", limit=20) -> list:
