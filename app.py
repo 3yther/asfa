@@ -3689,11 +3689,15 @@ def api_scout_employers():
             return jsonify({"ok": False, "error": "name required"}), 400
         if Employer.query.filter_by(name=name).first():
             return jsonify({"ok": False, "error": "employer already exists"}), 409
+        try:
+            priority = int(d.get("priority") or 2)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "priority must be an integer"}), 400
         emp = Employer(
             name=name,
             aliases=(d.get("aliases") or "").strip(),
             sector=(d.get("sector") or "").strip() or None,
-            priority=int(d.get("priority") or 2),
+            priority=priority,
             notes=(d.get("notes") or "").strip(),
             watching=True,
         )
