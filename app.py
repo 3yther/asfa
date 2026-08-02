@@ -13,7 +13,7 @@ import secrets
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from dotenv import load_dotenv
 
@@ -3632,11 +3632,125 @@ def scout_page():
     return render_template("scout.html")
 
 
+@app.route("/scout/employers")
+def scout_employers_page():
+    """Apprenticeship employer watchlist — list, toggle watching, add."""
+    return render_template("employers.html")
+
+
 @app.route("/api/scout/jobs")
 def api_scout_jobs():
+    """Scout listings — part-time jobs and apprenticeships from one table.
+
+    `?source=` filters the mix: all (default) | job | apprenticeship. The param
+    is named `source` because that's the dashboard's filter vocabulary, but it
+    maps to the `listing_type` column — `scout_jobs.source` already means the
+    provider (reed / google_jobs / gov_uk). See INTEGRATION_NOTES.md.
+
+    Jobs keep the existing raw-SQL read path untouched; only the apprenticeship
+    branch goes through the ORM, and the combined view merges both newest-first.
+    """
     location = request.args.get("location") or None
     new_only = request.args.get("new_only") == "true"
-    return jsonify(db.get_scout_jobs(location=location, new_only=new_only))
+    source = (request.args.get("source") or "all").lower()
+
+    rows = db.get_scout_jobs(location=location, new_only=new_only)
+    if source == "job":
+        rows = [r for r in rows if (r.get("listing_type") or "job") == "job"]
+    elif source == "apprenticeship":
+        rows = [r for r in rows if r.get("listing_type") == "apprenticeship"]
+
+    # Days-to-close drives the dashboard's red "closes in Nd" pill. Computed
+    # server-side so the client doesn't have to parse dates.
+    today = date.today()
+    for r in rows:
+        r["days_to_close"] = None
+        cd = r.get("closing_date")
+        if cd:
+            try:
+                if isinstance(cd, str):
+                    cd = datetime.strptime(cd[:10], "%Y-%m-%d").date()
+                r["days_to_close"] = (cd - today).days
+            except (ValueError, TypeError):
+                pass
+    return jsonify(rows)
+
+
+@app.route("/api/scout/employers", methods=["GET", "POST"])
+def api_scout_employers():
+    """The apprenticeship employer watchlist. GET lists, POST adds."""
+    from models import Employer
+    from models import db as orm
+
+    if request.method == "POST":
+        d = request.get_json(silent=True) or {}
+        name = (d.get("name") or "").strip()
+        if not name:
+            return jsonify({"ok": False, "error": "name required"}), 400
+        if Employer.query.filter_by(name=name).first():
+            return jsonify({"ok": False, "error": "employer already exists"}), 409
+        emp = Employer(
+            name=name,
+            aliases=(d.get("aliases") or "").strip(),
+            sector=(d.get("sector") or "").strip() or None,
+            priority=int(d.get("priority") or 2),
+            notes=(d.get("notes") or "").strip(),
+            watching=True,
+        )
+        orm.session.add(emp)
+        orm.session.commit()
+        return jsonify({"ok": True, "employer": emp.to_dict()})
+
+    employers = Employer.query.order_by(
+        Employer.priority.asc(), Employer.name.asc()).all()
+    return jsonify([e.to_dict() for e in employers])
+
+
+@app.route("/api/scout/employers/<int:emp_id>", methods=["PUT", "DELETE"])
+def api_scout_employer_item(emp_id):
+    """Toggle `watching` (PUT) or drop an employer (DELETE).
+
+    Un-watching is the soft option and the one the UI uses: it stops scans and
+    alerts but keeps the employer and its history.
+    """
+    from models import Employer
+    from models import db as orm
+
+    emp = Employer.query.get(emp_id)
+    if not emp:
+        return jsonify({"ok": False, "error": "not found"}), 404
+
+    if request.method == "DELETE":
+        orm.session.delete(emp)
+        orm.session.commit()
+        return jsonify({"ok": True})
+
+    d = request.get_json(silent=True) or {}
+    if "watching" in d:
+        emp.watching = bool(d["watching"])
+    for field in ("aliases", "sector", "notes"):
+        if field in d:
+            setattr(emp, field, (d.get(field) or "").strip())
+    if "priority" in d:
+        emp.priority = int(d["priority"] or 2)
+    orm.session.commit()
+    return jsonify({"ok": True, "employer": emp.to_dict()})
+
+
+@app.route("/api/scout/apprenticeships/scan", methods=["POST"])
+def api_scout_apprenticeship_scan():
+    """Trigger a gov.uk scan by hand. POST-only so the CSRF gate covers it.
+
+    Always returns 200 with a summary so the frontend gets valid JSON even when
+    gov.uk is unreachable.
+    """
+    from services import apprenticeships
+    try:
+        summary = apprenticeships.scan_apprenticeships()
+    except Exception as e:
+        logger.error("apprenticeship scan failed: %s", e)
+        return jsonify({"ok": False, "error": str(e), "new": 0})
+    return jsonify({"ok": True, **summary})
 
 
 @app.route("/api/scout/scan", methods=["POST"])
@@ -4109,6 +4223,42 @@ def scout_daily_scan():
         logger.error("scout audit log failed: %s", e)
 
 
+def apprenticeship_scan_job():
+    """Every APPRENTICESHIP_POLL_MINUTES — scan gov.uk for apprenticeships.
+
+    Runs on its own cadence rather than inside scout_daily_scan: gov.uk
+    postings move faster than the daily job digest, and closure detection needs
+    several polls a day to mean anything. It's the same scheduler and the same
+    notifier — just a second job on it. The once-daily closing-soon reminder
+    rides along inside scan_apprenticeships().
+
+    Needs an app context: the apprenticeship half is SQLAlchemy-backed.
+    """
+    started = datetime.now()
+    outcome, summary = "success", {}
+    try:
+        from services import apprenticeships
+        with app.app_context():
+            summary = apprenticeships.scan_apprenticeships()
+        logger.info("Apprenticeship scan: %s", summary)
+        if summary.get("alerted"):
+            n = summary["alerted"]
+            db.add_notification(
+                f"🎓 {n} new apprenticeship{'s' if n != 1 else ''} "
+                f"from a watched employer.", "scout")
+    except Exception as e:
+        outcome = "failure"
+        logger.error("apprenticeship scan failed: %s", e)
+    try:
+        dur_ms = int((datetime.now() - started).total_seconds() * 1000)
+        db.log_audit("scout", "apprenticeship_scan", outcome,
+                     reason="scheduled gov.uk apprenticeship scan",
+                     details=summary, duration_ms=dur_ms)
+        db.update_error_budget("scout", outcome == "success")
+    except Exception as e:
+        logger.error("apprenticeship audit log failed: %s", e)
+
+
 # ── Security response headers ──────────────────────────────────────────────────
 # CSP ships in Report-Only mode: the app relies on inline scripts on every
 # page plus cdnjs/jsdelivr (Three.js, Chart.js, Phaser), Google Fonts, and
@@ -4237,6 +4387,15 @@ def _start_background():
         sched.add_job(scout_daily_scan, "cron", hour=6, minute=0, id="scout_daily_scan")
     except Exception as e:
         logger.error("failed to register scout daily scan: %s", e)
+    # Apprenticeship scan on its own interval (default 6h) so we don't hammer
+    # gov.uk. Same scheduler object as every other job — the Procfile pins
+    # --workers 1 and ASFA_BG_STARTED guards double-start, so it runs once.
+    try:
+        from services.apprenticeships import poll_minutes
+        sched.add_job(apprenticeship_scan_job, "interval",
+                      minutes=poll_minutes(), id="apprenticeship_scan")
+    except Exception as e:
+        logger.error("failed to register apprenticeship scan: %s", e)
     start_bot()
     threading.Thread(target=_generate_startup_briefing, daemon=True).start()
 
