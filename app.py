@@ -17,6 +17,10 @@ from datetime import date, datetime, timedelta
 
 from dotenv import load_dotenv
 
+# Security: .env holds live secrets (API keys, OAuth client secrets, the app
+# passphrase). It is gitignored — keep it that way, and keep it unreadable by
+# other local accounts with:
+#     chmod 600 .env
 load_dotenv()
 
 # ── Critical environment validation ─────────────────────────────────────────────
@@ -89,6 +93,13 @@ from services import spotify
 from services.weather import get_forecast, get_weather
 
 logging.basicConfig(level=logging.INFO)
+# httpx logs every request's full URL at INFO. python-telegram-bot rides on
+# httpx and Telegram puts the bot token in the URL *path*, so the root logger at
+# INFO writes the live token to stdout on every call — including the continuous
+# getUpdates poll — and from there into the Railway log stream. Pin both httpx
+# and its httpcore transport to WARNING so request URLs are never logged.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("asfa")
 
 app = Flask(__name__)
@@ -4418,4 +4429,9 @@ _start_background()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True, use_reloader=False)
+    # Debug off by default: debug=True serves the Werkzeug interactive debugger,
+    # and this binds 0.0.0.0. Opt in locally with FLASK_DEBUG=true. Prod is
+    # unaffected either way — the Procfile runs gunicorn, so this never executes.
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)),
+            debug=os.getenv("FLASK_DEBUG", "false").lower() == "true",
+            use_reloader=False)

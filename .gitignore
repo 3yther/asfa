@@ -1,4 +1,11 @@
+# Secrets. This repo is its own git root, so the parent repo's .gitignore does
+# NOT apply here — these rules have to be stated locally.
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
 *.db
 *.sqlite
 __pycache__/
