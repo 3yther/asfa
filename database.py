@@ -125,6 +125,27 @@ def _add_column(cur, table: str, column: str, coldef: str):
         cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coldef}")
 
 
+def _like_escape(value) -> str:
+    r"""Escape LIKE wildcards in user input so a search for "100%" matches the
+    literal text instead of turning into a full-table scan. Callers must pair
+    this with an ESCAPE '\' clause on the LIKE — SQLite has no default escape
+    character, so without it the backslashes stay in the pattern."""
+    return (str(value or "")
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_"))
+
+
+def _clamp_limit(limit, default: int, ceiling: int) -> int:
+    """Bound a caller-supplied row limit to 1..ceiling so a query-string value
+    can't ask for the whole table. Junk falls back to `default`."""
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(ceiling, limit))
+
+
 def init_db():
     with get_db() as conn:
         cursor = conn.cursor()
@@ -2176,7 +2197,7 @@ def search_restaurant_items(query: str, limit: int = 10) -> list:
     if len(q) < 2:
         return []
     limit = max(1, min(25, int(limit)))
-    like = f"%{q.lower()}%"
+    like = f"%{_like_escape(q.lower())}%"
     ph = "%s" if USE_POSTGRES else "?"
     with get_db() as conn:
         cur = conn.cursor()
@@ -2185,7 +2206,8 @@ def search_restaurant_items(query: str, limit: int = 10) -> list:
             f"ri.notes, r.name AS restaurant "
             f"FROM restaurant_items ri "
             f"LEFT JOIN restaurants r ON r.id = ri.restaurant_id "
-            f"WHERE LOWER(ri.item_name) LIKE {ph} OR LOWER(COALESCE(r.name,'')) LIKE {ph} "
+            f"WHERE LOWER(ri.item_name) LIKE {ph} ESCAPE '\\' "
+            f"OR LOWER(COALESCE(r.name,'')) LIKE {ph} ESCAPE '\\' "
             f"ORDER BY ri.item_name ASC LIMIT {ph}",
             (like, like, limit))
         rows = cur.fetchall()
@@ -3102,8 +3124,8 @@ def get_scout_jobs(location=None, new_only=False) -> list:
         ph = "%s" if USE_POSTGRES else "?"
         clauses, params = [], []
         if location:
-            clauses.append(f"LOWER(location) LIKE {ph}")
-            params.append(f"%{location.lower()}%")
+            clauses.append(f"LOWER(location) LIKE {ph} ESCAPE '\\'")
+            params.append(f"%{_like_escape(location.lower())}%")
         if new_only:
             clauses.append("is_new = 1")
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
@@ -5024,6 +5046,7 @@ def get_session(session_id: int) -> dict:
 
 def get_recent_sessions(limit=10) -> list:
     _ensure_gym_tables()
+    limit = _clamp_limit(limit, 10, 200)
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
@@ -5359,6 +5382,7 @@ def log_cardio_session(on_date=None, type="other", distance_miles=None,
 
 def get_recent_cardio_sessions(limit=20) -> list:
     _ensure_gym_tables()
+    limit = _clamp_limit(limit, 20, 200)
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
@@ -5399,6 +5423,7 @@ def delete_cardio_session(cardio_id: int) -> bool:
 def get_exercise_history(exercise_id: int, limit=20) -> list:
     """Best set (by estimated 1RM) per session for one exercise, newest first."""
     _ensure_gym_tables()
+    limit = _clamp_limit(limit, 20, 200)
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
@@ -5491,6 +5516,7 @@ def log_body_stat(date, weight_kg, notes="") -> None:
 
 def get_body_stats(limit=30) -> list:
     _ensure_gym_tables()
+    limit = _clamp_limit(limit, 30, 365)
     with get_db() as conn:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
@@ -7247,12 +7273,12 @@ def get_exercises(category=None, equipment=None, home_only=False, q=None,
         where.append(f"difficulty = {ph}")
         params.append(difficulty)
     if q:
-        like = f"%{str(q).lower()}%"
+        like = f"%{_like_escape(str(q).lower())}%"
         where.append(
-            f"(LOWER(name) LIKE {ph} "
-            f"OR LOWER(COALESCE(target_muscle, '')) LIKE {ph} "
-            f"OR LOWER(COALESCE(equipment, '')) LIKE {ph} "
-            f"OR LOWER(COALESCE(category, '')) LIKE {ph})")
+            f"(LOWER(name) LIKE {ph} ESCAPE '\\' "
+            f"OR LOWER(COALESCE(target_muscle, '')) LIKE {ph} ESCAPE '\\' "
+            f"OR LOWER(COALESCE(equipment, '')) LIKE {ph} ESCAPE '\\' "
+            f"OR LOWER(COALESCE(category, '')) LIKE {ph} ESCAPE '\\')")
         params.extend([like, like, like, like])
     clause = ("WHERE " + " AND ".join(where)) if where else ""
 
@@ -8178,16 +8204,18 @@ def search_fragrance_reference(query: str, limit: int = 8) -> list:
         ph = "%s" if USE_POSTGRES else "?"
         # Prefer prefix matches (index-friendly), fall back to substring, dedup by
         # name+brand, cap at `limit`. Two passes keep the common case fast.
+        esc = _like_escape(q)
         cur.execute(
             f"SELECT name, brand, concentration, accords, notes FROM fragrance_reference "
-            f"WHERE name LIKE {ph} ORDER BY name LIMIT {ph}", (q + "%", limit))
+            f"WHERE name LIKE {ph} ESCAPE '\\' ORDER BY name LIMIT {ph}", (esc + "%", limit))
         rows = [dict(r) for r in cur.fetchall()]
         if len(rows) < limit:
             seen = {(r["name"], r["brand"]) for r in rows}
             cur.execute(
                 f"SELECT name, brand, concentration, accords, notes FROM fragrance_reference "
-                f"WHERE name LIKE {ph} AND name NOT LIKE {ph} ORDER BY name LIMIT {ph}",
-                ("%" + q + "%", q + "%", limit - len(rows)))
+                f"WHERE name LIKE {ph} ESCAPE '\\' AND name NOT LIKE {ph} ESCAPE '\\' "
+                f"ORDER BY name LIMIT {ph}",
+                ("%" + esc + "%", esc + "%", limit - len(rows)))
             for r in cur.fetchall():
                 r = dict(r)
                 if (r["name"], r["brand"]) not in seen:
