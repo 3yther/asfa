@@ -1727,7 +1727,7 @@ def api_gym_session_end(session_id):
 
 @app.route("/api/gym/sessions")
 def api_gym_sessions():
-    limit = int(request.args.get("limit", 10))
+    limit = request.args.get("limit", 10, type=int)
     return jsonify(db.get_recent_sessions(limit))
 
 
@@ -1986,7 +1986,7 @@ def api_gym_session_notes(session_id):
 # ── Cardio (standalone — never counts as a gym day) ──────────────────────────
 @app.route("/api/gym/cardio")
 def api_gym_cardio_list():
-    limit = int(request.args.get("limit", 20))
+    limit = request.args.get("limit", 20, type=int)
     return jsonify(db.get_recent_cardio_sessions(limit))
 
 
@@ -2032,7 +2032,7 @@ def api_gym_pr(exercise_id):
 
 @app.route("/api/gym/history/<int:exercise_id>")
 def api_gym_history(exercise_id):
-    limit = int(request.args.get("limit", 20))
+    limit = request.args.get("limit", 20, type=int)
     return jsonify(db.get_exercise_history(exercise_id, limit))
 
 
@@ -2049,7 +2049,7 @@ def api_gym_log_body_stat():
 
 @app.route("/api/gym/body-stats")
 def api_gym_body_stats():
-    limit = int(request.args.get("limit", 30))
+    limit = request.args.get("limit", 30, type=int)
     return jsonify(db.get_body_stats(limit))
 
 
