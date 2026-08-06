@@ -172,7 +172,7 @@ $$(".gym-subtab").forEach(b => b.addEventListener("click", () => switchTab(b.dat
 /* ══ 2. DASHBOARD ═════════════════════════════════════════════════════════ */
 async function loadDashboard() {
   try {
-    const [xp, ranks, prs, sessions, recovery, weekly, cal, body, deload, restDays, cardio] = await Promise.all([
+    const [xp, ranks, prs, sessions, recovery, weekly, cal, body, deload, restDays, cardio, expenditure] = await Promise.all([
       apiGet(`${API}/xp`), apiGet(`${API}/ranks`), apiGet(`${API}/prs`),
       apiGet(`${API}/sessions?limit=60`), apiGet(`${API}/muscle-recovery`),
       apiGet(`${API}/volume/weekly`), apiGet(`${API}/sessions/calendar?months=3`),
@@ -180,6 +180,7 @@ async function loadDashboard() {
       apiGet(`${API}/deload-check`).catch(() => ({})),
       apiGet(`${API}/rest-days`).catch(() => []),
       apiGet(`${API}/cardio?limit=30`).catch(() => []),
+      apiGet(`${API}/expenditure-trend?days=7`).catch(() => null),
     ]);
     PR_BY_EX = {}; prs.forEach(p => PR_BY_EX[p.exercise_id] = p);
     renderStats(xp, sessions, body);
@@ -190,6 +191,7 @@ async function loadDashboard() {
     renderNextTargets(sessions);
     renderCalendar(cal, sessions);
     renderWeeklyVolume(weekly);
+    renderExpenditure(expenditure);
     renderDeloadBanner(deload);
     renderRestDayPrompt(sessions, restDays, cardio);
   } catch (e) { console.error("dashboard load failed", e); toast("Could not load dashboard"); }
@@ -426,6 +428,107 @@ function renderWeeklyVolume(weekly) {
       plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmtKg(c.raw) + " kg" } } },
       scales: gridScales(true) },
   });
+}
+
+/* ── Caloric expenditure (burn / goal ETA / pace + 7-day trend) ── */
+const PACE_LABEL = {
+  "on-track": { text: "On track", cls: "good" },
+  "too-fast": { text: "Too fast", cls: "warn" },
+  "plateau":  { text: "Plateau",  cls: "warn" },
+};
+// A day the backend could not compute, explained in the user's terms.
+const EXP_REASON = {
+  "no-intake": "no food logged",
+  "no-weight": "no weigh-in nearby",
+  "implausible": "reading out of range",
+};
+
+function renderExpenditure(exp) {
+  const cards = $("#exp-cards"), empty = $("#exp-empty"), foot = $("#exp-foot");
+  if (!cards) return;
+  killChart("exp");
+  if (!exp) {
+    cards.innerHTML = "";
+    $("#exp-chart-wrap").hidden = true;
+    empty.hidden = false; empty.textContent = "Expenditure data unavailable.";
+    foot.textContent = "";
+    return;
+  }
+
+  const burn = exp.daily_burn;
+  const pace = PACE_LABEL[exp.pace_status] || PACE_LABEL.plateau;
+  // pace_kg_week is signed (negative = losing); show it as a rate with direction.
+  const paceKg = exp.pace_kg_week;
+  const paceSub = paceKg == null ? "not enough weigh-ins"
+    : `${paceKg > 0 ? "+" : ""}${round1(paceKg)} kg/week`;
+  const etaSub = exp.goal_eta_date
+    ? new Date(exp.goal_eta_date + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+    : (exp.note || "not on a losing trend");
+  const etaVal = exp.goal_eta_days == null ? "—" : `${exp.goal_eta_days}d`;
+
+  cards.innerHTML = `
+    <div class="stat-card sci-fi-panel">
+      <div class="stat-value">${burn == null ? "—" : Math.round(burn).toLocaleString()}</div>
+      <div class="stat-label">Daily Burn</div>
+      <div class="stat-sub">${burn == null ? "log food + weight" : `kcal · ${exp.valid_days}/${exp.window_days}d measured`}</div>
+    </div>
+    <div class="stat-card sci-fi-panel">
+      <div class="stat-value gold">${etaVal}</div>
+      <div class="stat-label">To ${fmtKg(exp.target_kg)}kg</div>
+      <div class="stat-sub">${esc(etaSub)}</div>
+    </div>
+    <div class="stat-card sci-fi-panel">
+      <div class="stat-value exp-pace-${pace.cls}">${pace.text}</div>
+      <div class="stat-label">Pace</div>
+      <div class="stat-sub">${esc(paceSub)}${exp.current_kg != null ? ` · now ${fmtKg(exp.current_kg)}kg` : ""}</div>
+    </div>`;
+
+  const trend = exp.trend || [];
+  const measured = trend.filter(d => d.expenditure != null);
+  if (!measured.length) {
+    $("#exp-chart-wrap").hidden = true;
+    empty.hidden = false;
+    empty.textContent = "Log meals and step on the scale for a few days to see your burn trend.";
+    foot.textContent = "";
+    return;
+  }
+  empty.hidden = true;
+  $("#exp-chart-wrap").hidden = false;
+
+  const labels = trend.map(d => new Date(d.date + "T00:00:00").toLocaleDateString(undefined, { weekday: "short" }));
+  CHARTS.exp = new Chart($("#exp-chart"), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        { label: "Burn", data: trend.map(d => d.expenditure), borderColor: CYAN,
+          backgroundColor: "rgba(0,217,255,.1)", fill: true, tension: .3,
+          pointRadius: 3, spanGaps: true },
+        { label: "7-day avg", data: trend.map(d => d.rolling_avg), borderColor: GOLD,
+          borderDash: [5, 4], fill: false, tension: .3, pointRadius: 0, spanGaps: true },
+        { label: "Eaten", data: trend.map(d => d.meal_count ? d.calories_logged : null),
+          borderColor: "rgba(138,170,170,.6)", fill: false, tension: .3,
+          pointRadius: 0, borderWidth: 1 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: "#8aa" } },
+        tooltip: { callbacks: { label: c => {
+          const d = trend[c.dataIndex];
+          if (c.raw == null) return `${c.dataset.label}: ${EXP_REASON[d.reason] || "no data"}`;
+          return `${c.dataset.label}: ${Math.round(c.raw).toLocaleString()} kcal`;
+        } } },
+      },
+      scales: gridScales(),
+    },
+  });
+
+  const skipped = trend.length - measured.length;
+  foot.textContent = skipped
+    ? `${skipped} day${skipped > 1 ? "s" : ""} not shown — needs both a food log and a weigh-in.`
+    : "";
 }
 
 /* ══ 3. BODYGRAPH (body-highlighter, front + back) ═════════════════════════ */

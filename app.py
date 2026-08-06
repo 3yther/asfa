@@ -2053,6 +2053,17 @@ def api_gym_body_stats():
     return jsonify(db.get_body_stats(limit))
 
 
+@app.route("/api/gym/expenditure-trend")
+def api_gym_expenditure_trend():
+    """Back-calculated daily burn, its 7-day trend, and the bodyweight-goal ETA.
+    `days` is clamped in the DB layer; `target_kg` overrides the default goal."""
+    days = request.args.get("days", 7, type=int)
+    target = request.args.get("target_kg", type=float)
+    if target is not None and not 20 < target < 300:
+        return jsonify({"error": "invalid target_kg"}), 400
+    return jsonify(db.get_expenditure_summary(days, target))
+
+
 @app.route("/api/gym/ranks")
 def api_gym_ranks():
     return jsonify(db.get_muscle_ranks())
