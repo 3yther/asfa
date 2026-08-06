@@ -8027,6 +8027,342 @@ def latest_body_composition() -> dict:
         return dict(r) if r else None
 
 
+# ── Caloric expenditure (gym page, phase 1) ──────────────────────────────────────
+#
+# Back-calculates what the body actually burned, rather than guessing it from a
+# BMR formula:
+#
+#     expenditure = calories eaten + (kg of tissue lost x kcal per kg)
+#
+# Eat 2,000 kcal and lose 0.1 kg in a day and you spent 2,000 + 770 = 2,770.
+#
+# NOTE ON THE CONSTANT — the familiar "3,500 kcal" figure is per POUND of fat.
+# Weight here is stored in kilograms (`body_composition.weight_kg`), so using
+# 3,500 straight against a kg delta under-counts the energy in lost tissue by
+# ~2.2x. 7,700 kcal/kg is the same Wishnofsky number, unit-converted.
+KCAL_PER_KG_FAT = 7700.0
+
+# Bodyweight goal for the ETA card. No goal store exists yet, so this is the
+# default and every entry point takes an override argument.
+GOAL_WEIGHT_KG = 75.0
+
+# Window for the rolling average. Daily scale readings are dominated by water,
+# glycogen and gut content; a week of them is the shortest span where the real
+# trend outweighs the noise.
+_EXPENDITURE_ROLL_WINDOW = 7
+
+# Days of scan history the pace/ETA regression looks back over.
+_PACE_LOOKBACK_DAYS = 28
+
+# A day's back-calculated burn outside this band is noise (a water-weight swing,
+# a half-logged day), not metabolism. Such days are dropped from the series
+# rather than clamped — a fabricated number would poison the rolling average.
+_EXPENDITURE_MIN = 800.0
+_EXPENDITURE_MAX = 8000.0
+
+# kg/week loss thresholds for `pace_status`. Above ~1 kg/week the deficit starts
+# costing lean mass; below ~0.15 kg/week nothing is moving.
+_PACE_TOO_FAST_KG_WEEK = 1.0
+_PACE_PLATEAU_KG_WEEK = 0.15
+
+
+def _parse_day(d):
+    """'YYYY-MM-DD' (or a date/datetime) -> date. None on anything unparseable —
+    `body_composition.date_scanned` is free-form TEXT, so junk rows are possible."""
+    if isinstance(d, datetime):
+        return d.date()
+    if isinstance(d, date):
+        return d
+    try:
+        return datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _weight_scan_points(start_day: date, end_day: date) -> list:
+    """Every known bodyweight reading in [start_day, end_day] as sorted
+    (date, kg) pairs, one per day.
+
+    Merges the two places a weight can land: `body_composition` (smart-scale
+    scans, the richer record) and `gym_body_stats` (weights typed into the gym
+    tracker). A day present in both takes the scan, since that is the measured
+    value. Rows with a null/zero weight or an unparseable date are skipped."""
+    _ensure_body_tables()
+    _ensure_gym_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    lo, hi = start_day.isoformat(), end_day.isoformat()
+    by_day = {}
+    with get_db() as conn:
+        cur = conn.cursor()
+        # Manual entries first so a scan on the same day overwrites them.
+        cur.execute(
+            f"SELECT date AS d, weight_kg FROM gym_body_stats "
+            f"WHERE date >= {ph} AND date <= {ph} ORDER BY date ASC, id ASC",
+            (lo, hi))
+        manual = cur.fetchall()
+        cur.execute(
+            f"SELECT date_scanned AS d, weight_kg FROM body_composition "
+            f"WHERE date_scanned >= {ph} AND date_scanned <= {ph} "
+            f"ORDER BY date_scanned ASC, id ASC", (lo, hi))
+        scans = cur.fetchall()
+    for rows in (manual, scans):
+        for r in rows:
+            day, kg = _parse_day(r["d"]), _to_float(r["weight_kg"])
+            if day is None or not kg or kg <= 0:
+                continue
+            by_day[day] = kg
+    return sorted(by_day.items())
+
+
+def _interpolate_weights(points: list, days: list) -> dict:
+    """Map each day in `days` to a weight, linearly interpolating between the
+    surrounding scans.
+
+    This is what makes the algorithm survive real logging habits. Scans are
+    weekly-ish and skip weekends; differencing raw readings would yield a weight
+    delta on scan days only and nothing in between. Spreading a gap's delta
+    evenly across its days instead gives every day a defensible share of it.
+
+    Days before the first scan or after the last are absent from the result —
+    extrapolating past the known data would invent trend that was never measured."""
+    if not points:
+        return {}
+    out = {}
+    known = dict(points)
+    first, last = points[0][0], points[-1][0]
+    for d in days:
+        if d < first or d > last:
+            continue
+        if d in known:
+            out[d] = known[d]
+            continue
+        # Bracket the day: last scan before it, first scan after it.
+        prev = max((p for p in points if p[0] < d), key=lambda p: p[0])
+        nxt = min((p for p in points if p[0] > d), key=lambda p: p[0])
+        span = (nxt[0] - prev[0]).days
+        if span <= 0:
+            out[d] = prev[1]
+            continue
+        out[d] = prev[1] + (nxt[1] - prev[1]) * ((d - prev[0]).days / span)
+    return out
+
+
+def _expenditure_series(days: list) -> list:
+    """Back-calculated expenditure for each day in `days` (a sorted list of
+    `date`s). One batched intake query and one batched weight read, so the cost
+    does not scale with the window.
+
+    Each entry always carries `date`; `expenditure` is None whenever the day
+    cannot honestly be computed, with `reason` saying which input was missing."""
+    if not days:
+        return []
+    start, end = days[0], days[-1]
+    # Pad the scan fetch on BOTH sides. Interpolating a day needs a scan on each
+    # side of it, and either bracket can fall outside the requested window — ask
+    # for a single day mid-gap and both do. Fetching only [start, end] silently
+    # made every such day uncomputable.
+    pad = timedelta(days=_PACE_LOOKBACK_DAYS)
+    points = _weight_scan_points(start - pad, end + pad)
+    wanted = [start - timedelta(days=1)] + list(days)
+    weights = _interpolate_weights(points, wanted)
+
+    _ensure_meals_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT date, COALESCE(SUM(calories), 0) AS kcal, COUNT(*) AS n "
+            f"FROM meals WHERE date >= {ph} AND date <= {ph} GROUP BY date",
+            (start.isoformat(), end.isoformat()))
+        intake = {r["date"]: r for r in cur.fetchall()}
+
+    out = []
+    for d in days:
+        iso = d.isoformat()
+        row = intake.get(iso)
+        kcal = round(float(row["kcal"]), 1) if row else 0.0
+        meals = int(row["n"]) if row else 0
+        w_now = weights.get(d)
+        w_prev = weights.get(d - timedelta(days=1))
+        entry = {
+            "date": iso,
+            "calories_logged": kcal,
+            "meal_count": meals,
+            "weight_kg": round(w_now, 2) if w_now is not None else None,
+            "prev_weight_kg": round(w_prev, 2) if w_prev is not None else None,
+            "weight_change_kg": None,
+            "expenditure": None,
+            "reason": None,
+        }
+        # An unlogged day is not a zero-calorie day. Treating it as one would
+        # report a starvation-level burn for every day the user forgot to log.
+        if meals == 0:
+            entry["reason"] = "no-intake"
+            out.append(entry)
+            continue
+        if w_now is None or w_prev is None:
+            entry["reason"] = "no-weight"
+            out.append(entry)
+            continue
+        # Positive = kg lost that day, which is energy the body spent on top of
+        # what was eaten. Gaining flips the sign and correctly lowers the burn.
+        lost = w_prev - w_now
+        entry["weight_change_kg"] = round(lost, 3)
+        burn = kcal + lost * KCAL_PER_KG_FAT
+        if not (_EXPENDITURE_MIN <= burn <= _EXPENDITURE_MAX):
+            entry["reason"] = "implausible"
+            out.append(entry)
+            continue
+        entry["expenditure"] = round(burn, 1)
+        out.append(entry)
+    return out
+
+
+def get_daily_expenditure(date=None) -> dict:
+    """Total calories burned on `date` (today in the app timezone by default).
+
+    `expenditure` is None when the day has no logged food, no bracketing weight
+    data, or produces a physiologically implausible number; `reason` says which."""
+    day = _parse_day(date or today_str())
+    if day is None:
+        return {"date": str(date), "calories_logged": 0.0, "meal_count": 0,
+                "weight_kg": None, "prev_weight_kg": None,
+                "weight_change_kg": None, "expenditure": None,
+                "reason": "bad-date"}
+    return _expenditure_series([day])[0]
+
+
+def get_expenditure_trend(days: int = 7, end_date=None) -> dict:
+    """Daily expenditure for the last `days` ending at `end_date` (today by
+    default), each day carrying a trailing 7-day rolling average.
+
+    The extra `_EXPENDITURE_ROLL_WINDOW - 1` days of history are computed but not
+    returned, so the earliest displayed day has a full-width average behind it
+    instead of averaging over itself. Days that could not be computed are still
+    returned (with expenditure None) so gaps stay visible on the chart, but they
+    are excluded from every average rather than counted as zero."""
+    days = _clamp_limit(days, 7, 90)
+    end = _parse_day(end_date or today_str()) or _parse_day(today_str())
+    span = days + _EXPENDITURE_ROLL_WINDOW - 1
+    all_days = [end - timedelta(days=span - 1 - i) for i in range(span)]
+    series = _expenditure_series(all_days)
+
+    for i, entry in enumerate(series):
+        lo = max(0, i - _EXPENDITURE_ROLL_WINDOW + 1)
+        vals = [e["expenditure"] for e in series[lo:i + 1]
+                if e["expenditure"] is not None]
+        entry["rolling_avg"] = round(sum(vals) / len(vals), 1) if vals else None
+
+    window = series[-days:]
+    valid = [e["expenditure"] for e in window if e["expenditure"] is not None]
+    return {
+        "days": days,
+        "trend": window,
+        "average": round(sum(valid) / len(valid), 1) if valid else None,
+        "valid_days": len(valid),
+        "kcal_per_kg": KCAL_PER_KG_FAT,
+    }
+
+
+def get_goal_eta(target_kg: float = None, lookback_days: int = None) -> dict:
+    """Days until `target_kg` at the current rate of loss.
+
+    Pace is a least-squares slope over the scans in the lookback window, not a
+    first-vs-last difference — one bloated morning at either end would otherwise
+    swing the ETA by weeks. `pace_kg_week` is signed: negative means losing."""
+    target = GOAL_WEIGHT_KG if target_kg is None else float(target_kg)
+    lookback = _clamp_limit(lookback_days or _PACE_LOOKBACK_DAYS, _PACE_LOOKBACK_DAYS, 365)
+    end = _parse_day(today_str())
+    points = _weight_scan_points(end - timedelta(days=lookback - 1), end)
+
+    out = {
+        "target_kg": round(target, 1),
+        "current_kg": None,
+        "kg_to_go": None,
+        "pace_kg_week": None,
+        "pace_status": "plateau",
+        "goal_eta_date": None,
+        "goal_eta_days": None,
+        "data_points": len(points),
+        "note": None,
+    }
+    if not points:
+        out["note"] = "No weight logged in the last %d days." % lookback
+        return out
+
+    current = points[-1][1]
+    out["current_kg"] = round(current, 1)
+    out["kg_to_go"] = round(current - target, 1)
+
+    if len(points) < 2:
+        out["note"] = "Need at least two weigh-ins to measure a pace."
+        return out
+
+    # Least-squares slope of kg against days-since-first-scan.
+    base = points[0][0]
+    xs = [(d - base).days for d, _ in points]
+    ys = [kg for _, kg in points]
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    denom = sum((x - mx) ** 2 for x in xs)
+    if denom == 0:                       # every reading on one day
+        out["note"] = "Need weigh-ins on more than one day to measure a pace."
+        return out
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / denom  # kg/day
+    out["pace_kg_week"] = round(slope * 7, 2)
+
+    loss_per_week = -slope * 7            # positive when losing
+    if loss_per_week > _PACE_TOO_FAST_KG_WEEK:
+        out["pace_status"] = "too-fast"
+        out["note"] = "Losing faster than 1 kg/week risks lean mass."
+    elif loss_per_week < _PACE_PLATEAU_KG_WEEK:
+        out["pace_status"] = "plateau"
+        out["note"] = ("Weight is trending up." if loss_per_week < 0
+                       else "Weight has been flat this month.")
+    else:
+        out["pace_status"] = "on-track"
+
+    if current <= target:
+        out["goal_eta_days"] = 0
+        out["goal_eta_date"] = end.isoformat()
+        out["note"] = "Target reached."
+        return out
+    if loss_per_week <= 0:                # flat or gaining — never arrives
+        return out
+
+    eta_days = int(round((current - target) / (loss_per_week / 7)))
+    out["goal_eta_days"] = eta_days
+    out["goal_eta_date"] = (end + timedelta(days=eta_days)).isoformat()
+    return out
+
+
+def get_expenditure_summary(days: int = 7, target_kg: float = None) -> dict:
+    """Everything the gym expenditure widget renders, in the endpoint's shape."""
+    trend = get_expenditure_trend(days)
+    goal = get_goal_eta(target_kg)
+    today = get_daily_expenditure()
+    # Prefer the rolling average over today's single reading: one day of scale
+    # noise should not redraw the headline number.
+    daily_burn = trend["average"]
+    if daily_burn is None:
+        daily_burn = today["expenditure"]
+    return {
+        "daily_burn": daily_burn,
+        "trend": trend["trend"],
+        "goal_eta_date": goal["goal_eta_date"],
+        "goal_eta_days": goal["goal_eta_days"],
+        "pace_kg_week": goal["pace_kg_week"],
+        "pace_status": goal["pace_status"],
+        "today": today,
+        "current_kg": goal["current_kg"],
+        "target_kg": goal["target_kg"],
+        "kg_to_go": goal["kg_to_go"],
+        "valid_days": trend["valid_days"],
+        "window_days": trend["days"],
+        "note": goal["note"],
+    }
+
+
 def add_gym_photo(date_str, filename, weight_kg=None, body_fat_percent=None) -> dict:
     """Record an uploaded progress photo, auto-tagged with the day's weight/bf%."""
     _ensure_body_tables()

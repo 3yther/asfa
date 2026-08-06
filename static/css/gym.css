@@ -111,6 +111,14 @@
 .stat-card .stat-label { font-size: .68rem; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; }
 .stat-card .stat-sub { font-size: .7rem; color: var(--text); }
 
+/* ── Caloric expenditure ──────────────────────────────────────────────── */
+.exp-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 14px; }
+.exp-cards .stat-value { font-size: 1.35rem; }
+.exp-pace-good { color: var(--gym-green); }
+.exp-pace-warn { color: var(--gym-amber); }
+.exp-card #exp-foot:empty { display: none; }
+.exp-card #exp-foot { margin-top: 8px; }
+
 /* ── Bodygraph (body-highlighter, front + back) ───────────────────────── */
 .bodygraph-wrap { display: grid; grid-template-columns: 280px 1fr; gap: 20px; align-items: start; }
 .bodygraph-left { display: flex; justify-content: center; }
@@ -644,6 +652,7 @@ body.rest-active .exercise-list { padding-bottom: 210px; }
 /* ── Responsive ───────────────────────────────────────────────────────── */
 @media (max-width: 720px) {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .exp-cards { grid-template-columns: 1fr; }
   .bodygraph-wrap { grid-template-columns: 1fr; }
   .bodygraph-left { margin-bottom: 8px; }
   .dash-two-col { grid-template-columns: 1fr; gap: 16px; }
