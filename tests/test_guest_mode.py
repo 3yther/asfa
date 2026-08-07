@@ -258,5 +258,6 @@ def test_every_mapped_endpoint_is_covered_by_parity():
               "api_nutrition_frequent_at_hour", "api_reflection",
               "api_missions_today", "api_conversation", "api_audit",
               "api_agents_energy", "api_fragrances", "api_scout_jobs",
+              "api_scout_jobs_active", "api_scout_jobs_history",
               "api_scout_pipeline_reminders"}
     assert mapped - exempt - set(_PARITY_URLS) == set()

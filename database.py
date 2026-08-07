@@ -3079,6 +3079,11 @@ def _ensure_scout_tables():
         _add_column(cur, "scout_pipeline", "cv_match_score", "INTEGER")
         _add_column(cur, "scout_pipeline", "missing_keywords", "TEXT")
         _add_column(cur, "scout_pipeline", "match_analysis_at", "TEXT")
+        # Job lifecycle: NULL = active, a timestamp = archived into history.
+        # Nullable and unset, so every existing row reads back as active.
+        # `found_date` is the creation timestamp (see JOB_ACTIVE_DAYS).
+        _add_column(cur, "scout_jobs", "archived_at",
+                    "TIMESTAMP" if USE_POSTGRES else "TEXT")
     _SCOUT_READY = True
 
 
@@ -3115,9 +3120,15 @@ def add_scout_job(title, company, location, salary, job_type, url, description,
     return True
 
 
-def get_scout_jobs(location=None, new_only=False) -> list:
+def get_scout_jobs(location=None, new_only=False, archived=None) -> list:
     """All stored jobs, newest first. Optional case-insensitive location filter
-    and a new_only flag (is_new = 1)."""
+    and a new_only flag (is_new = 1).
+
+    `archived` selects the lifecycle half:
+        None  — every job, archived or not (the original behaviour)
+        False — active only (archived_at IS NULL)
+        True  — history only (archived_at IS NOT NULL), newest-archived first
+    """
     _ensure_scout_tables()
     with get_db() as conn:
         cur = conn.cursor()
@@ -3128,9 +3139,86 @@ def get_scout_jobs(location=None, new_only=False) -> list:
             params.append(f"%{_like_escape(location.lower())}%")
         if new_only:
             clauses.append("is_new = 1")
+        if archived is True:
+            clauses.append("archived_at IS NOT NULL")
+        elif archived is False:
+            clauses.append("archived_at IS NULL")
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        cur.execute(f"SELECT * FROM scout_jobs {where} ORDER BY id DESC", tuple(params))
+        order = "archived_at DESC, id DESC" if archived is True else "id DESC"
+        cur.execute(f"SELECT * FROM scout_jobs {where} ORDER BY {order}", tuple(params))
         return [dict(r) for r in cur.fetchall()]
+
+
+# ── Scout job lifecycle (active → archived history → hard delete) ────────────
+# A listing stays active for JOB_ACTIVE_DAYS after it was found; the nightly
+# scheduler job then stamps archived_at and it drops into the history view.
+# Nothing is ever deleted automatically — a hard delete is always a deliberate
+# user action through delete_scout_jobs().
+#
+# `found_date` is the creation timestamp: both writers stamp it
+# "%Y-%m-%d %H:%M:%S" (services/scout.py raw SQL, services/apprenticeships.py
+# ORM) and models.py documents it as "acts as first_seen". No separate
+# created_at column is introduced — a second timestamp on the same row could
+# only drift from it.
+JOB_ACTIVE_DAYS = 14
+
+# Upper bound on one bulk delete, so a malformed or hostile payload can't build
+# an unbounded IN (...) list.
+MAX_BULK_DELETE = 500
+
+
+def archive_stale_scout_jobs(days: int = JOB_ACTIVE_DAYS, now=None) -> int:
+    """Archive every active job found more than `days` ago. Returns the count.
+
+    Idempotent by construction: only rows with archived_at IS NULL are touched,
+    so a second run the same night (or after a redeploy) is a no-op and an
+    already-archived row keeps its original timestamp.
+
+    Rows with no found_date can't be aged, so they stay active rather than being
+    archived on a guess.
+    """
+    _ensure_scout_tables()
+    now = now or now_local()
+    cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    stamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"UPDATE scout_jobs SET archived_at = {ph} "
+            f"WHERE archived_at IS NULL AND found_date IS NOT NULL "
+            f"AND found_date <> '' AND found_date < {ph}",
+            (stamp, cutoff))
+        return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+
+def delete_scout_jobs(job_ids, archived_only: bool = True) -> int:
+    """Hard-delete jobs by id. Returns the number of rows actually removed.
+
+    `archived_only` (the default) is the guard rail behind the history screen's
+    bulk delete: an id that is still active is ignored rather than destroyed, so
+    a stale page or a wrong id can't wipe live listings. Non-integer ids are
+    dropped here too — callers validate first, this is defence in depth.
+    """
+    _ensure_scout_tables()
+    ids = []
+    for jid in (job_ids or []):
+        try:
+            ids.append(int(jid))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(ids))[:MAX_BULK_DELETE]
+    if not ids:
+        return 0
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        marks = ",".join([ph] * len(ids))
+        where = f"id IN ({marks})"
+        if archived_only:
+            where += " AND archived_at IS NOT NULL"
+        cur.execute(f"DELETE FROM scout_jobs WHERE {where}", tuple(ids))
+        return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
 
 _APPRENTICESHIPS_READY = False

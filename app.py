@@ -291,7 +291,8 @@ _GUEST_EMPTY_LISTS = frozenset({
     # everything else the demo screens poll
     "api_finance_recent", "api_goals", "api_reflection", "api_missions_today",
     "api_conversation", "api_audit", "api_agents_energy", "api_fragrances",
-    "api_scout_jobs", "api_scout_pipeline_reminders",
+    "api_scout_jobs", "api_scout_jobs_active", "api_scout_jobs_history",
+    "api_scout_pipeline_reminders",
 })
 
 _GUEST_NUTRITION_GOALS = {"calorie_goal": 2500, "protein_goal": 160,
@@ -3659,9 +3660,22 @@ def scout_employers_page():
     return render_template("employers.html")
 
 
-@app.route("/api/scout/jobs")
-def api_scout_jobs():
-    """Scout listings — part-time jobs and apprenticeships from one table.
+def _scout_timestamp(value):
+    """Normalise a scout timestamp column for JSON.
+
+    SQLite hands these back as the raw TEXT they were written as; Postgres
+    returns a datetime. The frontend parses one shape, so flatten here.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    return str(value)
+
+
+def _scout_listing_rows(archived=None):
+    """Shared read path for the listings views: /api/scout/jobs (everything),
+    /active (archived_at IS NULL) and /history (archived_at IS NOT NULL).
 
     `?source=` filters the mix: all (default) | job | apprenticeship. The param
     is named `source` because that's the dashboard's filter vocabulary, but it
@@ -3675,7 +3689,8 @@ def api_scout_jobs():
     new_only = request.args.get("new_only") == "true"
     source = (request.args.get("source") or "all").lower()
 
-    rows = db.get_scout_jobs(location=location, new_only=new_only)
+    rows = db.get_scout_jobs(location=location, new_only=new_only,
+                             archived=archived)
     if source == "job":
         rows = [r for r in rows if (r.get("listing_type") or "job") == "job"]
     elif source == "apprenticeship":
@@ -3694,7 +3709,66 @@ def api_scout_jobs():
                 r["days_to_close"] = (cd - today).days
             except (ValueError, TypeError):
                 pass
-    return jsonify(rows)
+        # Lifecycle fields. `found_date` is the row's creation stamp (see
+        # database.JOB_ACTIVE_DAYS); it is surfaced as created_at so the
+        # lifecycle UI has one name for it. days_remaining is computed
+        # client-side from created_at.
+        r["created_at"] = _scout_timestamp(r.get("found_date"))
+        r["archived_at"] = _scout_timestamp(r.get("archived_at"))
+    return rows
+
+
+@app.route("/api/scout/jobs")
+def api_scout_jobs():
+    """Every stored listing, active and archived alike. Unchanged behaviour —
+    the lifecycle views are /api/scout/jobs/active and /history."""
+    return jsonify(_scout_listing_rows())
+
+
+@app.route("/api/scout/jobs/active")
+def api_scout_jobs_active():
+    """Listings still inside their JOB_ACTIVE_DAYS window (archived_at IS NULL).
+    Takes the same ?source=/?location=/?new_only= filters as /api/scout/jobs."""
+    return jsonify(_scout_listing_rows(archived=False))
+
+
+@app.route("/api/scout/jobs/history")
+def api_scout_jobs_history():
+    """Auto-archived listings (archived_at IS NOT NULL), newest-archived first.
+    This is the only view whose rows the bulk delete below can remove."""
+    return jsonify(_scout_listing_rows(archived=True))
+
+
+@app.route("/api/scout/jobs/bulk", methods=["DELETE"])
+def api_scout_jobs_bulk_delete():
+    """Hard-delete archived listings: {"job_ids": [1, 2, 3]}.
+
+    Irreversible, so the payload is validated strictly (a list of integers,
+    capped at db.MAX_BULK_DELETE) and db.delete_scout_jobs() only removes rows
+    that are actually archived — an active id is a no-op, never a deletion.
+    The confirmation happens client-side; `deleted` reports what really went.
+    """
+    d = request.get_json(silent=True) or {}
+    raw = d.get("job_ids")
+    if not isinstance(raw, list):
+        return jsonify({"ok": False, "error": "job_ids must be a list"}), 400
+    if len(raw) > db.MAX_BULK_DELETE:
+        return jsonify({"ok": False,
+                        "error": f"at most {db.MAX_BULK_DELETE} ids per request"}), 400
+    ids = []
+    for jid in raw:
+        if isinstance(jid, bool) or not isinstance(jid, (int, str)):
+            return jsonify({"ok": False, "error": "job_ids must be integers"}), 400
+        try:
+            ids.append(int(jid))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "job_ids must be integers"}), 400
+    if not ids:
+        return jsonify({"ok": True, "deleted": 0})
+    deleted = db.delete_scout_jobs(ids)
+    logger.info("scout bulk delete: %d of %d archived jobs removed",
+                deleted, len(ids))
+    return jsonify({"ok": True, "deleted": deleted, "requested": len(ids)})
 
 
 @app.route("/api/scout/employers", methods=["GET", "POST"])

@@ -306,6 +306,23 @@ def db_backup():
                     res.get("file"), res.get("bytes"), res.get("tables"), res.get("rows"))
 
 
+@audited("scout", "archive_stale_jobs")
+def archive_stale_jobs():
+    """02:00 Europe/London — move listings older than db.JOB_ACTIVE_DAYS (14)
+    out of the active view and into history.
+
+    Archiving is a soft state change (archived_at gets stamped); nothing is
+    deleted, and the DB call only touches rows that are still active, so a
+    redeploy that re-fires this job the same night changes nothing.
+    """
+    try:
+        archived = db.archive_stale_scout_jobs()
+        logger.info("scout auto-archive: %d job(s) older than %d days archived",
+                    archived, db.JOB_ACTIVE_DAYS)
+    except Exception as e:
+        logger.error(f"scout auto-archive failed: {e}")
+
+
 def csp_report_cleanup():
     """Daily — cap the CSP-report sink at 7 days. The /api/csp-report endpoint is
     public and only rate-limited, so the table would otherwise grow unbounded."""
@@ -405,6 +422,11 @@ def start_scheduler():
     # Daily production-DB backup at 03:00 Europe/London (quiet hours).
     sched.add_job(db_backup, "cron", hour=3, minute=0,
                   timezone="Europe/London", id="db_backup", misfire_grace_time=60)
+    # Scout job lifecycle — auto-archive listings older than 14 days at 02:00
+    # Europe/London (quiet hours, and explicit tz because Railway runs UTC).
+    sched.add_job(archive_stale_jobs, "cron", hour=2, minute=0,
+                  timezone="Europe/London", id="scout_archive_stale_jobs",
+                  replace_existing=True, misfire_grace_time=60)
     # Daily 7-day retention cap on the public CSP-report sink (03:30, quiet hours).
     sched.add_job(csp_report_cleanup, "cron", hour=3, minute=30,
                   timezone="Europe/London", id="csp_report_cleanup",
