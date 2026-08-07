@@ -144,6 +144,12 @@ class ScoutJob(db.Model):
     last_seen = db.Column(db.DateTime)
     alerted = db.Column(db.Integer, default=0)
 
+    # ── lifecycle ────────────────────────────────────────────────────────────
+    # NULL = active, a timestamp = archived into history. Added by
+    # database._ensure_scout_tables(); mapped here so the ORM half reads and
+    # writes the same column instead of quietly ignoring it.
+    archived_at = db.Column(db.DateTime)
+
     employer = db.relationship("Employer", backref="listings", lazy="joined")
 
     @property
@@ -178,6 +184,12 @@ class ScoutJob(db.Model):
             "status": self.status,
             "posted_date": self.posted_date,
             "found_date": self.found_date,
+            # `found_date` is the creation stamp; exposed under both names so
+            # the lifecycle UI can read created_at consistently.
+            "created_at": self.found_date,
+            "archived_at": (self.archived_at.strftime("%Y-%m-%d %H:%M:%S")
+                            if hasattr(self.archived_at, "strftime")
+                            else self.archived_at),
             "applied": self.applied,
             "is_new": self.is_new,
         }
