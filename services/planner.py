@@ -200,7 +200,20 @@ def execute_plan(plan_id: str) -> dict:
 
         # Execute the skill (this calls real code now).
         skill_result = execute_skill(agent_id, skill_name, params)
-        status = "success" if skill_result["success"] else "failure"
+
+        # Map the result to a persisted status. A skill the agent isn't allowed
+        # to run comes back with blocked=True (see execute_skill) and is recorded
+        # as "blocked"; a genuine exception/failure is "error". Either way the
+        # loop continues to the next step (existing per-step failure handling).
+        if skill_result["success"]:
+            status = "success"
+            logged_output = json.dumps(skill_result["output"])
+        elif skill_result.get("blocked") or "access denied" in str(skill_result.get("output") or ""):
+            status = "blocked"
+            logged_output = json.dumps(skill_result.get("output"))
+        else:
+            status = "error"
+            logged_output = None
 
         db.log_plan_execution(
             plan_id,
@@ -208,7 +221,7 @@ def execute_plan(plan_id: str) -> dict:
             agent_id,
             skill_name,
             json.dumps(params),
-            json.dumps(skill_result["output"]) if skill_result["success"] else None,
+            logged_output,
             status,
             error=skill_result.get("error"),
             duration_ms=skill_result["duration_ms"],
