@@ -4559,6 +4559,27 @@ def get_pending_plans():
         return out
 
 
+def get_agent_activity(agent_id, limit=20):
+    """Recent plan-execution rows for one agent (success/blocked/error), newest
+    first, for the Mission Control activity feed. plan_executions timestamps its
+    rows in `executed_at`, aliased to `created_at` here for the feed shape."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT skill_name, input_params, status, executed_at AS created_at "
+            f"FROM plan_executions "
+            f"WHERE agent_id = {ph} AND status IN ('success', 'blocked', 'error') "
+            f"ORDER BY executed_at DESC, id DESC LIMIT {ph}",
+            (agent_id, int(limit)))
+        return [{"skill_name": r["skill_name"],
+                 "input_params": r["input_params"] or "",
+                 "status": r["status"],
+                 "created_at": r["created_at"]}
+                for r in cur.fetchall()]
+
+
 # ── Skill seed ────────────────────────────────────────────────────────────────
 # Declared capability surface for each of the 13 agents in AGENT_IDS.
 AGENT_SKILLS = {
