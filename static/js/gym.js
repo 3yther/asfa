@@ -2501,9 +2501,65 @@ function renderStepsWeek(week) {
     col.appendChild(bar);
     const dow = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"][new Date(d.date + "T00:00:00").getDay()];
     col.appendChild(el("div", "gs-wday", dow));
-    col.title = `${d.date}: ${fmtInt(d.total || 0)} steps`;
+    col.title = `${d.date}: ${fmtInt(d.total || 0)} steps — tap to edit`;
+    // Click (or keyboard) a day to edit that day's step count.
+    const total = d.total || 0;
+    col.setAttribute("role", "button");
+    col.setAttribute("tabindex", "0");
+    col.setAttribute("aria-label", `Edit steps for ${d.date}, currently ${fmtInt(total)}`);
+    col.addEventListener("click", () => openStepEditor(d.date, total));
+    col.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openStepEditor(d.date, total); }
+    });
     wrap.appendChild(col);
   });
+}
+
+/* Click-to-edit a day on the 7-day strip. "Edit" means SET the day's total.
+   /api/steps/log is additive and a day can hold several rows (manual/treadmill/
+   bike), so a save adds the new manual total first — nothing is lost if a later
+   delete fails — then removes the day's previous rows. */
+let STEP_EDIT_DATE = null;
+
+function openStepEditor(date, currentTotal) {
+  STEP_EDIT_DATE = date;
+  const d = new Date(date + "T00:00:00");
+  const wd = d.toLocaleDateString(undefined, { weekday: "long" });
+  const md = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const title = $("#step-edit-title");
+  if (title) title.textContent = `Edit steps for ${wd}, ${md}`;
+  const input = $("#step-edit-input");
+  if (input) input.value = Math.round(currentTotal || 0);
+  openModal("step-edit-modal");
+  if (input) { input.focus(); input.select(); }
+}
+
+async function saveStepEdit() {
+  const date = STEP_EDIT_DATE;
+  if (!date) return;
+  const input = $("#step-edit-input");
+  const count = parseInt(input && input.value, 10);
+  if (!(count >= 0 && count <= 100000)) { toast("Enter 0–100,000 steps"); return; }
+  const saveBtn = $("#step-edit-save");
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    const day = await apiGet(`${STEPS_API}/date/${date}`);
+    const oldIds = (day.entries || []).map(e => e.id);
+    if (count >= 1) {
+      await apiPost(`${STEPS_API}/log`, { date, source: "manual", steps: count });
+    }
+    for (const id of oldIds) {
+      await apiPost(`${STEPS_API}/delete`, { entry_id: id });
+    }
+    closeModal("step-edit-modal");
+    STEP_EDIT_DATE = null;
+    await refreshSteps();
+    toast("Steps updated");
+  } catch (e) {
+    toast("Failed to update steps");
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
 }
 
 async function refreshSteps() {
@@ -2605,6 +2661,13 @@ function wireSteps() {
   bind("gs-manual-log", logManualSteps);
   bind("gs-tread-log", logTreadmill);
   bind("gs-bike-log", logBike);
+  // Step-count editor modal (opened by clicking a day on the 7-day strip).
+  bind("step-edit-save", saveStepEdit);
+  const stepEditInput = $("#step-edit-input");
+  if (stepEditInput) stepEditInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); saveStepEdit(); }
+    else if (ev.key === "Escape") { closeModal("step-edit-modal"); }
+  });
 }
 
 function initSteps() { wireSteps(); refreshSteps(); }

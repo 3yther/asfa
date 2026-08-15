@@ -750,14 +750,21 @@ body.rest-active .exercise-list { padding-bottom: 210px; }
   margin-top: 8px; font-size: .74rem; line-height: 1.5; color: var(--text-faint);
 }
 
-/* 7-day strip — seven thin vertical bars, display only (not clickable). */
+/* 7-day strip — seven thin vertical bars. Each day is clickable to edit that
+   day's step count (see openStepEditor in gym.js). */
 .gym-steps .gs-week {
   display: flex; gap: 6px; align-items: flex-end; justify-content: center;
   height: 54px; margin-bottom: 20px;
 }
 .gym-steps .gs-wcol {
   display: flex; flex-direction: column; align-items: center; gap: 5px;
-  width: 26px;
+  width: 26px; cursor: pointer; border-radius: 8px; padding: 3px 0;
+  transition: background .15s ease;
+}
+.gym-steps .gs-wcol:hover { background: rgba(0,217,255,.08); }
+.gym-steps .gs-wcol:hover .gs-wbar { outline: 1px solid var(--cyan); }
+.gym-steps .gs-wcol:focus-visible {
+  outline: 2px solid var(--cyan); outline-offset: 2px; background: rgba(0,217,255,.08);
 }
 .gym-steps .gs-wbar {
   width: 6px; height: 42px; border-radius: 999px;
@@ -771,6 +778,24 @@ body.rest-active .exercise-list { padding-bottom: 210px; }
 .gym-steps .gs-wcol.today .gs-wbar { outline: 1px solid var(--cyan); }
 .gym-steps .gs-wday { font: 600 .58rem var(--mono); color: var(--text-faint); letter-spacing: .06em; text-transform: uppercase; }
 .gym-steps .gs-wcol.today .gs-wday { color: var(--cyan); }
+
+/* ── Step-count editor modal ─────────────────────────────────────────────── */
+#step-edit-modal .modal.step-edit { max-width: 340px; text-align: left; }
+#step-edit-modal .step-edit-label {
+  display: block; margin: 6px 0 8px; font: 600 .7rem var(--mono);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim);
+}
+#step-edit-modal #step-edit-input { width: 100%; box-sizing: border-box; }
+#step-edit-modal .step-edit-actions {
+  display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;
+}
+/* Save — solid neon green on void (design-system primary rendered green). */
+.step-edit-save {
+  background: var(--green); color: var(--void);
+  box-shadow: 0 0 14px rgba(63,185,80,.35); border: 1px solid transparent;
+}
+.step-edit-save:hover { box-shadow: 0 0 24px rgba(63,185,80,.55); }
+.step-edit-save:disabled { opacity: .55; cursor: default; box-shadow: none; }
 
 /* Log row: tabs + per-mode forms */
 .gym-steps .gs-tabs { display: flex; gap: 6px; margin-bottom: 12px; }

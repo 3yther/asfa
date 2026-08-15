@@ -527,6 +527,21 @@
   </div>
 </div>
 
+<!-- ── Step-count editor (click a day on the 7-day strip) ──────────────── -->
+<div id="step-edit-modal" class="modal-overlay" hidden>
+  <div class="modal sci-fi-panel step-edit">
+    <button class="modal-close" data-close-modal="step-edit-modal">✕</button>
+    <h3 id="step-edit-title">Edit steps</h3>
+    <label class="step-edit-label" for="step-edit-input">Step count</label>
+    <input type="number" id="step-edit-input" class="gs-input" inputmode="numeric"
+           min="0" max="100000" step="1" placeholder="steps" autocomplete="off">
+    <div class="step-edit-actions">
+      <button class="btn btn-ghost" data-close-modal="step-edit-modal">Cancel</button>
+      <button class="btn step-edit-save" id="step-edit-save">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Settings modal ──────────────────────────────────────────────────── -->
 <div id="settings-modal" class="modal-overlay" hidden>
   <div class="modal sci-fi-panel">
