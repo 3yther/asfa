@@ -463,6 +463,21 @@ function currentRoomId(a){
 function roomColor(id){ return ROOMS[id] ? ROOMS[id].color : COL.green; }
 function agentColor(a){ const rid=AGENT_ROOM[a.id]; return rid ? roomColor(rid) : (a.status==='locked'?0x333355:COL.green); }
 
+/* ── Per-agent neon-dot colour (Mission Control map is sprite-free) ──────── */
+const AGENT_DOT_HEX = {
+  nexus:'#ff0055', sentinel:'#00f0ff', axiom:'#05ffa1', pyro:'#ff6600',
+  quant:'#fcee0a', ghost:'#ff2a6d', pixel:'#39ff14', forge:'#bb86fc',
+  oracle:'#00cc88',
+};
+/* Any agent without an explicit colour gets a stable one from this neon set,
+   picked by hashing the id so it never changes between polls. */
+const AGENT_DOT_FALLBACK = ['#00b3ff','#ff9ff3','#c56cf0','#ff8c42','#7cffcb','#ffd166'];
+function agentDotColorNum(id){
+  let h = AGENT_DOT_HEX[id];
+  if(!h){ let s=0; for(let i=0;i<id.length;i++) s=(s*31+id.charCodeAt(i))>>>0; h=AGENT_DOT_FALLBACK[s%AGENT_DOT_FALLBACK.length]; }
+  return parseInt(h.slice(1),16);
+}
+
 /* ── Tier 3 Part 4: live audit-driven movement ──────────────────────────── */
 /* Explicit action-category → room map, derived from the real audit_log action
    strings. Anything unmapped falls through to 'nexus' (the Ops hub) so an agent
@@ -536,7 +551,7 @@ class BootScene extends Phaser.Scene {
     const txt=this.add.text(cw/2, by-30, 'INITIALIZING NEXUS', {fontFamily:'monospace',fontSize:'16px',color:hex(COL.green)}).setOrigin(0.5).setShadow(0,0,hex(COL.green),12);
     g.lineStyle(1,COL.green,0.6).strokeRect(bx,by,bw,14);
     this.load.on('progress', p=>{ g.clear(); g.lineStyle(1,COL.green,0.6).strokeRect(bx,by,bw,14); g.fillStyle(COL.green,1).fillRect(bx+2,by+2,(bw-4)*p,10); txt.setText('INITIALIZING NEXUS'+'.'.repeat(1+Math.floor(p*3))); });
-    this.load.spritesheet('chars', '/static/neo_zero_char_01.png',                {frameWidth:16, frameHeight:24});
+    // (character spritesheet removed — agents now render as neon dots, no sheet needed)
     this.load.spritesheet('tiles', '/static/neo_zero_tiles_and_buildings_01.png', {frameWidth:16, frameHeight:16});
     this.load.spritesheet('props', '/static/neo_zero_props_and_items_01.png',     {frameWidth:16, frameHeight:16});
   }
@@ -570,8 +585,6 @@ class FacilityScene extends Phaser.Scene {
     // frame caps so we never request a missing prop/tile frame
     this.propMax = Math.max(0, (this.textures.get('props').frameTotal||1) - 2);
     this.tileMax = Math.max(0, (this.textures.get('tiles').frameTotal||1) - 2);
-
-    this.buildCharAnims();
 
     this.bgLayer       = this.add.graphics().setDepth(0);
     this.corridorLayer = this.add.graphics().setDepth(2);
@@ -617,22 +630,6 @@ class FacilityScene extends Phaser.Scene {
     const cam=this.cameras.main; cam.setZoom(Phaser.Math.Clamp(z,0.3,2.5)); cam.centerOn(b.cx, b.cy);
   }
 
-  buildCharAnims(){
-    const src=this.textures.get('chars').getSourceImage();
-    const cols=Math.max(1, Math.floor(src.width/16)), rows=Math.max(1, Math.floor(src.height/24));
-    console.log('Char sheet:', src.width,'x',src.height, cols,'cols', rows,'rows');
-    const kitRows=[0, Math.floor(rows/3), Math.floor(2*rows/3)];
-    this.kitCount=kitRows.length; this.kitFrame=kitRows.map(r=>r*cols);
-    const last=cols*rows-1;
-    kitRows.forEach((row,k)=>{
-      const base=row*cols;
-      const walk=[base,base+1,base+2,base+3].map(f=>Math.min(f,last));
-      const idle=[base, Math.min(base+1,last)];
-      this.anims.create({key:'walk'+k, frames:this.anims.generateFrameNumbers('chars',{frames:walk}), frameRate:8, repeat:-1});
-      this.anims.create({key:'idle'+k, frames:this.anims.generateFrameNumbers('chars',{frames:idle}), frameRate:2.2, repeat:-1});
-    });
-  }
-
   /* ── Space background: stars, grid, scan line, corner brackets, vignette ─ */
   drawSpace(){
     const g=this.bgLayer, v=this.cameras.main.worldView;
@@ -673,7 +670,7 @@ class FacilityScene extends Phaser.Scene {
   /* BUG 2: corridor-constrained route room A → Nexus hub → room B.
      Every room connects through NEXUS, so agents travel the L-shaped corridors
      (roomCenter(A) → Nexus → roomCenter(B)) instead of cutting diagonally across
-     other rooms. Consecutive duplicate points are stripped by walkChar's filter. */
+     other rooms. Consecutive duplicate points are stripped by the caller's filter. */
   corridorRoute(fromId, toId){
     if(fromId===toId) return [roomCenter(fromId)];
     return this.pathToNexus(fromId).concat(this.pathToNexus(toId).slice().reverse());
@@ -876,100 +873,60 @@ class FacilityScene extends Phaser.Scene {
     return target;
   }
 
-  /* ── Characters ──────────────────────────────────────────────────────── */
-  kitFor(id){ return ROOM_IDS.indexOf(AGENT_ROOM[id]||'nexus')%this.kitCount; }
+  /* ── Agent dots (sprite-free neon circles) ───────────────────────────── */
+  /* Each agent is a small container = soft halo + solid core, positioned at the
+     same room spot the old sprite used. No walking/roaming: on a room change the
+     dot simply glides to its new spot. Pulse + float tweens (staggered) give it
+     life; it stays clickable → openModal. */
   ensureChar(a, target, first){
-    if(!AGENT_ROOM[a.id]) return; // forge / unknown
+    if(!AGENT_ROOM[a.id]) return; // forge / unknown → no dot
     const t=target[a.id];
     let ch=MC.chars[a.id];
-    if(a.status==='locked'){ if(ch){ ch.sprite.destroy(); if(ch.ring) ch.ring.destroy(); delete MC.chars[a.id]; } return; }
+    if(a.status==='locked'){ if(ch) this.destroyDot(ch); return; }
     if(!t) return;
     if(!ch){
-      const kit=(a.id==='nexus')?0:this.kitFor(a.id);
-      const sp=this.add.sprite(t.spot.x, t.spot.y, 'chars', this.kitFrame[kit]).setOrigin(0.5,1).setScale(3).setDepth(7).setAlpha(0); // FIX 3: 3x scale + bottom-centre origin (BUG 1) so the full 48×72 sprite shows and flips around its base
-      this.charLayer.add(sp);
-      const ring=this.add.graphics().setDepth(6.5); this.charLayer.add(ring);
-      ch={id:a.id, sprite:sp, ring, kit, roomId:t.roomId}; MC.chars[a.id]=ch;
-      this.redrawRing(ch);
-      this.tweens.add({targets:sp, alpha:1, duration:400});
-      this.settle(ch, t.roomId);
-      if(a.id==='nexus') this.scheduleNexusRoam(ch); else this.scheduleVisit(ch);
+      const dot=this.makeDot(a, t.spot.x, t.spot.y);
+      ch={id:a.id, sprite:dot, roomId:t.roomId, targetSpot:t.spot}; MC.chars[a.id]=ch;
+      this.startDotAnim(ch);
+      this.tweens.add({targets:dot, alpha:{from:0,to:1}, duration:400});
       return;
     }
     ch.sprite.setAlpha(1);
-    if(ch.roomId!==t.roomId){
-      this.stopBob(ch);
-      const fromIdle=ch.roomId==='quarters';
-      const fromId=ch.roomId;
-      this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, ...this.corridorRoute(fromId, t.roomId), t.spot], ()=>{ ch.roomId=t.roomId; this.settle(ch, t.roomId); });
-      ch.roomId=t.roomId; this.redrawRing(ch);
-      if(!fromIdle && t.roomId==='quarters') this.puff(ch.sprite.x, ch.sprite.y, COL.slate);
-    } else if(!first){
-      // same room, possibly new spot (count changed)
-      if(Math.hypot(t.spot.x-ch.sprite.x, t.spot.y-ch.sprite.y)>6){ ch.targetSpot=t.spot; }
+    // room change, or same room but a new spot (agent count shifted) → glide over
+    if(ch.roomId!==t.roomId || (!first && Math.hypot(t.spot.x-ch.sprite.x, t.spot.y-ch.sprite.y)>6)){
+      ch.roomId=t.roomId;
+      this.tweens.add({targets:ch.sprite, x:t.spot.x, y:t.spot.y, duration:700, ease:'Sine.easeInOut'});
     }
     ch.targetSpot=t.spot;
   }
-  /* white + room-colour highlight ring under active work-room agents (FIX 3) */
-  redrawRing(ch){
-    const g=ch.ring; if(!g) return; g.clear();
-    const show = ch.roomId && ch.roomId!=='quarters';
-    g.setVisible(show); if(!show) return;
-    const col=roomColor(ch.roomId);
-    g.lineStyle(2,col,0.9); g.strokeCircle(0,0,13);
-    g.lineStyle(1,0xffffff,0.5); g.strokeCircle(0,0,13);
+  /* build one clickable neon dot; ~20px core inside a ~30px glow halo */
+  makeDot(a, x, y){
+    const col=agentDotColorNum(a.id);
+    const c=this.add.container(x,y).setDepth(7);
+    const halo=this.add.circle(0,0,15,col,0.22);
+    const core=this.add.circle(0,0,10,col,1).setStrokeStyle(2,0xffffff,0.4);
+    c.add([halo,core]); c.__halo=halo; c.__core=core; c.__col=col;
+    this.charLayer.add(c);
+    c.setSize(34,34);
+    c.setInteractive({useHandCursor:true});
+    c.on('pointerover',()=>{ this.tweens.add({targets:[halo,core], scale:1.4, duration:150, ease:'Quad.easeOut'}); halo.setFillStyle(col,0.45); });
+    c.on('pointerout', ()=>{ this.tweens.add({targets:[halo,core], scale:1, duration:200, ease:'Quad.easeOut'}); halo.setFillStyle(col,0.22); });
+    c.on('pointerdown',()=>{ this.panTo(a.id); openModal(a.id); });
+    return c;
   }
-  update(){
-    for(const id in MC.chars){ const ch=MC.chars[id]; if(ch.ring && ch.sprite.active){ ch.ring.setPosition(ch.sprite.x, ch.sprite.y-10); } } // BUG 1: origin is now bottom-centre, so the base ring sits just above the feet
+  /* staggered pulse-glow (α 0.55↔1) + gentle float (y ±5) so no two sync up */
+  startDotAnim(ch){
+    const kids=[ch.sprite.__halo, ch.sprite.__core];
+    ch.pulse=this.tweens.add({targets:kids, alpha:{from:1,to:0.55}, duration:1500, yoyo:true, repeat:-1, ease:'Sine.easeInOut', delay:Phaser.Math.Between(0,1500)});
+    ch.float=this.tweens.add({targets:kids, y:-5, duration:2000, yoyo:true, repeat:-1, ease:'Sine.easeInOut', delay:Phaser.Math.Between(0,2000)});
   }
-  settle(ch, roomId){
-    const sp=ch.sprite; sp.play('idle'+ch.kit);
-    this.stopBob(ch); this.redrawRing(ch);
-    ch.bob=this.tweens.add({targets:sp, y:sp.y-2, duration:roomId==='quarters'?1400:2000, yoyo:true, repeat:-1, delay:Phaser.Math.Between(0,800)});
+  destroyDot(ch){
+    if(ch.pulse) ch.pulse.stop();
+    if(ch.float) ch.float.stop();
+    if(ch.sprite) ch.sprite.destroy();
+    delete MC.chars[ch.id];
   }
-  stopBob(ch){ if(ch.bob){ ch.bob.stop(); ch.bob=null; } }
-  walkChar(ch, pts, onDone){
-    const sp=ch.sprite; this.stopBob(ch); sp.play('walk'+ch.kit);
-    const clean=pts.filter((p,i)=>i===0||p.x!==pts[i-1].x||p.y!==pts[i-1].y);
-    const tweens=this.segTweens(sp,clean).map(t=>({...t, onStart:()=>sp.setFlipX(t.x<sp.x)}));
-    if(!tweens.length){ onDone&&onDone(); return; }
-    this.tweens.chain({targets:sp, tweens, onComplete:()=>{ if(sp.active) onDone&&onDone(); }});
-  }
-  /* active work-room agents periodically report to Nexus */
-  scheduleVisit(ch){
-    this.time.delayedCall(Phaser.Math.Between(15000,30000), ()=>{
-      const a=MC.agents.find(x=>x.id===ch.id);
-      if(!ch.sprite.active){ return; }
-      if(!a || a.status!=='active' || ch.roomId==='quarters'){ this.scheduleVisit(ch); return; }
-      const home=ch.targetSpot||roomCenter(ch.roomId);
-      const roomId=ch.roomId;
-      this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, ...this.corridorRoute(roomId,'nexus')], ()=>{
-        ch.sprite.play('idle'+ch.kit);
-        this.time.delayedCall(Phaser.Math.Between(3000,5000), ()=>{
-          if(!ch.sprite.active) return;
-          const dest=ch.targetSpot||home;
-          this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, ...this.corridorRoute('nexus',roomId), dest], ()=>{ this.settle(ch, ch.roomId); this.scheduleVisit(ch); });
-        });
-      });
-    });
-  }
-  /* nexus agent roams between all rooms */
-  scheduleNexusRoam(ch){
-    this.time.delayedCall(Phaser.Math.Between(12000,22000), ()=>{
-      const a=MC.agents.find(x=>x.id==='nexus');
-      if(!ch.sprite.active){ return; }
-      if(!a || a.status!=='active'){ this.scheduleNexusRoam(ch); return; }
-      const dests=ROOM_IDS.filter(id=>id!=='nexus'&&id!=='quarters');
-      const destRoom=Phaser.Utils.Array.GetRandom(dests);
-      this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, ...this.corridorRoute('nexus',destRoom)], ()=>{
-        ch.sprite.play('idle'+ch.kit);
-        this.time.delayedCall(Phaser.Math.Between(2500,4500), ()=>{
-          if(!ch.sprite.active) return;
-          this.walkChar(ch, [{x:ch.sprite.x,y:ch.sprite.y}, ...this.corridorRoute(destRoom,'nexus')], ()=>{ this.settle(ch,'nexus'); this.scheduleNexusRoam(ch); });
-        });
-      });
-    });
-  }
+  update(){ /* dots self-animate via tweens; nothing to drive per-frame */ }
 
   /* ── Particles / juice ───────────────────────────────────────────────── */
   levelUpBurst(roomId){
