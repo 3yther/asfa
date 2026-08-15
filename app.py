@@ -2373,7 +2373,10 @@ def _steps_day_payload(date_str):
 @app.route("/api/steps/log", methods=["POST"])
 def api_steps_log():
     data = request.get_json(force=True) or {}
-    date_str = (data.get("date") or "").strip() or _today()
+    # Respect the simulated clock: while an override is active the entry is
+    # backfilled to that day (matching meals/workouts/cardio); otherwise the
+    # client date, else today.
+    date_str = _log_date((data.get("date") or "").strip() or None)
     if not _valid_date(date_str):
         return jsonify({"error": "date must be YYYY-MM-DD"}), 400
 
@@ -2412,7 +2415,10 @@ def api_steps_log():
                   "kph": _num_or_none(data.get("kph")),
                   "terrain": (data.get("terrain") or "").strip().lower()}
 
-    entry = db.add_step_entry(date_str, source, steps, detail)
+    # Stamp created_at from the effective clock (simulated override or real now)
+    # so the row's timestamp tracks the backfilled instant, not the DB wall clock.
+    entry = db.add_step_entry(date_str, source, steps, detail,
+                              created_at=db.get_current_time(db.DEFAULT_USER_ID))
     entry["note"] = note
     return jsonify({
         "ok": True,

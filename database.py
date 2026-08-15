@@ -9023,24 +9023,39 @@ def _steps_row(row) -> dict:
     }
 
 
-def add_step_entry(date_str, source, steps, detail=None) -> dict:
+def add_step_entry(date_str, source, steps, detail=None, created_at=None) -> dict:
     """Insert one step session. `steps` is the final (already-converted) count;
-    `detail` is a dict of the raw inputs, stored as JSON. Returns the new row."""
+    `detail` is a dict of the raw inputs, stored as JSON. `created_at` overrides
+    the DB's CURRENT_TIMESTAMP default — pass get_current_time() so the row
+    respects a simulated-clock override; a datetime is stored as a naive-local
+    'YYYY-MM-DD HH:MM:SS' string (the same shape SQLite's CURRENT_TIMESTAMP
+    writes). Returns the new row."""
     _ensure_steps_tables()
     detail_json = json.dumps(detail) if detail else None
+    if isinstance(created_at, datetime):
+        created_at = to_local_datetime(created_at).strftime("%Y-%m-%d %H:%M:%S")
     ph = "%s" if USE_POSTGRES else "?"
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            f"INSERT INTO steps (date, source, steps, detail) VALUES ({ph},{ph},{ph},{ph})",
-            (date_str, source, int(steps), detail_json))
+        if created_at is None:
+            cur.execute(
+                f"INSERT INTO steps (date, source, steps, detail) VALUES ({ph},{ph},{ph},{ph})",
+                (date_str, source, int(steps), detail_json))
+        else:
+            cur.execute(
+                f"INSERT INTO steps (date, source, steps, detail, created_at) "
+                f"VALUES ({ph},{ph},{ph},{ph},{ph})",
+                (date_str, source, int(steps), detail_json, created_at))
         new_id = cur.lastrowid if not USE_POSTGRES else None
         if USE_POSTGRES:
             cur.execute("SELECT MAX(id) AS id FROM steps WHERE date = %s AND source = %s",
                         (date_str, source))
             new_id = dict(cur.fetchone())["id"]
-    return {"id": new_id, "date": date_str, "source": source,
-            "steps": int(steps), "detail": detail or {}}
+    row = {"id": new_id, "date": date_str, "source": source,
+           "steps": int(steps), "detail": detail or {}}
+    if created_at is not None:
+        row["created_at"] = created_at
+    return row
 
 
 def get_steps_for_date(date_str) -> list:

@@ -167,11 +167,42 @@ def test_water_backfills_to_simulated_clock():
     print("  7. water backfills to sim clock  OK")
 
 
+def test_steps_backfill_to_simulated_clock():
+    client = _authed_client()
+    real_today = db.today_str()
+
+    # Clock at 8:15 PM on a fixed past date.
+    client.post("/api/settings/simulated-time", json={"dt": "2026-04-10T20:15"},
+                headers={"X-CSRF-Token": "tok"})
+
+    # Log steps while the client sends *today's* date — the server must backfill.
+    r = client.post("/api/steps/log",
+                    json={"date": real_today, "source": "manual", "steps": 3200},
+                    headers={"X-CSRF-Token": "tok"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    entry = r.get_json()["entry"]
+    assert entry["date"] == "2026-04-10", entry
+    assert str(entry.get("created_at", "")).startswith("2026-04-10 20:15"), entry
+    assert db.get_steps_day_total("2026-04-10") >= 3200
+    assert db.get_steps_day_total(real_today) == 0, "must not land on real today"
+
+    # Reset → new steps land under the real clock again.
+    client.post("/api/settings/simulated-time", json={"dt": None},
+                headers={"X-CSRF-Token": "tok"})
+    r = client.post("/api/steps/log",
+                    json={"source": "manual", "steps": 500},
+                    headers={"X-CSRF-Token": "tok"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["entry"]["date"] == real_today
+    print("  8. steps backfill to sim clock, reset to real  OK")
+
+
 if __name__ == "__main__":
     print("simulated system clock tests")
     for fn in [test_default_is_real_clock, test_set_and_get_override,
                test_reset_clears_override, test_endpoint_set_and_current_time,
                test_endpoint_bad_dt_rejected, test_meal_backfills_to_simulated_clock,
-               test_water_backfills_to_simulated_clock]:
+               test_water_backfills_to_simulated_clock,
+               test_steps_backfill_to_simulated_clock]:
         fn()
     print("ALL PASS")
