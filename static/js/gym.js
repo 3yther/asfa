@@ -2488,14 +2488,16 @@ function renderStepsWeek(week) {
   wrap.innerHTML = "";
   const days = week.days || [];
   const goal = week.goal || 10000;
-  const maxVal = Math.max(goal, 1, ...days.map(d => d.total || 0));
   const today = stepsToday();
   days.forEach(d => {
     const col = el("div", "gs-wcol");
     if (d.date === today) col.classList.add("today");
     const bar = el("div", "gs-wbar");
     const fill = el("i");
-    const pct = Math.min(100, ((d.total || 0) / maxVal) * 100);
+    // Bar height is the day's steps as a fraction of the goal (10k = full
+    // height), capped at 100% so an over-goal day maxes out instead of
+    // overflowing or rescaling the rest of the week.
+    const pct = Math.min(100, ((d.total || 0) / goal) * 100);
     fill.style.height = pct + "%";
     bar.appendChild(fill);
     col.appendChild(bar);
