@@ -2529,7 +2529,14 @@ function openStepEditor(date, currentTotal) {
   const title = $("#step-edit-title");
   if (title) title.textContent = `Edit steps for ${wd}, ${md}`;
   const input = $("#step-edit-input");
-  if (input) input.value = Math.round(currentTotal || 0);
+  // Prefill the current total for a non-empty day so it can be tweaked. For an
+  // empty day leave it BLANK (the "steps" placeholder shows) rather than seeding
+  // "0": seeding relied on input.select() replacing the "0" on the next keypress,
+  // which is unreliable on some mobile browsers (type=number focus/select), so a
+  // typed value could fail to land and the day would save as 0. Blank means a
+  // missed keystroke yields "" → NaN → a visible "enter a value" toast, never a
+  // silent 0-save.
+  if (input) input.value = currentTotal > 0 ? Math.round(currentTotal) : "";
   openModal("step-edit-modal");
   if (input) { input.focus(); input.select(); }
 }
@@ -2538,7 +2545,9 @@ async function saveStepEdit() {
   const date = STEP_EDIT_DATE;
   if (!date) return;
   const input = $("#step-edit-input");
+  console.log("[step-edit] raw input value:", input && input.value);
   const count = parseInt(input && input.value, 10);
+  console.log("Saving steps:", count);
   if (!(count >= 0 && count <= 100000)) { toast("Enter 0–100,000 steps"); return; }
   const saveBtn = $("#step-edit-save");
   if (saveBtn) saveBtn.disabled = true;
@@ -2546,7 +2555,11 @@ async function saveStepEdit() {
     const day = await apiGet(`${STEPS_API}/date/${date}`);
     const oldIds = (day.entries || []).map(e => e.id);
     if (count >= 1) {
-      await apiPost(`${STEPS_API}/log`, { date, source: "manual", steps: count });
+      console.log("POST /api/steps/log", { date, source: "manual", steps: count });
+      const response = await apiPost(`${STEPS_API}/log`, { date, source: "manual", steps: count });
+      console.log("Response:", response);
+    } else {
+      console.log("[stepedit] count < 1, skipping POST /log (day will be cleared to 0)");
     }
     for (const id of oldIds) {
       await apiPost(`${STEPS_API}/delete`, { entry_id: id });
