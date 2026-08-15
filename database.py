@@ -31,6 +31,10 @@ try:
 except Exception:  # pragma: no cover - missing tzdata; fall back to UTC
     APP_TZ = timezone.utc
 
+# ASFA is single-user (one shared passphrase gates the whole app), so per-user
+# settings all key off this constant rather than a real accounts table.
+DEFAULT_USER_ID = 1
+
 
 def now_local() -> datetime:
     """Timezone-aware 'now' in the app's canonical timezone."""
@@ -55,6 +59,76 @@ def to_local_day(dt: datetime) -> str:
     """Calendar day (YYYY-MM-DD) of `dt` in the app timezone. A naive datetime is
     assumed to already be in the app timezone; an aware one is converted first."""
     return to_local_datetime(dt).strftime("%Y-%m-%d")
+
+
+# ── Simulated system clock ───────────────────────────────────────────────────
+# The Settings page can override "now" so meals/workouts/hydration can be
+# backfilled to an earlier date/time. The override lives in
+# user_settings.simulated_time; NULL means "use the real clock". It is stored as
+# a naive local (APP_TZ) timestamp so it round-trips identically through a
+# Postgres TIMESTAMP column and a SQLite TEXT cell — no tz-offset mismatch. Note
+# get_db()/table access is defined below; these run only at request time.
+
+def get_simulated_time(user_id: int = DEFAULT_USER_ID):
+    """The active simulated 'now' as an APP_TZ-aware datetime, or None when the
+    real clock is in use. Any storage/parse hiccup fails safe to None (real
+    clock) so a bad row can never wedge every logging endpoint."""
+    ph = "%s" if USE_POSTGRES else "?"
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT simulated_time FROM user_settings WHERE user_id = {ph}",
+                (user_id,))
+            row = cur.fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    raw = row["simulated_time"] if isinstance(row, (dict, sqlite3.Row)) else row[0]
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, datetime):
+        dt = raw
+    else:
+        try:
+            dt = datetime.fromisoformat(str(raw))
+        except ValueError:
+            return None
+    # Stored naive-local; attach APP_TZ (or convert a stray aware value).
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=APP_TZ)
+    return dt.astimezone(APP_TZ)
+
+
+def get_current_time(user_id: int = DEFAULT_USER_ID) -> datetime:
+    """The clock every logging path should read: the simulated override when one
+    is set, otherwise the real now_local(). Always APP_TZ-aware."""
+    return get_simulated_time(user_id) or now_local()
+
+
+def is_simulated(user_id: int = DEFAULT_USER_ID) -> bool:
+    """True while a simulated-clock override is active."""
+    return get_simulated_time(user_id) is not None
+
+
+def set_simulated_time(user_id: int = DEFAULT_USER_ID, dt: datetime = None):
+    """Set (or clear) the simulated-clock override for `user_id`. `dt=None`
+    resets to the real clock. A naive `dt` is assumed to be in the app timezone;
+    an aware one is converted. Stored as a naive local ISO string so it fits both
+    a Postgres TIMESTAMP column and a SQLite TEXT cell."""
+    if dt is None:
+        value = None
+    else:
+        value = to_local_datetime(dt).replace(tzinfo=None).isoformat(sep=" ")
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO user_settings (user_id, simulated_time) "
+            f"VALUES ({ph}, {ph}) "
+            f"ON CONFLICT (user_id) DO UPDATE SET simulated_time = excluded.simulated_time",
+            (user_id, value))
 
 # Use PostgreSQL on Railway if DATABASE_URL set, else SQLite
 if DATABASE_URL and DATABASE_URL.startswith("postgres"):
@@ -310,6 +384,14 @@ def init_db():
                 ts TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             )""",
+            # Per-user settings. Today it only holds the simulated-clock override
+            # (see get_current_time / set_simulated_time); NULL simulated_time
+            # means "run on the real clock". Single-user app → one row keyed by
+            # DEFAULT_USER_ID.
+            """CREATE TABLE IF NOT EXISTS user_settings (
+                user_id INTEGER PRIMARY KEY,
+                simulated_time TIMESTAMP
+            )""",
         ]
         # Postgres uses SERIAL not AUTOINCREMENT
         for stmt in stmts:
@@ -322,6 +404,11 @@ def init_db():
         # a logged meal can show "💧 400ml with this meal". Nullable — standalone
         # water logs (the common case) leave it NULL. Added idempotently.
         _add_column(cursor, "hydration_log", "meal_id", "INTEGER")
+
+        # Simulated-clock override for backfilling. Idempotent migration for DBs
+        # whose user_settings predates the column (mirrors the ALTER TABLE in the
+        # spec, made a no-op once the column exists).
+        _add_column(cursor, "user_settings", "simulated_time", "TIMESTAMP")
 
         # habits predates UNIQUE(date); collapse any duplicate days and enforce
         # it on DBs created before the constraint existed.

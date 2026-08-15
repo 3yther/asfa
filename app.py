@@ -602,6 +602,30 @@ def _today():
     return db.today_str()
 
 
+# ── Simulated system clock (backfill mode) ──────────────────────────────────────
+# When the Settings page sets a simulated clock, every logging endpoint stamps
+# new entries at that instant instead of real time — regardless of the date/time
+# the browser sends — so a meal/workout/water log lands on the backfilled day.
+# With no override active these fall through to the client value (or today).
+
+def _log_date(client_date=None):
+    """Date (YYYY-MM-DD) a new log entry should carry: the simulated clock when
+    one is set, else the client-supplied date, else today."""
+    sim = db.get_simulated_time()
+    if sim is not None:
+        return sim.strftime("%Y-%m-%d")
+    return client_date or _today()
+
+
+def _log_time(client_time=None):
+    """Time (HH:MM) a new log entry should carry under a simulated clock; the
+    client value (which may be None) otherwise."""
+    sim = db.get_simulated_time()
+    if sim is not None:
+        return sim.strftime("%H:%M")
+    return client_time
+
+
 # ── Pages ──────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -738,6 +762,50 @@ def api_settings_ai_briefing():
         return jsonify({"ai_briefing_summary_enabled": enabled})
     enabled = (db.kv_get(AI_BRIEFING_SUMMARY_KEY) or "0") == "1"
     return jsonify({"ai_briefing_summary_enabled": enabled})
+
+
+# ── System clock (backfill simulated time) ──────────────────────────────────────
+# Lets the Settings page override "now" so logs can be backfilled to an earlier
+# date/time. While an override is set, every logging endpoint stamps entries at
+# the simulated instant (see _log_date/_log_time and the writers below).
+
+@app.route("/api/settings/simulated-time", methods=["POST"])
+def api_set_simulated_time():
+    """Set or clear the simulated clock. Body: {"dt": "<ISO datetime>"} to set,
+    {"dt": null} to reset to real time. Auth-gated + CSRF like every POST."""
+    d = request.get_json(silent=True) or {}
+    raw = d.get("dt")
+    if raw is None:
+        db.set_simulated_time(db.DEFAULT_USER_ID, None)
+    else:
+        try:
+            # datetime-local sends "YYYY-MM-DDTHH:MM" (naive local); tolerate a
+            # trailing Z / offset too. to_local_datetime resolves it to APP_TZ.
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "dt must be an ISO datetime or null"}), 400
+        db.set_simulated_time(db.DEFAULT_USER_ID, db.to_local_datetime(parsed))
+
+    sim = db.get_simulated_time(db.DEFAULT_USER_ID)
+    return jsonify({
+        "success": True,
+        "current_time": db.get_current_time(db.DEFAULT_USER_ID).isoformat(),
+        "simulated_time": sim.isoformat() if sim else None,
+        "is_simulated": sim is not None,
+    })
+
+
+@app.route("/api/settings/current-time")
+def api_current_time():
+    """Status for the Settings clock card: the effective clock, the real clock,
+    and whether an override is active."""
+    sim = db.get_simulated_time(db.DEFAULT_USER_ID)
+    return jsonify({
+        "current_time": db.get_current_time(db.DEFAULT_USER_ID).isoformat(),
+        "real_time": db.now_local().isoformat(),
+        "simulated_time": sim.isoformat() if sim else None,
+        "is_simulated": sim is not None,
+    })
 
 
 # ── AI chat / voice — with natural-language command handling ──────────────────
@@ -1007,13 +1075,20 @@ def api_nutrition_convert():
 def api_nutrition_log():
     data = request.get_json(force=True) or {}
 
+    # Under a simulated clock the entry is backfilled to that instant and the
+    # client-supplied date/time are ignored; otherwise validate the client date.
+    sim = db.get_simulated_time()
+
     date_str = (data.get("date") or "").strip()
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
-        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
-    try:
-        datetime.strptime(date_str, "%Y-%m-%d")
-    except ValueError:
-        return jsonify({"error": "date must be a real calendar date"}), 400
+    if sim is not None:
+        date_str = sim.strftime("%Y-%m-%d")
+    else:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+            return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "date must be a real calendar date"}), 400
 
     food_name = (data.get("food_name") or "").strip()
     if not food_name:
@@ -1036,9 +1111,12 @@ def api_nutrition_log():
     if source not in _MEAL_SOURCES:
         return jsonify({"error": f"source must be one of {', '.join(_MEAL_SOURCES)}"}), 400
 
-    time_str = (data.get("time") or "").strip() or None
-    if time_str and not re.fullmatch(r"\d{2}:\d{2}", time_str):
-        return jsonify({"error": "time must be HH:MM"}), 400
+    if sim is not None:
+        time_str = sim.strftime("%H:%M")
+    else:
+        time_str = (data.get("time") or "").strip() or None
+        if time_str and not re.fullmatch(r"\d{2}:\d{2}", time_str):
+            return jsonify({"error": "time must be HH:MM"}), 400
 
     calories = data.get("calories")
     if calories is not None:
@@ -1676,8 +1754,11 @@ def api_gym_routine(routine_id):
 def api_gym_session_start():
     d = request.get_json(force=True) or {}
     routine_id = d.get("routine_id")
-    date = d.get("date") or _today()
-    start_time = d.get("start_time") or datetime.now().isoformat()
+    # Backfill the whole session under a simulated clock (date + start_time).
+    sim = db.get_simulated_time()
+    date = _log_date(d.get("date"))
+    start_time = sim.isoformat() if sim is not None else (
+        d.get("start_time") or datetime.now().isoformat())
     notes = d.get("notes", "")
     session_id = db.create_session(routine_id, date, start_time, notes)
     return jsonify({"ok": True, "session_id": session_id,
@@ -1690,7 +1771,9 @@ def api_gym_session_end(session_id):
     if not session:
         return jsonify({"error": "session not found"}), 404
     d = request.get_json(force=True) or {}
-    end_time = d.get("end_time") or datetime.now().isoformat()
+    sim = db.get_simulated_time()
+    end_time = sim.isoformat() if sim is not None else (
+        d.get("end_time") or datetime.now().isoformat())
 
     # Derive totals from the sets actually logged this session.
     sets = db.get_session_sets(session_id)
@@ -1997,13 +2080,13 @@ def api_gym_cardio_log():
     # Every field below is optional — an old-style {date,type,distance,duration,
     # effort,notes} payload still logs exactly as before.
     cardio_id = db.log_cardio_session(
-        on_date=d.get("date") or _today(),
+        on_date=_log_date(d.get("date")),
         type=d.get("type", "other"),
         distance_miles=d.get("distance_miles"),
         duration_minutes=d.get("duration_minutes"),
         perceived_effort=d.get("perceived_effort"),
         notes=d.get("notes", ""),
-        start_time=d.get("time") or d.get("start_time"),
+        start_time=_log_time(d.get("time") or d.get("start_time")),
         elevation_gain=d.get("elevation_gain"),
         avg_speed=d.get("avg_speed"),
         max_speed=d.get("max_speed"),
@@ -2745,9 +2828,12 @@ def api_water_intake():
     if amount <= 0:
         return jsonify({"error": "amount must be positive"}), 400
 
-    when = db.now_local()
+    # Under a simulated clock the entry is backfilled to that instant and the
+    # browser timestamp is ignored; otherwise honour the client timestamp.
+    sim = db.get_simulated_time()
+    when = sim if sim is not None else db.now_local()
     ts_raw = d.get("timestamp")
-    if ts_raw:
+    if sim is None and ts_raw:
         try:
             parsed = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
             # The browser sends new Date().toISOString() — always UTC. Convert it
