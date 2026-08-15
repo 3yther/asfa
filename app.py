@@ -3613,6 +3613,28 @@ def api_agent_detail(agent_id):
     })
 
 
+@app.route("/api/agents/<agent_id>/access")
+def api_agent_access(agent_id):
+    """Approval plane: the per-agent skill allowlist for the click-panel badges.
+    404 for an unknown agent (same precedent as the other agent routes)."""
+    if not db.get_agent(agent_id):
+        return jsonify({"error": "unknown agent"}), 404
+    return jsonify({"agent_id": agent_id, "rules": db.get_access_rules(agent_id)})
+
+
+@app.route("/api/agents/<agent_id>/activity")
+def api_agent_activity(agent_id):
+    """Approval plane: the agent's recent plan-execution feed (last 20, newest
+    first), shaped as {action, details, timestamp, status}."""
+    if not db.get_agent(agent_id):
+        return jsonify({"error": "unknown agent"}), 404
+    rows = db.get_agent_activity(agent_id, 20)
+    activity = [{"action": r["skill_name"], "details": r["input_params"],
+                 "timestamp": r["created_at"], "status": r["status"]}
+                for r in rows]
+    return jsonify({"agent_id": agent_id, "activity": activity})
+
+
 @app.route("/api/agents/<agent_id>/diary/generate", methods=["POST"])
 def api_agent_diary_generate(agent_id):
     """Trigger immediate diary generation for one agent (uses the Claude API)."""
@@ -4212,6 +4234,21 @@ def api_plan_decompose():
     from services.planner import decompose_plan
     result = decompose_plan(user_request)
     return jsonify(result), (200 if result.get("ok") else 500)
+
+
+@app.route("/api/plan/pending")
+def api_plan_pending():
+    """Approval queue: execution plans awaiting sign-off, newest first. Every row
+    is status 'pending' (unapproved); resolve via /api/plan/<id>/approve|reject.
+    Static rule so it always matches ahead of /api/plan/<plan_id>."""
+    return jsonify([{
+        "plan_id": p["plan_id"],
+        "user_request": p["user_request"],
+        "step_count": p["step_count"],
+        "agent_names": p.get("agents", []),
+        "status": "pending",
+        "created_at": p["created_at"],
+    } for p in db.get_pending_plans()])
 
 
 @app.route("/api/plan/<plan_id>")

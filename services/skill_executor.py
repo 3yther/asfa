@@ -44,6 +44,20 @@ def execute_skill(agent_id: str, skill_name: str, params: dict) -> dict:
     """
     key = f"{agent_id}/{skill_name}"
 
+    # Access-rule gate — checked before the skill runs. A pair with an explicit
+    # allowed=FALSE rule is blocked; the denial is returned as a complete result
+    # envelope (execute_plan reads output/error/duration_ms), and `blocked` lets
+    # the planner record it as status="blocked" rather than a generic error.
+    import database as db
+    if not db.is_skill_allowed(agent_id, skill_name):
+        return {
+            "success": False,
+            "output": f"access denied: {skill_name}",
+            "error": f"access denied: {skill_name}",
+            "duration_ms": 0,
+            "blocked": True,
+        }
+
     if key not in SKILL_IMPLEMENTATIONS:
         return {
             "success": False,

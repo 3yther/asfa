@@ -3752,6 +3752,19 @@ def _ensure_agent_data_tables():
             duration_ms INTEGER,
             executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+        # Per-agent skill allowlist enforced in execute_skill. agent_id is TEXT
+        # to match agents.id / agent_skills.agent_id (ids are "nexus", "scout",
+        # …, not integers). Absence of a row means allowed (default-allow); only
+        # an explicit allowed=FALSE row blocks a skill. BOOLEAN DEFAULT TRUE is
+        # valid in both SQLite (TRUE == 1) and Postgres.
+        """CREATE TABLE IF NOT EXISTS agent_access_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL,
+            skill_name TEXT NOT NULL,
+            allowed BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(agent_id, skill_name)
+        )""",
     ]
     with get_db() as conn:
         cur = conn.cursor()
@@ -4429,6 +4442,144 @@ def get_plan_results(plan_id):
         return [dict(r) for r in cur.fetchall()]
 
 
+# ── Access rules (per-agent skill allowlist) + approval queue ────────────────────
+# The allowlist gates execute_skill: a plan step whose (agent_id, skill_name)
+# carries an explicit allowed=FALSE row is blocked at execution time. Any pair
+# without a row is allowed (default-allow), so the gate never breaks a plan
+# unless someone has deliberately denied that pair.
+
+def is_skill_allowed(agent_id, skill_name):
+    """Access-rule check. Returns False only when an explicit allowed=FALSE row
+    exists for (agent_id, skill_name); otherwise True (default-allow)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT allowed FROM agent_access_rules "
+            f"WHERE agent_id = {ph} AND skill_name = {ph}",
+            (agent_id, skill_name))
+        row = cur.fetchone()
+        if row is None:
+            return True
+        return bool(row["allowed"])
+
+
+def get_access_rules(agent_id):
+    """All access rules for an agent as [{skill_name, allowed(bool)}], by name."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT skill_name, allowed FROM agent_access_rules "
+            f"WHERE agent_id = {ph} ORDER BY skill_name",
+            (agent_id,))
+        return [{"skill_name": r["skill_name"], "allowed": bool(r["allowed"])}
+                for r in cur.fetchall()]
+
+
+def set_access_rule(agent_id, skill_name, allowed=True):
+    """Upsert one access rule (idempotent on agent_id + skill_name)."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO agent_access_rules (agent_id, skill_name, allowed) "
+                "VALUES (%s,%s,%s) "
+                "ON CONFLICT (agent_id, skill_name) DO UPDATE SET "
+                "allowed = EXCLUDED.allowed",
+                (agent_id, skill_name, bool(allowed)))
+        else:
+            cur.execute(
+                "INSERT INTO agent_access_rules (agent_id, skill_name, allowed) "
+                "VALUES (?,?,?) "
+                "ON CONFLICT(agent_id, skill_name) DO UPDATE SET "
+                "allowed = excluded.allowed",
+                (agent_id, skill_name, 1 if allowed else 0))
+
+
+def seed_access_rules():
+    """Create an allowed=TRUE rule for every registered (agent_id, skill_name)
+    in agent_skills. Idempotent — existing rows (incl. explicit denies) are left
+    untouched. Returns the number of new rows inserted."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT agent_id, skill_name FROM agent_skills")
+        pairs = [(r["agent_id"], r["skill_name"]) for r in cur.fetchall()]
+        inserted = 0
+        for agent_id, skill_name in pairs:
+            if USE_POSTGRES:
+                cur.execute(
+                    "INSERT INTO agent_access_rules (agent_id, skill_name, allowed) "
+                    "VALUES (%s,%s,TRUE) "
+                    "ON CONFLICT (agent_id, skill_name) DO NOTHING",
+                    (agent_id, skill_name))
+            else:
+                cur.execute(
+                    "INSERT OR IGNORE INTO agent_access_rules "
+                    "(agent_id, skill_name, allowed) VALUES (?,?,1)",
+                    (agent_id, skill_name))
+            if cur.rowcount and cur.rowcount > 0:
+                inserted += cur.rowcount
+        return inserted
+
+
+def get_pending_plans():
+    """Execution plans awaiting approval, newest first. Each row carries the
+    request text, a step count, and the distinct agents referenced by the plan's
+    steps (parsed from the stored decomposition) for the approval queue."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT plan_id, user_request, decomposition, created_at "
+            "FROM execution_plans WHERE status = 'pending_approval' "
+            "ORDER BY created_at DESC")
+        out = []
+        for r in cur.fetchall():
+            try:
+                steps = json.loads(r["decomposition"]) if r["decomposition"] else []
+            except (TypeError, ValueError):
+                steps = []
+            agents = []
+            for s in steps:
+                aid = (s or {}).get("agent")
+                if aid and aid not in agents:
+                    agents.append(aid)
+            out.append({
+                "plan_id": r["plan_id"],
+                "user_request": r["user_request"],
+                "step_count": len(steps),
+                "agents": agents,
+                "created_at": r["created_at"],
+            })
+        return out
+
+
+def get_agent_activity(agent_id, limit=20):
+    """Recent plan-execution rows for one agent (success/blocked/error), newest
+    first, for the Mission Control activity feed. plan_executions timestamps its
+    rows in `executed_at`, aliased to `created_at` here for the feed shape."""
+    _ensure_agent_data_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT skill_name, input_params, status, executed_at AS created_at "
+            f"FROM plan_executions "
+            f"WHERE agent_id = {ph} AND status IN ('success', 'blocked', 'error') "
+            f"ORDER BY executed_at DESC, id DESC LIMIT {ph}",
+            (agent_id, int(limit)))
+        return [{"skill_name": r["skill_name"],
+                 "input_params": r["input_params"] or "",
+                 "status": r["status"],
+                 "created_at": r["created_at"]}
+                for r in cur.fetchall()]
+
+
 # ── Skill seed ────────────────────────────────────────────────────────────────
 # Declared capability surface for each of the 13 agents in AGENT_IDS.
 AGENT_SKILLS = {
@@ -4498,6 +4649,9 @@ def init_agent_data():
     _ensure_agent_data_tables()
     seed_relationships()
     seed_skills()
+    # Access rules must seed AFTER skills are registered, so every declared
+    # (agent_id, skill_name) inherits an explicit allowed=TRUE row.
+    seed_access_rules()
     for aid in AGENT_IDS:
         init_error_budget(aid)
         init_energy(aid)
