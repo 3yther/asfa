@@ -200,6 +200,59 @@
   .m-sbtn.sel.idle{color:var(--gold);border-color:var(--gold);background:#ffd60a14;}
   .m-sbtn.sel.locked{color:var(--slate);border-color:var(--slate);background:#94a3b822;}
 
+  /* ── APPROVAL PLANE (Task 4) ─────────────────────────── */
+  /* status palette per spec: success / blocked|error / pending / running */
+  :root{ --ap-success:#05ffa1; --ap-magenta:#ff2a6d; --ap-yellow:#fcee0a; --ap-cyan:#00f0ff; }
+  /* spinner (rotating border) + skeleton shimmer */
+  .ap-spin{display:inline-block;width:13px;height:13px;border:2px solid #0d2010;border-top-color:var(--ap-cyan);border-radius:50%;animation:apspin .7s linear infinite;vertical-align:middle;}
+  @keyframes apspin{to{transform:rotate(360deg);}}
+  .ap-loading{color:#5a7a5a;font-size:.54rem;letter-spacing:1px;display:flex;align-items:center;gap:7px;}
+  .ap-skel{height:16px;border-radius:2px;background:linear-gradient(90deg,#06200d 25%,#0c3016 37%,#06200d 63%);background-size:400% 100%;animation:apshim 1.3s ease infinite;margin:4px 0;}
+  @keyframes apshim{0%{background-position:100% 0;}100%{background-position:0 0;}}
+  .ap-err{color:var(--ap-magenta);font-size:.54rem;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .ap-retry{background:none;border:1px solid var(--ap-magenta);color:var(--ap-magenta);font-family:inherit;font-size:.5rem;letter-spacing:1px;padding:2px 8px;cursor:pointer;text-transform:uppercase;font-weight:700;}
+  .ap-retry:hover{background:#ff2a6d18;box-shadow:0 0 8px #ff2a6d55;}
+  /* access-rule badges */
+  .m-badges{display:flex;flex-wrap:wrap;gap:5px;margin-top:2px;}
+  .m-abadge{font-size:.5rem;font-weight:700;letter-spacing:.04em;padding:2px 7px;border:1px solid;border-radius:2px;text-transform:uppercase;}
+  .m-abadge.ok{color:var(--ap-success);border-color:var(--ap-success);box-shadow:0 0 6px #05ffa140;}
+  .m-abadge.no{color:var(--ap-magenta);border-color:var(--ap-magenta);box-shadow:0 0 6px #ff2a6d40;}
+  /* per-agent recent activity, color-coded by status */
+  .m-actlist{font-size:.54rem;line-height:1.7;max-height:120px;overflow-y:auto;background:#031007;padding:6px 8px;}
+  .m-actlist .al{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:2px solid transparent;padding-left:6px;}
+  .m-actlist .al .t{opacity:.6;}
+  .m-actlist .al.success{color:var(--ap-success);border-color:var(--ap-success);}
+  .m-actlist .al.blocked,.m-actlist .al.error,.m-actlist .al.failure{color:var(--ap-magenta);border-color:var(--ap-magenta);}
+  .m-actlist .al.pending{color:var(--ap-yellow);border-color:var(--ap-yellow);}
+  .m-actlist .al.info,.m-actlist .al.running{color:var(--ap-cyan);border-color:var(--ap-cyan);}
+  /* approve-pending button */
+  .m-approve-btn{margin-top:12px;width:100%;padding:9px;background:#031007;color:var(--ap-success);border:1px solid var(--ap-success);font-family:inherit;font-weight:700;letter-spacing:.06em;cursor:pointer;box-shadow:0 0 10px #05ffa140;text-transform:uppercase;font-size:.62rem;display:none;}
+  .m-approve-btn.show{display:block;}
+  .m-approve-btn:hover{background:#05ffa114;text-shadow:0 0 8px var(--ap-success);}
+  /* approval modal (reuses .modal-overlay / .modal-card) */
+  #approval .modal-card{border-color:var(--ap-magenta);box-shadow:0 0 30px #ff2a6d55,inset 0 0 30px #ff2a6d0a;}
+  #approval .modal-close{color:var(--ap-magenta);}
+  #approval .modal-close:hover{text-shadow:0 0 10px var(--ap-magenta);}
+  .ap-h{color:var(--ap-magenta);text-shadow:0 0 10px var(--ap-magenta);font-weight:800;letter-spacing:.08em;font-size:.9rem;margin-bottom:8px;}
+  .ap-agent{font-weight:700;color:var(--ap-cyan);font-size:.7rem;letter-spacing:1px;}
+  .ap-request{font-size:.66rem;color:#9ccf9c;margin-top:4px;line-height:1.5;}
+  .ap-args{background:#000;border:1px solid var(--ap-cyan);color:var(--ap-cyan);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.6rem;padding:8px;margin:10px 0;white-space:pre-wrap;max-height:180px;overflow:auto;}
+  .ap-row{display:flex;gap:8px;margin-top:12px;}
+  .ap-btn{flex:1;padding:10px;font-family:inherit;font-weight:700;letter-spacing:.06em;cursor:pointer;background:#020a02;text-transform:uppercase;font-size:.66rem;transition:opacity .2s ease;}
+  .ap-btn:disabled{cursor:progress;opacity:.5;}
+  .ap-btn.ok{color:var(--ap-success);border:1px solid var(--ap-success);}
+  .ap-btn.ok:hover:not(:disabled){background:#05ffa114;text-shadow:0 0 8px var(--ap-success);box-shadow:0 0 10px #05ffa140;}
+  .ap-btn.no{color:var(--ap-magenta);border:1px solid var(--ap-magenta);}
+  .ap-btn.no:hover:not(:disabled){background:#ff2a6d14;text-shadow:0 0 8px var(--ap-magenta);box-shadow:0 0 10px #ff2a6d40;}
+  .ap-btn:focus-visible{outline:2px solid var(--ap-cyan);outline-offset:2px;}
+  /* toast notifications */
+  #toast-wrap{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:300;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;}
+  .toast{min-width:180px;max-width:80vw;text-align:center;background:#020a02;padding:9px 18px;font-size:.66rem;letter-spacing:.04em;border:1px solid var(--green);color:var(--green);box-shadow:0 0 14px #39ff1455;opacity:0;transform:translateY(8px);transition:opacity .3s ease,transform .3s ease;}
+  .toast.show{opacity:1;transform:translateY(0);}
+  .toast.success{border-color:var(--ap-success);color:var(--ap-success);box-shadow:0 0 14px #05ffa155;}
+  .toast.info{border-color:var(--ap-cyan);color:var(--ap-cyan);box-shadow:0 0 14px #00f0ff55;}
+  .toast.error{border-color:var(--ap-magenta);color:var(--ap-magenta);box-shadow:0 0 14px #ff2a6d55;}
+
   @media(max-width:900px){
     .roster,.panel{flex-basis:170px;}
     .tb-stats .stat:nth-child(n+3){display:none;}
@@ -302,6 +355,11 @@
       <div class="m-tel-diary" id="m-diary">—</div>
       <div class="m-tel-audit" id="m-audit"></div>
     </div>
+    <div class="m-sub">Access Rules</div>
+    <div class="m-badges" id="m-access"></div>
+    <div class="m-sub">Recent Activity</div>
+    <div class="m-actlist" id="m-activity"></div>
+    <button class="m-approve-btn" id="m-approve-btn" type="button">⚠ APPROVE PENDING (<span id="m-approve-n">0</span>)</button>
     <div class="m-sub">Activity Log</div>
     <div class="m-log" id="m-log">…</div>
     <div class="m-controls">
@@ -314,6 +372,23 @@
     </div>
   </div>
 </div>
+
+<!-- Approval modal (Task 4). Hidden by default; only ESC / × / buttons close it. -->
+<div class="modal-overlay" id="approval" role="dialog" aria-modal="true" aria-labelledby="ap-title">
+  <div class="modal-card">
+    <button class="modal-close" id="approval-close" type="button" aria-label="Close">×</button>
+    <div class="ap-h" id="ap-title">APPROVAL REQUIRED</div>
+    <div class="ap-agent" id="ap-agent"></div>
+    <div class="ap-request" id="ap-request">…</div>
+    <div class="ap-args" id="ap-args"></div>
+    <div class="ap-row">
+      <button class="ap-btn ok" id="ap-approve" type="button">APPROVE</button>
+      <button class="ap-btn no" id="ap-deny" type="button">DENY</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-wrap" aria-live="polite" aria-atomic="true"></div>
 
 <script>
 /* ════════════════════════════════════════════════════════════════════════
@@ -433,7 +508,22 @@ const API = {
   setStatus:      (id,st)  => fetch('/api/agents/'+encodeURIComponent(id)+'/status',{method:'POST',credentials:'include',headers:J,body:JSON.stringify({status:st})}).then(r=>r.json()),
   missions:       ()       => fetch('/api/missions/today',{credentials:'include'}).then(r=>r.json()),
   completeMission:(id)     => fetch('/api/missions/'+id+'/complete',{method:'POST',credentials:'include',headers:J}).then(r=>r.json()),
+  // ── Approval plane (Task 4) — these throw on non-2xx so callers can toast + retry.
+  access:         (id)     => _getJSON('/api/agents/'+encodeURIComponent(id)+'/access'),
+  activity:       (id)     => _getJSON('/api/agents/'+encodeURIComponent(id)+'/activity'),
+  pendingPlans:   ()       => _getJSON('/api/plan/pending'),
+  planGet:        (pid)    => _getJSON('/api/plan/'+encodeURIComponent(pid)),
+  planApprove:    (pid)    => _postJSON('/api/plan/'+encodeURIComponent(pid)+'/approve'),
+  planReject:     (pid)    => _postJSON('/api/plan/'+encodeURIComponent(pid)+'/reject'),
+  planExecute:    (pid)    => _postJSON('/api/plan/'+encodeURIComponent(pid)+'/execute'),
 };
+// Fetch wrappers that reject on HTTP errors (the approval-plane UI shows error toasts).
+function _getJSON(url){
+  return fetch(url,{credentials:'include'}).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
+}
+function _postJSON(url){
+  return fetch(url,{method:'POST',credentials:'include',headers:J}).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
+}
 
 /* ════════════════════════════════════════════════════════════════════════
    BOOT SCENE
@@ -1125,6 +1215,9 @@ function openModal(id){
   API.log(id).then(rows=>{ $('m-log').innerHTML=(rows&&rows.length)?rows.slice(0,8).map(r=>{ const t=(r.timestamp||'').slice(11,16); const xp=r.xp_earned?` <span style="color:#ffd60a">+${Number(r.xp_earned)||0}</span>`:'';
     return `<div class="ln"><span class="t">[${esc(t)}]</span> ${esc(r.message||'')}${xp}</div>`; }).join(''):'<div class="ln" style="color:#5a7a5a">No log entries yet.</div>'; }).catch(()=>{ $('m-log').textContent='Log unavailable.'; });
   loadTelemetry(id);
+  loadAccess(id);
+  loadAgentActivity(id);
+  refreshApproveButton();
 }
 
 /* Tier 3 Part 4 — energy + last diary line + last 5 audit rows for the panel. */
@@ -1144,7 +1237,171 @@ function loadTelemetry(id){
 function closeModal(){ $('modal').classList.remove('show'); modalAgentId=null; }
 $('modal-close').onclick=closeModal;
 $('modal').onclick=e=>{ if(e.target===$('modal')) closeModal(); };
-document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
+// ESC: close the approval modal first if it's open (it sits above the agent modal),
+// otherwise close the agent modal.
+document.addEventListener('keydown', e=>{
+  if(e.key!=='Escape') return;
+  if($('approval').classList.contains('show')){ closeApproval(); return; }
+  closeModal();
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   APPROVAL PLANE (Task 4) — toast, access badges, activity feed, approval modal
+   ════════════════════════════════════════════════════════════════════════ */
+// Toast helper: green=success, cyan=info, magenta=error. Auto-dismiss ~2.4s.
+function toast(msg, kind){
+  const wrap=$('toast-wrap'); if(!wrap) return;
+  const t=document.createElement('div');
+  t.className='toast'+(kind?(' '+kind):'');
+  t.textContent=msg;
+  wrap.appendChild(t);
+  requestAnimationFrame(()=>t.classList.add('show'));
+  setTimeout(()=>{ t.classList.remove('show'); setTimeout(()=>t.remove(),320); }, 2400);
+}
+// map a raw execution status onto a CSS class for the color-coded feed
+function statusClass(s){
+  s=String(s||'').toLowerCase();
+  if(s==='success'||s==='completed'||s==='ok') return 'success';
+  if(s==='blocked') return 'blocked';
+  if(s==='failure'||s==='failed'||s==='error') return 'error';
+  if(s==='pending'||s==='pending_approval'||s==='queued') return 'pending';
+  if(s==='running'||s==='in_progress') return 'running';
+  return 'info';
+}
+
+function loadAccess(id){
+  const box=$('m-access'); if(!box) return;
+  box.innerHTML='<div class="ap-loading"><span class="ap-spin"></span>loading rules…</div>';
+  API.access(id).then(d=>{
+    if(modalAgentId!==id) return;                       // panel moved on
+    const rules=(d&&d.rules)||[];
+    box.innerHTML = rules.length
+      ? rules.map(r=>`<span class="m-abadge ${r.allowed?'ok':'no'}">${esc(r.skill_name)}</span>`).join('')
+      : '<span style="color:#5a7a5a;font-size:.54rem">No skills registered.</span>';
+  }).catch(()=>{
+    if(modalAgentId!==id) return;
+    box.innerHTML='<span class="ap-err">Failed to load access rules. <button class="ap-retry" type="button">Retry</button></span>';
+    const b=box.querySelector('.ap-retry'); if(b) b.onclick=()=>loadAccess(id);
+    toast('Failed to load agent data. Try again?', 'error');
+  });
+}
+
+function loadAgentActivity(id){
+  const box=$('m-activity'); if(!box) return;
+  box.innerHTML='<div class="ap-loading"><span class="ap-spin"></span>loading activity…</div>';
+  API.activity(id).then(d=>{
+    if(modalAgentId!==id) return;
+    const rows=(d&&d.activity)||[];
+    box.innerHTML = rows.length
+      ? rows.map(r=>{ const t=String(r.timestamp||'').slice(11,16);
+          return `<div class="al ${statusClass(r.status)}"><span class="t">[${esc(t)}]</span> ${esc(r.action||'')} · ${esc(r.status||'')}</div>`; }).join('')
+      : '<div class="al info" style="border-color:transparent;color:#5a7a5a">No recent activity.</div>';
+  }).catch(()=>{
+    if(modalAgentId!==id) return;
+    box.innerHTML='<span class="ap-err">Failed to load activity. <button class="ap-retry" type="button">Retry</button></span>';
+    const b=box.querySelector('.ap-retry'); if(b) b.onclick=()=>loadAgentActivity(id);
+    // access loader already toasts on the same failure mode; avoid a double toast here.
+  });
+}
+
+let pendingPlansCache=[];
+function refreshApproveButton(){
+  const btn=$('m-approve-btn'); if(!btn) return;
+  API.pendingPlans().then(d=>{
+    pendingPlansCache=Array.isArray(d)?d:((d&&d.plans)||[]);   // endpoint returns a bare array
+    const n=pendingPlansCache.length;
+    $('m-approve-n').textContent=n;
+    btn.classList.toggle('show', n>0);
+  }).catch(()=>{ btn.classList.remove('show'); });
+}
+$('m-approve-btn').onclick=()=>{ if(pendingPlansCache.length) openApproval(pendingPlansCache[0].plan_id); };
+
+/* ── approval modal controller ─────────────────────────── */
+let approvalPlanId=null, approvalBusy=false, approvalReturnFocus=null;
+function openApproval(planId){
+  approvalPlanId=planId; approvalBusy=false;
+  approvalReturnFocus=document.activeElement;
+  $('ap-agent').textContent='';
+  $('ap-request').innerHTML='<span class="ap-loading"><span class="ap-spin"></span>loading plan…</span>';
+  $('ap-args').textContent='';
+  setApprovalButtonsBusy(false);
+  $('approval').classList.add('show');
+  // focus the Approve button once the open transition starts (Approve → Deny → ESC tab order)
+  requestAnimationFrame(()=>{ const b=$('ap-approve'); if(b) b.focus(); });
+  API.planGet(planId).then(p=>{
+    if(approvalPlanId!==planId) return;
+    $('ap-request').textContent=p.user_request||'(no request text)';
+    const steps=Array.isArray(p.decomposition)?p.decomposition:[];   // already parsed server-side
+    const names=[...new Set(steps.map(s=>s&&(s.agent||s.agent_id)).filter(Boolean))];
+    const first=steps[0]||{};
+    const bits=[];
+    if(names.length) bits.push('Agents: '+names.join(', '));
+    if(first.skill) bits.push('Skill: '+first.skill);
+    $('ap-agent').textContent=bits.join('   ·   ');
+    $('ap-args').textContent=JSON.stringify(steps.length?steps:(p.decomposition||[]), null, 2);
+  }).catch(()=>{
+    if(approvalPlanId!==planId) return;
+    $('ap-request').innerHTML='<span class="ap-err">Failed to load plan details.</span>';
+    toast('Failed to load agent data. Try again?', 'error');
+  });
+}
+function setApprovalButtonsBusy(busy, which){
+  approvalBusy=busy;
+  const a=$('ap-approve'), d=$('ap-deny');
+  a.disabled=busy; d.disabled=busy;
+  a.textContent = (busy&&which==='approve') ? 'APPROVING…' : 'APPROVE';
+  d.textContent = (busy&&which==='deny')    ? 'DENYING…'   : 'DENY';
+}
+function closeApproval(){
+  $('approval').classList.remove('show');
+  approvalPlanId=null; approvalBusy=false;
+  if(approvalReturnFocus&&approvalReturnFocus.focus){ try{approvalReturnFocus.focus();}catch(e){} }
+  approvalReturnFocus=null;
+}
+$('approval-close').onclick=()=>{ if(!approvalBusy) closeApproval(); };
+// Deliberate: clicking the backdrop does NOT close the approval modal (only ESC / × / buttons).
+$('ap-approve').onclick=async()=>{
+  if(!approvalPlanId||approvalBusy) return;
+  const pid=approvalPlanId;
+  setApprovalButtonsBusy(true,'approve');
+  try{
+    await API.planApprove(pid);                 // gating action — must succeed
+  }catch(e){
+    setApprovalButtonsBusy(false);
+    toast('Failed to approve. Try again?', 'error');
+    return;
+  }
+  // Approved. Kick off execution best-effort (the agent proceeds); a hiccup here
+  // must not read as an approval failure.
+  API.planExecute(pid).catch(()=>{}).finally(()=>{ if(modalAgentId){ loadAgentActivity(modalAgentId); loadTelemetry(modalAgentId); } });
+  toast('Approved! Agent proceeding.', 'success');
+  closeApproval();
+  refreshApproveButton();
+  if(modalAgentId){ loadAgentActivity(modalAgentId); loadTelemetry(modalAgentId); }
+};
+$('ap-deny').onclick=async()=>{
+  if(!approvalPlanId||approvalBusy) return;
+  const pid=approvalPlanId;
+  setApprovalButtonsBusy(true,'deny');
+  try{
+    await API.planReject(pid);
+    toast('Denied.', 'info');
+    closeApproval();
+    refreshApproveButton();
+  }catch(e){
+    setApprovalButtonsBusy(false);
+    toast('Failed to deny. Try again?', 'error');
+  }
+};
+// keep Tab focus trapped inside the approval modal (Approve → Deny → ×  → back to Approve)
+$('approval').addEventListener('keydown', e=>{
+  if(e.key!=='Tab'||!$('approval').classList.contains('show')) return;
+  const f=[$('ap-approve'),$('ap-deny'),$('approval-close')].filter(el=>el&&!el.disabled);
+  if(!f.length) return;
+  const first=f[0], last=f[f.length-1], cur=document.activeElement;
+  if(e.shiftKey&&cur===first){ e.preventDefault(); last.focus(); }
+  else if(!e.shiftKey&&cur===last){ e.preventDefault(); first.focus(); }
+});
 $('m-award-btn').onclick=async()=>{
   if(!modalAgentId) return; const amt=Phaser.Math.Clamp(parseInt($('m-xp-input').value,10)||0,1,500);
   const a=MC.agents.find(x=>x.id===modalAgentId); const rid=a?(currentRoomId(a)||AGENT_ROOM[a.id]):null;

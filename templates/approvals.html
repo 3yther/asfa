@@ -19,21 +19,206 @@
 
 {% include "nav.html" with context %}
 
+<style>
+  /* ── Approvals inbox (Task 4/5) ─────────────────────── */
+  :root{ --ap-success:#05ffa1; --ap-magenta:#ff2a6d; --ap-yellow:#fcee0a; --ap-cyan:#00f0ff; }
+  #approvals-list{padding:6px 0;min-height:90px;margin-top:18px;}
+  .ap-item{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 16px;border-bottom:1px solid rgba(61,225,240,.14);}
+  .ap-item:last-child{border-bottom:none;}
+  .ap-item .ap-meta .ap-req{font-weight:700;font-size:.95rem;color:var(--cyan);}
+  .ap-item .ap-meta .ap-sub{font-size:.75rem;color:#5a7a8a;margin-top:3px;}
+  .ap-item .ap-meta .ap-agents{color:var(--ap-success);}
+  .ap-actions{display:flex;gap:8px;flex-shrink:0;}
+  .ap-mini{padding:7px 14px;font-family:'JetBrains Mono',monospace;font-size:.72rem;font-weight:700;letter-spacing:.04em;cursor:pointer;background:#020a0e;text-transform:uppercase;}
+  .ap-mini.ok{color:var(--ap-success);border:1px solid var(--ap-success);}
+  .ap-mini.ok:hover{background:#05ffa114;box-shadow:0 0 10px #05ffa140;}
+  .ap-mini.no{color:var(--ap-magenta);border:1px solid var(--ap-magenta);}
+  .ap-mini.no:hover{background:#ff2a6d14;box-shadow:0 0 10px #ff2a6d40;}
+  /* spinner + skeleton loading */
+  .ap-spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(61,225,240,.2);border-top-color:var(--ap-cyan);border-radius:50%;animation:apspin .7s linear infinite;vertical-align:middle;}
+  @keyframes apspin{to{transform:rotate(360deg);}}
+  .ap-loading{color:#5a7a8a;font-size:.85rem;display:flex;align-items:center;gap:10px;padding:14px 16px;}
+  .ap-skel{height:44px;border-radius:3px;background:linear-gradient(90deg,rgba(61,225,240,.05) 25%,rgba(61,225,240,.13) 37%,rgba(61,225,240,.05) 63%);background-size:400% 100%;animation:apshim 1.3s ease infinite;margin:10px 16px;}
+  @keyframes apshim{0%{background-position:100% 0;}100%{background-position:0 0;}}
+  .ap-page-err{color:var(--ap-magenta);font-size:.9rem;padding:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+  .ap-empty{color:#5a7a8a;font-size:.9rem;padding:18px 16px;}
+  /* modal */
+  #approval{position:fixed;inset:0;background:rgba(0,4,8,.92);z-index:100;display:none;align-items:center;justify-content:center;padding:20px;}
+  #approval.show{display:flex;}
+  #approval .ap-card{width:min(520px,94vw);max-height:88vh;overflow:auto;background:#010a10;border:1px solid var(--ap-magenta);box-shadow:0 0 34px #ff2a6d55;padding:22px;position:relative;transform:scale(.9);opacity:0;transition:transform .25s cubic-bezier(.2,.9,.3,1.2),opacity .25s ease;}
+  #approval.show .ap-card{transform:scale(1);opacity:1;}
+  #approval .ap-close{position:absolute;top:8px;right:14px;font-size:1.5rem;line-height:1;color:var(--ap-magenta);background:none;border:none;cursor:pointer;}
+  #approval .ap-close:hover{text-shadow:0 0 10px var(--ap-magenta);}
+  #approval .ap-h{color:var(--ap-magenta);text-shadow:0 0 10px var(--ap-magenta);font-weight:800;letter-spacing:.08em;margin-bottom:8px;}
+  #approval .ap-agent{color:var(--ap-cyan);font-weight:700;font-size:.85rem;}
+  #approval .ap-request{font-size:.95rem;color:#cfe;margin-top:4px;line-height:1.5;}
+  #approval .ap-args{background:#000;border:1px solid var(--ap-cyan);color:var(--ap-cyan);font-family:'JetBrains Mono',monospace;font-size:.72rem;padding:10px;margin:12px 0;white-space:pre-wrap;max-height:200px;overflow:auto;}
+  #approval .ap-row{display:flex;gap:10px;margin-top:14px;}
+  #approval .ap-btn{flex:1;padding:11px;font-family:'JetBrains Mono',monospace;font-weight:700;letter-spacing:.05em;cursor:pointer;background:#020a0e;text-transform:uppercase;transition:opacity .2s ease;}
+  #approval .ap-btn:disabled{cursor:progress;opacity:.5;}
+  #approval .ap-btn.ok{color:var(--ap-success);border:1px solid var(--ap-success);}
+  #approval .ap-btn.ok:hover:not(:disabled){background:#05ffa114;box-shadow:0 0 12px #05ffa140;}
+  #approval .ap-btn.no{color:var(--ap-magenta);border:1px solid var(--ap-magenta);}
+  #approval .ap-btn.no:hover:not(:disabled){background:#ff2a6d14;box-shadow:0 0 12px #ff2a6d40;}
+  #approval .ap-btn:focus-visible{outline:2px solid var(--ap-cyan);outline-offset:2px;}
+  /* toasts */
+  #toast-wrap{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;}
+  #toast-wrap .toast{min-width:200px;max-width:80vw;text-align:center;background:#010a10;padding:11px 20px;font-family:'JetBrains Mono',monospace;font-size:.8rem;border:1px solid var(--ap-cyan);color:var(--ap-cyan);box-shadow:0 0 16px #00f0ff44;opacity:0;transform:translateY(8px);transition:opacity .3s ease,transform .3s ease;}
+  #toast-wrap .toast.show{opacity:1;transform:translateY(0);}
+  #toast-wrap .toast.success{border-color:var(--ap-success);color:var(--ap-success);box-shadow:0 0 16px #05ffa155;}
+  #toast-wrap .toast.info{border-color:var(--ap-cyan);color:var(--ap-cyan);box-shadow:0 0 16px #00f0ff55;}
+  #toast-wrap .toast.error{border-color:var(--ap-magenta);color:var(--ap-magenta);box-shadow:0 0 16px #ff2a6d55;}
+</style>
+
 <main class="screen-placeholder">
   <h1 class="screen-title" data-decode>Approvals Inbox</h1>
   <p class="screen-sub">Pending actions awaiting your sign-off</p>
-  <div class="screen-empty sci-fi-panel">No pending approvals</div>
+  <div id="approvals-list" class="sci-fi-panel">
+    <div class="ap-skel"></div><div class="ap-skel"></div>
+  </div>
 </main>
 
+<!-- Approval modal (reused flow). Only ESC / × / buttons close it. -->
+<div id="approval" role="dialog" aria-modal="true" aria-labelledby="ap-title">
+  <div class="ap-card">
+    <button class="ap-close" id="approval-close" type="button" aria-label="Close">×</button>
+    <div class="ap-h" id="ap-title">APPROVAL REQUIRED</div>
+    <div class="ap-agent" id="ap-agent"></div>
+    <div class="ap-request" id="ap-request">…</div>
+    <div class="ap-args" id="ap-args"></div>
+    <div class="ap-row">
+      <button class="ap-btn ok" id="ap-approve" type="button">APPROVE</button>
+      <button class="ap-btn no" id="ap-deny" type="button">DENY</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-wrap" aria-live="polite" aria-atomic="true"></div>
+
 <script>
-  // Add corner elements to all sci-fi panels
-  document.querySelectorAll('.sci-fi-panel').forEach(el => {
-    ['corner-bl', 'corner-br'].forEach(cls => {
-      const div = document.createElement('div');
-      div.className = cls;
-      el.appendChild(div);
+(function(){
+  const J={'Content-Type':'application/json'};
+  const $=id=>document.getElementById(id);
+  const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function toast(msg,kind){
+    const wrap=$('toast-wrap'); if(!wrap) return;
+    const t=document.createElement('div');
+    t.className='toast'+(kind?(' '+kind):'');
+    t.textContent=msg; wrap.appendChild(t);
+    requestAnimationFrame(()=>t.classList.add('show'));
+    setTimeout(()=>{ t.classList.remove('show'); setTimeout(()=>t.remove(),320); },2600);
+  }
+  const getJSON =u=>fetch(u,{credentials:'include'}).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
+  const postJSON=u=>fetch(u,{method:'POST',credentials:'include',headers:J}).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
+
+  function loadApprovals(){
+    const box=$('approvals-list');
+    box.innerHTML='<div class="ap-loading"><span class="ap-spin"></span>Loading pending plans…</div>';
+    getJSON('/api/plan/pending').then(d=>{
+      const plans=Array.isArray(d)?d:((d&&d.plans)||[]);
+      if(!plans.length){ box.innerHTML='<div class="ap-empty">No pending approvals</div>'; return; }
+      box.innerHTML=plans.map(p=>{
+        const agents=(p.agent_names&&p.agent_names.length)?esc(p.agent_names.join(', ')):'—';
+        const when=esc(String(p.created_at||'').slice(0,16));
+        return `<div class="ap-item" data-pid="${esc(p.plan_id)}">
+            <div class="ap-meta">
+              <div class="ap-req">${esc(p.user_request||p.plan_id)}</div>
+              <div class="ap-sub"><span class="ap-agents">${agents}</span> · ${esc(p.step_count)} step(s) · ${when}</div>
+            </div>
+            <div class="ap-actions">
+              <button class="ap-mini ok" data-act="approve" type="button">APPROVE</button>
+              <button class="ap-mini no" data-act="deny" type="button">DENY</button>
+            </div>
+          </div>`;
+      }).join('');
+      box.querySelectorAll('.ap-item').forEach(el=>{
+        const pid=el.dataset.pid;
+        el.querySelector('[data-act="approve"]').onclick=e=>{ e.stopPropagation(); openApproval(pid); };
+        el.querySelector('[data-act="deny"]').onclick=e=>{ e.stopPropagation(); openApproval(pid); };
+        el.querySelector('.ap-meta').onclick=()=>openApproval(pid);
+      });
+    }).catch(()=>{
+      box.innerHTML='<div class="ap-page-err">Failed to load pending plans. '
+        +'<button class="ap-mini no" id="ap-page-retry" type="button">Refresh</button></div>';
+      const b=$('ap-page-retry'); if(b) b.onclick=()=>location.reload();
     });
+  }
+
+  let curPlan=null, busy=false, returnFocus=null;
+  function setBusy(b,which){
+    busy=b; const a=$('ap-approve'), d=$('ap-deny');
+    a.disabled=b; d.disabled=b;
+    a.textContent=(b&&which==='approve')?'APPROVING…':'APPROVE';
+    d.textContent=(b&&which==='deny')?'DENYING…':'DENY';
+  }
+  function openApproval(pid){
+    curPlan=pid; busy=false; returnFocus=document.activeElement;
+    $('ap-agent').textContent='';
+    $('ap-request').innerHTML='<span class="ap-loading" style="padding:0"><span class="ap-spin"></span>Loading plan…</span>';
+    $('ap-args').textContent='';
+    setBusy(false);
+    $('approval').classList.add('show');
+    requestAnimationFrame(()=>{ const b=$('ap-approve'); if(b) b.focus(); });
+    getJSON('/api/plan/'+encodeURIComponent(pid)).then(p=>{
+      if(curPlan!==pid) return;
+      $('ap-request').textContent=p.user_request||'(no request)';
+      const steps=Array.isArray(p.decomposition)?p.decomposition:[];
+      const names=[...new Set(steps.map(s=>s&&(s.agent||s.agent_id)).filter(Boolean))];
+      $('ap-agent').textContent=names.length?('Agents: '+names.join(', ')):'';
+      $('ap-args').textContent=JSON.stringify(steps.length?steps:(p.decomposition||[]),null,2);
+    }).catch(()=>{
+      if(curPlan!==pid) return;
+      $('ap-request').innerHTML='<span style="color:var(--ap-magenta)">Failed to load plan details.</span>';
+      toast('Failed to load agent data. Try again?','error');
+    });
+  }
+  function closeApproval(){
+    $('approval').classList.remove('show'); curPlan=null; busy=false;
+    if(returnFocus&&returnFocus.focus){ try{returnFocus.focus();}catch(e){} }
+    returnFocus=null;
+  }
+  $('approval-close').onclick=()=>{ if(!busy) closeApproval(); };
+  // backdrop click intentionally does NOT close (only ESC / × / buttons)
+
+  $('ap-approve').onclick=async()=>{
+    if(!curPlan||busy) return; const pid=curPlan; setBusy(true,'approve');
+    try{
+      await postJSON('/api/plan/'+encodeURIComponent(pid)+'/approve');   // gating action
+    }catch(e){ setBusy(false); toast('Failed to approve. Try again?','error'); return; }
+    // Approved. Execution is best-effort so a hiccup doesn't read as an approval failure.
+    postJSON('/api/plan/'+encodeURIComponent(pid)+'/execute').catch(()=>{});
+    toast('Approved! Agent proceeding.','success');
+    closeApproval(); loadApprovals();
+  };
+  $('ap-deny').onclick=async()=>{
+    if(!curPlan||busy) return; const pid=curPlan; setBusy(true,'deny');
+    try{
+      await postJSON('/api/plan/'+encodeURIComponent(pid)+'/reject');
+      toast('Denied.','info');
+      closeApproval(); loadApprovals();
+    }catch(e){ setBusy(false); toast('Failed to deny. Try again?','error'); }
+  };
+  // ESC closes the modal; Tab is trapped inside it (Approve → Deny → × → Approve)
+  document.addEventListener('keydown',e=>{
+    if(!$('approval').classList.contains('show')) return;
+    if(e.key==='Escape'){ if(!busy) closeApproval(); return; }
+    if(e.key==='Tab'){
+      const f=[$('ap-approve'),$('ap-deny'),$('approval-close')].filter(el=>el&&!el.disabled);
+      if(!f.length) return;
+      const first=f[0], last=f[f.length-1], cur=document.activeElement;
+      if(e.shiftKey&&cur===first){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey&&cur===last){ e.preventDefault(); first.focus(); }
+    }
   });
+
+  // Add corner elements to all sci-fi panels
+  document.querySelectorAll('.sci-fi-panel').forEach(el=>{
+    ['corner-bl','corner-br'].forEach(cls=>{ const div=document.createElement('div'); div.className=cls; el.appendChild(div); });
+  });
+
+  loadApprovals();
+})();
 </script>
 
 <script src="/static/js/starfield.js" defer></script>
