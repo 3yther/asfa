@@ -4600,6 +4600,59 @@ def api_keys_revoke(key_id):
     return jsonify({"error": "key not found or already revoked"}), 404
 
 
+@app.route("/api/email/test-weekly")
+def api_email_test_weekly():
+    """TEMPORARY manual trigger for the weekly summary email.
+
+    Runs the exact same code path as the scheduled Sunday job
+    (services.scheduler.weekly_csv_export → weekly_export.send_weekly_export →
+    alerts SMTP send), so it's a faithful end-to-end test of the weekly CSV
+    export email. Session-gated: it is not in _PUBLIC_ENDPOINTS, so the
+    before_request login gate requires a logged-in browser session (the
+    read-only Bearer key path only covers _API_KEY_READ_ENDPOINTS, and a
+    send-email side effect deliberately does not belong on that allowlist).
+
+    Safe to re-run: send_weekly_export() never raises and only reads data.
+    Remove once email delivery is verified on Railway.
+    """
+    from services.weekly_export import send_weekly_export
+    try:
+        result = send_weekly_export()
+    except Exception as e:  # defensive — the callee is documented never to raise.
+        logger.error("test-weekly email failed: %s", e)
+        return jsonify({"success": False, "message": "Weekly email failed",
+                        "error": f"{type(e).__name__}: {e}"}), 500
+
+    window = f"{result.get('start')} → {result.get('end')}"
+    if result.get("emailed"):
+        return jsonify({
+            "success": True,
+            "message": f"Email sent to {result.get('to')}",
+            "window": window,
+            "rows": result.get("rows"),
+            "counts": result.get("counts"),
+        })
+
+    # Not emailed — surface *why* so the tester can act without reading logs.
+    reason = result.get("skipped", "unknown")
+    hints = {
+        "smtp_not_configured": "SMTP_HOST is not set on Railway, so no email was "
+                               "attempted. Set SMTP_HOST/SMTP_USER/SMTP_PASSWORD.",
+        "send_failed": "SMTP connect/auth failed — check SMTP_USER/SMTP_PASSWORD "
+                       "(Gmail App Password) and the 'Email send failed' warning "
+                       "in the Railway logs.",
+        "dry_run": "Dry run — no email attempted.",
+    }
+    return jsonify({
+        "success": False,
+        "message": f"Weekly email not sent (recipient would be {result.get('to')})",
+        "error": hints.get(reason, reason),
+        "reason": reason,
+        "window": window,
+        "rows": result.get("rows"),
+    })
+
+
 def _start_background():
     if os.environ.get("ASFA_BG_STARTED"):
         return
