@@ -886,6 +886,10 @@ def api_current_time():
         "real_time": db.now_local().isoformat(),
         "simulated_time": sim.isoformat() if sim else None,
         "is_simulated": sim is not None,
+        # Server send time (epoch ms). The nav clock uses it as the reference
+        # point to tick the simulated instant forward in real time, so an
+        # override doesn't freeze — it advances 1s/s from where it was set.
+        "fetch_time_ms": int(time.time() * 1000),
     })
 
 

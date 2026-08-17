@@ -64,14 +64,21 @@
 
   // When the Settings clock override is active, the whole app stamps logs at a
   // simulated instant (get_current_time). The nav clock must reflect that too,
-  // or it contradicts every other timestamp on screen. simIso holds the frozen
-  // override (an offset-aware ISO string) while set, or null on the real clock.
-  var simIso = null;
+  // or it contradicts every other timestamp on screen. Rather than freeze on the
+  // override, it TICKS FORWARD from it at 1s/s — like a real clock that was just
+  // set to a different time. sim holds the override's epoch ms plus the server
+  // send time it was true at (fetch_time_ms); null means the real clock.
+  var sim = null;
 
   function paintClock() {
     if (!clockEl) return;
-    if (simIso) {
-      clockEl.textContent = FMT.format(new Date(simIso)) + " · SIM";
+    if (sim) {
+      // Advance the override by however much real time has elapsed since the
+      // server reported it. Clamped at 0 so client/server clock skew can never
+      // run the simulated clock backwards past the instant it was set to.
+      var elapsed = Date.now() - sim.fetchMs;
+      if (elapsed < 0) elapsed = 0;
+      clockEl.textContent = FMT.format(new Date(sim.baseMs + elapsed)) + " · SIM";
     } else {
       clockEl.textContent = FMT.format(new Date());
     }
@@ -92,7 +99,10 @@
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
         if (!d) return;
-        simIso = d.is_simulated ? d.current_time : null;
+        sim = d.is_simulated ? {
+          baseMs: new Date(d.current_time).getTime(),
+          fetchMs: d.fetch_time_ms || Date.now(),
+        } : null;
         paintClock();
       })
       .catch(function () { /* keep the real-time fallback */ });
