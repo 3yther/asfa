@@ -110,22 +110,34 @@ def send_email(subject: str, body: str) -> bool:
     return _smtp_send(msg, from_addr, to_addr)
 
 
+def _telegram_enabled() -> bool:
+    """Respect the Settings → Notifications Telegram toggle. Fails OPEN (True) on
+    any lookup error so a DB hiccup can't silently mute every alert channel."""
+    try:
+        return bool(db.get_notification_prefs().get("telegram_notifications", True))
+    except Exception:
+        return True
+
+
 def send_alert(message: str, kind: str = "alert", subject: str = None,
                email: bool = False):
     """Fan a message out to all configured channels.
 
-    in-app bell + Telegram always; Discord if a webhook is set; email only when
-    `email=True` and SMTP is configured (used for the daily summary).
+    in-app bell always records the message (nothing is ever lost from the bell);
+    Telegram is sent unless the user turned it off in Settings; Discord if a
+    webhook is set; email only when `email=True` and SMTP is configured (used for
+    the daily summary).
     """
     try:
         db.add_notification(message, kind)
     except Exception as e:
         logger.error("notification store failed: %s", e)
 
-    try:
-        telegram_bot.send_message(message)
-    except Exception as e:
-        logger.warning("Telegram send failed: %s", e)
+    if _telegram_enabled():
+        try:
+            telegram_bot.send_message(message)
+        except Exception as e:
+            logger.warning("Telegram send failed: %s", e)
 
     _send_discord(message)
 
