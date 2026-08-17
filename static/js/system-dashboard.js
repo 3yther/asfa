@@ -186,6 +186,8 @@
       const r = await apiPost("/api/settings/simulated-time", { dt: val });
       state = r;
       render();
+      // Nudge the shared nav clock (nav.html) to re-read the override now.
+      window.dispatchEvent(new CustomEvent("asfa:clock-changed"));
       msg("Clock set — new logs will backfill here.", AMBER);
     } catch (e) { msg("Failed: " + esc(e.message || e), "#ff4455"); }
   }
@@ -196,6 +198,7 @@
       const r = await apiPost("/api/settings/simulated-time", { dt: null });
       state = r;
       render();
+      window.dispatchEvent(new CustomEvent("asfa:clock-changed"));
       msg("Back on real time.", GREEN);
     } catch (e) { msg("Failed: " + esc(e.message || e), "#ff4455"); }
   }

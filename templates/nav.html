@@ -52,18 +52,57 @@
   var LAUNCH = Date.UTC(2026, 5, 11);
   var dayEl = document.getElementById("nav-day");
   var clockEl = document.getElementById("nav-clock");
-  function tick() {
-    var now = new Date();
-    if (dayEl) dayEl.textContent = "DAY " + Math.floor((Date.now() - LAUNCH) / 86400000);
-    if (clockEl) {
-      var hh = String(now.getUTCHours()).padStart(2, "0");
-      var mm = String(now.getUTCMinutes()).padStart(2, "0");
-      var ss = String(now.getUTCSeconds()).padStart(2, "0");
-      clockEl.textContent = hh + ":" + mm + ":" + ss + " UTC";
+
+  // The clock reads in the app timezone (Europe/London), NOT UTC — a bare
+  // getUTCHours() clock showed "19:58 UTC" while the app's real day was 20:58
+  // BST. timeZoneName:"short" surfaces the real zone label (BST / GMT) so it's
+  // never mislabelled again.
+  var FMT = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London", hour: "2-digit", minute: "2-digit",
+    second: "2-digit", hour12: false, timeZoneName: "short",
+  });
+
+  // When the Settings clock override is active, the whole app stamps logs at a
+  // simulated instant (get_current_time). The nav clock must reflect that too,
+  // or it contradicts every other timestamp on screen. simIso holds the frozen
+  // override (an offset-aware ISO string) while set, or null on the real clock.
+  var simIso = null;
+
+  function paintClock() {
+    if (!clockEl) return;
+    if (simIso) {
+      clockEl.textContent = FMT.format(new Date(simIso)) + " · SIM";
+    } else {
+      clockEl.textContent = FMT.format(new Date());
     }
+  }
+
+  function tick() {
+    if (dayEl) dayEl.textContent = "DAY " + Math.floor((Date.now() - LAUNCH) / 86400000);
+    paintClock();
   }
   tick();
   setInterval(tick, 1000);
+
+  // Pull the effective clock from the server: is_simulated + the override
+  // instant. Fails silently on public/guest pages (endpoint is auth-gated) —
+  // there the live Europe/London wall clock above is the right fallback.
+  function syncClock() {
+    fetch("/api/settings/current-time", { credentials: "include" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) return;
+        simIso = d.is_simulated ? d.current_time : null;
+        paintClock();
+      })
+      .catch(function () { /* keep the real-time fallback */ });
+  }
+  syncClock();
+  // Poll so an override set on another tab/page is picked up within ~15s, and
+  // react instantly to a change made on this page (system-dashboard.js fires
+  // this event on Set/Reset Clock).
+  setInterval(syncClock, 15000);
+  window.addEventListener("asfa:clock-changed", syncClock);
 
   // Logout — POST (CSRF header added by the fetch wrapper in _csrf.html,
   // included above), then hard-redirect to the login screen.
