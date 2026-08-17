@@ -410,6 +410,35 @@ def init_db():
         # spec, made a no-op once the column exists).
         _add_column(cursor, "user_settings", "simulated_time", "TIMESTAMP")
 
+        # Notification & alert preferences (Settings → Notifications & Alerts).
+        # Kept on user_settings (single-user app, one row per user_id) rather than
+        # a separate table so the whole preference set is one upsert. Times are
+        # stored as 'HH:MM' TEXT and booleans as INTEGER (0/1) so the same DDL
+        # round-trips through SQLite and Postgres without a TIME/BOOLEAN split.
+        # Each column is added idempotently with its documented default.
+        _add_column(cursor, "user_settings", "email_frequency",
+                    "TEXT DEFAULT 'weekly'")
+        _add_column(cursor, "user_settings", "quiet_hours_enabled",
+                    "INTEGER DEFAULT 1")
+        _add_column(cursor, "user_settings", "quiet_hours_start",
+                    "TEXT DEFAULT '22:00'")
+        _add_column(cursor, "user_settings", "quiet_hours_end",
+                    "TEXT DEFAULT '08:00'")
+        _add_column(cursor, "user_settings", "telegram_notifications",
+                    "INTEGER DEFAULT 1")
+        _add_column(cursor, "user_settings", "job_alerts_enabled",
+                    "INTEGER DEFAULT 1")
+        _add_column(cursor, "user_settings", "alert_low_steps",
+                    "INTEGER DEFAULT 1")
+        _add_column(cursor, "user_settings", "alert_missed_meal",
+                    "INTEGER DEFAULT 1")
+        _add_column(cursor, "user_settings", "alert_below_calorie_target",
+                    "INTEGER DEFAULT 1")
+        _add_column(cursor, "user_settings", "alert_skipped_workout",
+                    "INTEGER DEFAULT 1")
+        _add_column(cursor, "user_settings", "alert_water_intake",
+                    "INTEGER DEFAULT 1")
+
         # habits predates UNIQUE(date); collapse any duplicate days and enforce
         # it on DBs created before the constraint existed.
         _dedupe_habits(cursor)
@@ -7492,6 +7521,382 @@ def revoke_api_key(key_id: int) -> bool:
             f"WHERE id = {ph} AND revoked_at IS NULL",
             (now, key_id))
         return cur.rowcount > 0
+
+
+# ── Notification & alert preferences ───────────────────────────────────────────
+# Read/write the Settings → Notifications & Alerts row. The columns live on
+# user_settings (added idempotently in init_db); this layer just centralises the
+# defaults and the boolean coercion so the API and the alert-gating code always
+# read the same shape. Single-user app → one row keyed by DEFAULT_USER_ID.
+
+# Canonical default preference set. Also the fallback when no row exists yet or a
+# column is NULL, so a fresh DB and an explicit "reset" agree.
+NOTIFICATION_DEFAULTS = {
+    "email_frequency": "weekly",          # 'daily' | 'weekly' | 'never'
+    "quiet_hours_enabled": True,
+    "quiet_hours_start": "22:00",
+    "quiet_hours_end": "08:00",
+    "telegram_notifications": True,
+    "job_alerts_enabled": True,
+    "alert_low_steps": True,              # threshold: <5000 steps
+    "alert_missed_meal": True,
+    "alert_below_calorie_target": True,
+    "alert_skipped_workout": True,
+    "alert_water_intake": True,
+}
+_NOTIFICATION_BOOL_KEYS = [k for k, v in NOTIFICATION_DEFAULTS.items()
+                           if isinstance(v, bool)]
+_EMAIL_FREQUENCIES = ("daily", "weekly", "never")
+# Low-steps alert fires below this daily total (documented threshold).
+LOW_STEPS_THRESHOLD = 5000
+
+
+def _valid_hhmm(value) -> bool:
+    """True if `value` is a 'HH:MM' 24-hour time string."""
+    if not isinstance(value, str):
+        return False
+    m = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", value.strip())
+    return m is not None
+
+
+def _coerce_bool(value) -> bool:
+    """Truthy across SQLite (0/1 ints), Postgres (bool), and JSON payloads."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def get_notification_prefs(user_id: int = DEFAULT_USER_ID) -> dict:
+    """Return the full preference set for `user_id`, filling any missing row or
+    NULL column from NOTIFICATION_DEFAULTS. Booleans come back as real bools and
+    times as 'HH:MM' strings. Never raises on a fresh/empty DB."""
+    ph = "%s" if USE_POSTGRES else "?"
+    cols = list(NOTIFICATION_DEFAULTS.keys())
+    row = None
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT {', '.join(cols)} FROM user_settings WHERE user_id = {ph}",
+                (user_id,))
+            row = cur.fetchone()
+    except Exception:
+        row = None
+    out = dict(NOTIFICATION_DEFAULTS)
+    if row is not None:
+        data = dict(row) if isinstance(row, (dict, sqlite3.Row)) else dict(zip(cols, row))
+        for key, default in NOTIFICATION_DEFAULTS.items():
+            val = data.get(key)
+            if val is None:
+                continue
+            if isinstance(default, bool):
+                out[key] = _coerce_bool(val)
+            else:
+                out[key] = val
+    return out
+
+
+def update_notification_prefs(user_id: int = DEFAULT_USER_ID, **fields) -> dict:
+    """Upsert the given preference fields for `user_id` and return the merged set.
+    Unknown keys are ignored; invalid values fall back to the current/default
+    value so a bad payload can never wedge the row. Booleans are stored as 0/1."""
+    current = get_notification_prefs(user_id)
+    updates = {}
+    for key, default in NOTIFICATION_DEFAULTS.items():
+        if key not in fields:
+            continue
+        val = fields[key]
+        if key == "email_frequency":
+            val = str(val).strip().lower()
+            if val not in _EMAIL_FREQUENCIES:
+                continue
+        elif key in ("quiet_hours_start", "quiet_hours_end"):
+            if not _valid_hhmm(val):
+                continue
+            val = str(val).strip()
+        elif isinstance(default, bool):
+            val = 1 if _coerce_bool(val) else 0
+        updates[key] = val
+    if not updates:
+        return current
+
+    # Ensure a row exists, then update only the provided columns.
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO user_settings (user_id) VALUES (%s) "
+                "ON CONFLICT (user_id) DO NOTHING", (user_id,))
+        else:
+            cur.execute(
+                "INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (user_id,))
+        set_clause = ", ".join(f"{col} = {ph}" for col in updates)
+        cur.execute(
+            f"UPDATE user_settings SET {set_clause} WHERE user_id = {ph}",
+            (*updates.values(), user_id))
+    return get_notification_prefs(user_id)
+
+
+def is_within_quiet_hours(prefs: dict = None, now: datetime = None,
+                          user_id: int = DEFAULT_USER_ID) -> bool:
+    """True if `now` (default: real local time) falls inside the user's quiet
+    window, and quiet hours are enabled. Handles a window that wraps midnight
+    (e.g. 22:00 → 08:00). Alert-sending paths call this to stay silent overnight."""
+    if prefs is None:
+        prefs = get_notification_prefs(user_id)
+    if not prefs.get("quiet_hours_enabled"):
+        return False
+    start = prefs.get("quiet_hours_start") or "22:00"
+    end = prefs.get("quiet_hours_end") or "08:00"
+    if not (_valid_hhmm(start) and _valid_hhmm(end)):
+        return False
+    if now is None:
+        now = now_local()
+    cur_hm = now.strftime("%H:%M")
+    if start == end:
+        return False                      # empty window
+    if start < end:
+        return start <= cur_hm < end      # same-day window
+    return cur_hm >= start or cur_hm < end  # wraps past midnight
+
+
+def alert_enabled(alert_key: str, user_id: int = DEFAULT_USER_ID) -> bool:
+    """Convenience gate for the scheduler/alert code: True only when the named
+    alert toggle is on AND we're outside quiet hours. Unknown keys → False."""
+    if alert_key not in NOTIFICATION_DEFAULTS:
+        return False
+    prefs = get_notification_prefs(user_id)
+    if not prefs.get(alert_key):
+        return False
+    return not is_within_quiet_hours(prefs, user_id=user_id)
+
+
+# ── Active login sessions (remote logout) ──────────────────────────────────────
+# Flask's session cookie is client-side and signed, so there is no server-side
+# session store to revoke. This table gives us one: each login mints a random
+# session_token, stores it in the cookie (session["sid"]) AND as a row here, and
+# every request revalidates the token against this table. Deleting a row makes
+# the matching cookie stop authenticating on its next request — i.e. remote
+# logout. Created lazily + idempotently; works on SQLite + Postgres.
+
+_USER_SESSIONS_READY = False
+# How long a tracked session stays valid without being pruned (matches the
+# Flask PERMANENT_SESSION_LIFETIME intent; a stale row past this is treated as
+# expired and ignored).
+SESSION_TTL_DAYS = 30
+
+
+def _ensure_user_sessions_table():
+    global _USER_SESSIONS_READY
+    if _USER_SESSIONS_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS user_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        session_token TEXT NOT NULL UNIQUE,
+        ip_address TEXT,
+        user_agent TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        last_activity TEXT DEFAULT (datetime('now')),
+        expires_at TEXT
+    )"""
+    if USE_POSTGRES:
+        stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        stmt = stmt.replace("datetime('now')", "NOW()")
+    with get_db() as conn:
+        conn.cursor().execute(stmt)
+    _USER_SESSIONS_READY = True
+
+
+def create_user_session(session_token: str, user_id: int = DEFAULT_USER_ID,
+                        ip_address: str = None, user_agent: str = None,
+                        ttl_days: int = SESSION_TTL_DAYS) -> None:
+    """Register a freshly logged-in session. Called from the login route with the
+    token that also lives in the signed cookie. User-agent is truncated so a
+    hostile client can't bloat the row."""
+    _ensure_user_sessions_table()
+    now = now_local()
+    expires = (now + timedelta(days=ttl_days)).isoformat(sep=" ", timespec="seconds")
+    ua = (user_agent or "")[:500]
+    ts = now.isoformat(sep=" ", timespec="seconds")
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        # Idempotent on session_token: a re-registered token (random in prod, so a
+        # real collision is negligible) just refreshes its activity/expiry rather
+        # than raising a UNIQUE violation.
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO user_sessions "
+                "(user_id, session_token, ip_address, user_agent, created_at, "
+                "last_activity, expires_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (session_token) DO UPDATE SET "
+                "last_activity = EXCLUDED.last_activity, "
+                "expires_at = EXCLUDED.expires_at",
+                (user_id, session_token, ip_address, ua, ts, ts, expires))
+        else:
+            cur.execute(
+                "INSERT INTO user_sessions "
+                "(user_id, session_token, ip_address, user_agent, created_at, "
+                "last_activity, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(session_token) DO UPDATE SET "
+                "last_activity = excluded.last_activity, "
+                "expires_at = excluded.expires_at",
+                (user_id, session_token, ip_address, ua, ts, ts, expires))
+
+
+def session_token_valid(session_token: str) -> bool:
+    """True if the token maps to a live (non-expired) row. Also refreshes
+    last_activity as a side effect. Fails OPEN (returns True) on any DB error so
+    a storage hiccup can never lock a legitimately logged-in user out."""
+    if not session_token:
+        return False
+    _ensure_user_sessions_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT expires_at FROM user_sessions WHERE session_token = {ph}",
+                (session_token,))
+            row = cur.fetchone()
+            if row is None:
+                return False
+            exp = row["expires_at"] if isinstance(row, (dict, sqlite3.Row)) else row[0]
+            if exp:
+                try:
+                    if datetime.fromisoformat(str(exp)) < now_local().replace(tzinfo=None):
+                        return False
+                except ValueError:
+                    pass
+            cur.execute(
+                f"UPDATE user_sessions SET last_activity = {ph} "
+                f"WHERE session_token = {ph}",
+                (now_local().isoformat(sep=" ", timespec="seconds"), session_token))
+            return True
+    except Exception:
+        return True
+
+
+def list_user_sessions(user_id: int = DEFAULT_USER_ID) -> list:
+    """All live sessions for `user_id`, newest first. Expired rows are pruned
+    first so the list only ever shows currently-valid logins."""
+    _ensure_user_sessions_table()
+    prune_expired_sessions()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT id, session_token, ip_address, user_agent, created_at, "
+            f"last_activity, expires_at FROM user_sessions WHERE user_id = {ph} "
+            f"ORDER BY last_activity DESC, id DESC",
+            (user_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def delete_user_session(session_id: int, user_id: int = DEFAULT_USER_ID):
+    """Remotely log out one session by row id. Returns the deleted row's
+    session_token (so the caller can tell if it just killed the current device),
+    or None if no matching row existed."""
+    _ensure_user_sessions_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT session_token FROM user_sessions WHERE id = {ph} AND user_id = {ph}",
+            (session_id, user_id))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        token = row["session_token"] if isinstance(row, (dict, sqlite3.Row)) else row[0]
+        cur.execute(
+            f"DELETE FROM user_sessions WHERE id = {ph} AND user_id = {ph}",
+            (session_id, user_id))
+        return token
+
+
+def delete_session_by_token(session_token: str) -> None:
+    """Drop the row for a specific token (used on explicit logout)."""
+    if not session_token:
+        return
+    _ensure_user_sessions_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM user_sessions WHERE session_token = {ph}",
+                    (session_token,))
+
+
+def prune_expired_sessions() -> None:
+    """Delete rows past their expires_at. Best-effort; swallows DB errors."""
+    _ensure_user_sessions_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    now = now_local().isoformat(sep=" ", timespec="seconds")
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"DELETE FROM user_sessions WHERE expires_at IS NOT NULL "
+                f"AND expires_at < {ph}", (now,))
+    except Exception:
+        pass
+
+
+# ── Full data export (gym / nutrition / steps / sleep / cardio) ────────────────
+# Backs the Settings → Data Export card. Returns every logged row from the
+# fitness/health tables as plain dict lists, ready to be serialised to JSON or a
+# per-dataset CSV. Each dataset is a (columns, rows) pair so the CSV writer can
+# emit a stable header even for an empty table. Read-only; never raises on a
+# missing table (a fresh DB simply yields empty datasets).
+
+# Ordered {dataset_name: "SELECT ..."} — the SELECT column order is the CSV/JSON
+# field order. Kept explicit (not SELECT *) so the export is stable if a table
+# later gains internal columns.
+_EXPORT_QUERIES = {
+    "gym_sessions": (
+        "SELECT id, routine_id, date, start_time, end_time, duration_minutes, "
+        "total_volume_kg, total_sets, xp_earned, notes, created_at "
+        "FROM gym_sessions ORDER BY date, id"),
+    "gym_sets": (
+        "SELECT id, session_id, exercise_id, set_number, set_type, weight_kg, "
+        "reps, is_pr, notes, completed_at FROM gym_sets ORDER BY session_id, id"),
+    "nutrition_meals": (
+        "SELECT id, date, time, food_name, protein, carbs, fat, calories, "
+        "barcode, source, notes, created_at FROM meals ORDER BY date, id"),
+    "steps": (
+        "SELECT id, date, source, steps, detail, created_at "
+        "FROM steps ORDER BY date, id"),
+    "sleep": (
+        "SELECT id, date, duration, quality, wake_feeling, notes, created_at, "
+        "updated_at FROM sleep ORDER BY date, id"),
+    "cardio": (
+        "SELECT id, date, type, distance_miles, duration_minutes, "
+        "perceived_effort, notes, created_at FROM cardio_sessions ORDER BY date, id"),
+}
+
+
+def export_user_data() -> dict:
+    """Return {dataset_name: {"columns": [...], "rows": [ {col: val}, ... ]}} for
+    every fitness/health dataset. A table that doesn't exist yet yields an empty
+    dataset rather than raising, so export works on any DB state."""
+    out = {}
+    for name, query in _EXPORT_QUERIES.items():
+        columns, rows = [], []
+        try:
+            with get_db() as conn:
+                cur = conn.cursor()
+                cur.execute(query)
+                fetched = cur.fetchall()
+                if cur.description:
+                    columns = [d[0] for d in cur.description]
+                rows = [dict(r) for r in fetched]
+        except Exception:
+            columns, rows = [], []
+        out[name] = {"columns": columns, "rows": rows}
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

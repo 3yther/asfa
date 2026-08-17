@@ -53,8 +53,35 @@
       <h3>External Integrations</h3>
       <div id="external-apis">Loading…</div>
     </div>
+
+    <div class="card sci-fi-panel" data-card="notifications">
+      <h3>Notifications &amp; Alerts</h3>
+      <div id="notifications-container">Loading…</div>
+    </div>
+
+    <div class="card sci-fi-panel" data-card="active-sessions">
+      <h3>Active Sessions</h3>
+      <div id="active-sessions-container">Loading…</div>
+    </div>
+
+    <div class="card sci-fi-panel" data-card="data-export">
+      <h3>Data Export</h3>
+      <div id="data-export-container">Loading…</div>
+    </div>
+
+    <div class="card sci-fi-panel" data-card="password-security">
+      <h3>Password &amp; Security</h3>
+      <div id="password-security-container">Loading…</div>
+    </div>
   </div>
 </main>
+
+<div id="settings-toast" role="status" aria-live="polite"
+     style="position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);
+            background:#0a1420;color:#cfe;border:1px solid #00d9ff;border-radius:8px;
+            padding:12px 20px;font-family:inherit;font-size:14px;z-index:9999;opacity:0;
+            pointer-events:none;transition:opacity .25s ease, transform .25s ease;
+            box-shadow:0 6px 24px rgba(0,0,0,.5);max-width:80vw;"></div>
 
 <script>
   // Add corner elements to all sci-fi panels

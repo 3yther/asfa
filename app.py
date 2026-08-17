@@ -70,6 +70,7 @@ os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 import requests
 from flask import Flask, Response, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import database as db
 from flask_limiter.util import get_remote_address
@@ -213,6 +214,62 @@ def _authenticate_api_key():
         return None
 
 
+# ── Passphrase (env default + optional user override) ───────────────────────────
+# The dashboard historically gated on the APP_PASSWORD env var alone. The Settings
+# "Password & Security" card lets the single user change it at runtime without a
+# redeploy: a new passphrase is hashed (werkzeug PBKDF2 — already a dependency, so
+# no bcrypt to add) and stored in kv_store. When that override is present it wins;
+# otherwise we fall back to the env var. `hmac.compare_digest` keeps the env-var
+# path constant-time.
+_PASSWORD_HASH_KEY = "app_password_hash"
+_MIN_PASSWORD_LEN = 8
+
+
+def _stored_password_hash():
+    """The user-set passphrase hash from kv_store, or None if never changed."""
+    try:
+        return db.kv_get(_PASSWORD_HASH_KEY)
+    except Exception as e:
+        logger.error("password hash lookup failed: %s", e)
+        return None
+
+
+def _verify_password(candidate: str) -> bool:
+    """True if `candidate` matches the effective passphrase — the stored override
+    when one exists, else the APP_PASSWORD env var."""
+    candidate = candidate or ""
+    stored = _stored_password_hash()
+    if stored:
+        try:
+            return check_password_hash(stored, candidate)
+        except Exception as e:
+            logger.error("password hash check failed: %s", e)
+            return False
+    if APP_PASSWORD:
+        return hmac.compare_digest(candidate, APP_PASSWORD)
+    return False
+
+
+def _set_password(new_password: str) -> None:
+    """Persist a new passphrase as a salted hash (overrides the env var)."""
+    db.kv_set(_PASSWORD_HASH_KEY, generate_password_hash(new_password))
+
+
+def _register_session():
+    """Mint a server-side session token, stash it in the signed cookie, and record
+    the login in user_sessions so it appears in Active Sessions and can be revoked
+    remotely. Best-effort: a DB hiccup must not block a successful login."""
+    token = secrets.token_urlsafe(32)
+    session["sid"] = token
+    try:
+        db.create_user_session(
+            token, db.DEFAULT_USER_ID,
+            ip_address=get_remote_address(),
+            user_agent=request.headers.get("User-Agent", ""))
+    except Exception as e:
+        logger.error("session registration failed: %s", e)
+
+
 @app.before_request
 def _require_login():
     if request.endpoint in _PUBLIC_ENDPOINTS:
@@ -225,6 +282,21 @@ def _require_login():
         # header check below agree.
         if not session.get("csrf_token"):
             session["csrf_token"] = secrets.token_hex(32)
+        # Server-side session validation (remote logout). Only authed browser
+        # sessions carry a "sid"; guests don't. A logged-in session whose row was
+        # deleted remotely (from the Active Sessions card) stops authenticating on
+        # its next request. Legacy sessions that predate this feature have no sid
+        # yet — register one lazily instead of locking them out. session_token_valid
+        # fails OPEN on DB trouble, so a storage hiccup never mass-logs-out.
+        if session.get("authed"):
+            sid = session.get("sid")
+            if not sid:
+                _register_session()
+            elif not db.session_token_valid(sid):
+                session.clear()
+                if request.path.startswith("/api/"):
+                    return jsonify({"error": "session ended"}), 401
+                return redirect(url_for("login", next=request.path))
         return None
     # Read-only API key: unlocks the curated read allowlist without a session,
     # for safe methods only. Checked before the session fail-closed so the MCP
@@ -478,7 +550,7 @@ def login():
             return render_template("login.html", error="Too many attempts. Try again later.",
                                    next_url=next_url), 429
         pw = request.form.get("password") or ""
-        if APP_PASSWORD and hmac.compare_digest(pw, APP_PASSWORD):
+        if _verify_password(pw):
             try:
                 db.clear_auth_failures(ip)
             except Exception as e:
@@ -489,6 +561,9 @@ def login():
             session["authed"] = True
             session.permanent = True
             session["csrf_token"] = secrets.token_hex(32)
+            # Record this login in the server-side session registry so it shows
+            # up under Active Sessions and can be revoked from another device.
+            _register_session()
             return redirect(next_url)
         try:
             failures = db.record_auth_failure(ip)
@@ -533,6 +608,12 @@ def logout():
         db.log_audit("auth", "logout", "success", reason="user logout")
     except Exception as e:
         logger.error("logout audit failed: %s", e)
+    # Drop this session's row from the registry so it doesn't linger in the
+    # Active Sessions list after the cookie is gone.
+    try:
+        db.delete_session_by_token(session.get("sid"))
+    except Exception as e:
+        logger.error("session cleanup on logout failed: %s", e)
     session.clear()
     return redirect(url_for("login"))
 
@@ -805,7 +886,138 @@ def api_current_time():
         "real_time": db.now_local().isoformat(),
         "simulated_time": sim.isoformat() if sim else None,
         "is_simulated": sim is not None,
+        # Server send time (epoch ms). The nav clock uses it as the reference
+        # point to tick the simulated instant forward in real time, so an
+        # override doesn't freeze — it advances 1s/s from where it was set.
+        "fetch_time_ms": int(time.time() * 1000),
     })
+
+
+# ── Settings: Notifications & Alerts (Phase 1) ──────────────────────────────────
+# One row of preferences on user_settings; the alert-sending paths consult
+# db.alert_enabled()/is_within_quiet_hours() before firing. Auth-gated + CSRF like
+# every other write.
+
+@app.route("/api/settings/notifications", methods=["GET", "POST"])
+def api_settings_notifications():
+    """GET → the user's current notification preferences. POST {email_frequency,
+    quiet_hours_enabled, quiet_hours_start, quiet_hours_end, telegram_notifications,
+    job_alerts_enabled, alert_*} → persist and return the merged set. Unknown keys
+    and invalid values are ignored server-side (see update_notification_prefs)."""
+    if request.method == "POST":
+        d = request.get_json(silent=True) or {}
+        # Only forward recognised keys; the DB layer validates/coerces each one.
+        fields = {k: d[k] for k in db.NOTIFICATION_DEFAULTS if k in d}
+        prefs = db.update_notification_prefs(db.DEFAULT_USER_ID, **fields)
+        return jsonify({"success": True, "preferences": prefs})
+    return jsonify({"preferences": db.get_notification_prefs(db.DEFAULT_USER_ID)})
+
+
+# ── Settings: Privacy & Account (Phase 2) ───────────────────────────────────────
+
+@app.route("/api/settings/active-sessions", methods=["GET"])
+def api_active_sessions():
+    """List the current user's live login sessions for the Active Sessions card.
+    The session matching this request's cookie is flagged is_current."""
+    current = session.get("sid")
+    rows = db.list_user_sessions(db.DEFAULT_USER_ID)
+    out = []
+    for r in rows:
+        out.append({
+            "session_id": r["id"],
+            "ip": r.get("ip_address") or "—",
+            "user_agent": r.get("user_agent") or "—",
+            "created_at": r.get("created_at"),
+            "last_activity": r.get("last_activity"),
+            "is_current": bool(current) and r.get("session_token") == current,
+        })
+    return jsonify({"sessions": out})
+
+
+@app.route("/api/settings/active-sessions/<int:session_id>", methods=["DELETE"])
+def api_revoke_session(session_id):
+    """Remotely log out one session by id. If it's the current device, the cookie
+    is cleared too so the browser is signed out immediately."""
+    token = db.delete_user_session(session_id, db.DEFAULT_USER_ID)
+    if token is None:
+        return jsonify({"error": "session not found"}), 404
+    is_current = token == session.get("sid")
+    if is_current:
+        session.clear()
+    return jsonify({"success": True, "is_current": is_current})
+
+
+@app.route("/api/settings/export-data", methods=["GET"])
+def api_export_data():
+    """Export all fitness/health data (gym, nutrition, steps, sleep, cardio).
+    ?format=json (default) → one .json file with every dataset; ?format=csv → a
+    .zip containing one CSV per dataset (datasets have different columns, so a
+    single flat CSV can't hold them all). Session-gated GET, so a normal browser
+    navigation carries the cookie and triggers the download."""
+    fmt = (request.args.get("format") or "json").strip().lower()
+    data = db.export_user_data()
+    stamp = db.now_local().strftime("%Y%m%d-%H%M%S")
+
+    if fmt == "csv":
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name, dataset in data.items():
+                sio = io.StringIO()
+                writer = csv.writer(sio)
+                columns = dataset["columns"]
+                writer.writerow(columns)
+                for row in dataset["rows"]:
+                    writer.writerow([row.get(c, "") for c in columns])
+                zf.writestr(f"{name}.csv", sio.getvalue())
+        buf.seek(0)
+        return Response(
+            buf.getvalue(), mimetype="application/zip",
+            headers={"Content-Disposition":
+                     f'attachment; filename="asfa-export-{stamp}.zip"'})
+
+    # JSON (default): datasets keyed by name, each a plain list of row objects.
+    payload = {"exported_at": db.now_local().isoformat(),
+               "data": {name: ds["rows"] for name, ds in data.items()}}
+    body = json.dumps(payload, indent=2, default=str)
+    return Response(
+        body, mimetype="application/json",
+        headers={"Content-Disposition":
+                 f'attachment; filename="asfa-export-{stamp}.json"'})
+
+
+@app.route("/api/settings/change-password", methods=["POST"])
+def api_change_password():
+    """Change the dashboard passphrase. Body: {old_password, new_password,
+    confirm_password}. Verifies the old passphrase against the effective one
+    (stored override or APP_PASSWORD), enforces length + confirm match, then
+    stores a salted hash that overrides the env var from the next login on."""
+    d = request.get_json(silent=True) or {}
+    old_pw = d.get("old_password") or ""
+    new_pw = d.get("new_password") or ""
+    confirm = d.get("confirm_password") or ""
+
+    if not _verify_password(old_pw):
+        return jsonify({"error": "Incorrect password"}), 403
+    if len(new_pw) < _MIN_PASSWORD_LEN:
+        return jsonify({"error": f"Password too short "
+                        f"(min {_MIN_PASSWORD_LEN} characters)"}), 400
+    if new_pw != confirm:
+        return jsonify({"error": "Passwords don't match"}), 400
+    if _verify_password(new_pw):
+        return jsonify({"error": "New password must differ from the old one"}), 400
+
+    try:
+        _set_password(new_pw)
+    except Exception as e:
+        logger.error("password change failed: %s", e)
+        return jsonify({"error": "Could not update password"}), 500
+    try:
+        db.log_audit("auth", "change_password", "success",
+                     reason="passphrase updated from settings")
+    except Exception as e:
+        logger.error("password change audit failed: %s", e)
+    return jsonify({"success": True})
 
 
 # ── AI chat / voice — with natural-language command handling ──────────────────

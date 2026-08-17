@@ -30,6 +30,13 @@ def _notify(message: str, kind: str = "info", telegram: bool = True):
         db.add_notification(message, kind)
     except Exception as e:
         logger.error(f"notification store failed: {e}")
+    # Respect the Settings → Notifications Telegram toggle. Fails OPEN so a prefs
+    # lookup error never mutes notifications. The in-app bell above is unaffected.
+    if telegram:
+        try:
+            telegram = bool(db.get_notification_prefs().get("telegram_notifications", True))
+        except Exception:
+            telegram = True
     if telegram:
         telegram_bot.send_message(message)
 
@@ -112,10 +119,16 @@ def reflection_prompt():
 
 @audited("hydration", "water_check")
 def water_check():
-    """Daytime nudge if no water logged for 3+ hours."""
+    """Daytime nudge if no water logged for 3+ hours. Skipped when the water
+    alert is toggled off in Settings or the current time is inside quiet hours."""
     now = datetime.now()
     if not (9 <= now.hour <= 21):
         return
+    try:
+        if not db.alert_enabled("alert_water_intake"):
+            return
+    except Exception:
+        pass  # fail open — a prefs lookup error must not silence the nudge
     last = db.kv_get("last_water_ts")
     last_nudge = db.kv_get("last_water_nudge_ts")
     try:
