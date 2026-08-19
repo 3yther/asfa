@@ -386,6 +386,23 @@ def weekly_csv_export():
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
+def _safe_add(sched, func, *args, **kwargs):
+    """Register one job, isolating failures.
+
+    A single bad registration must never prevent the remaining jobs from being
+    scheduled — most importantly the midnight Obsidian sync. Previously all jobs
+    were added in one unguarded sequence, so a failure partway through (e.g. an
+    integration raising during registration) skipped every job after it and left
+    obsidian_sync_job unregistered. Any failure here is logged and swallowed.
+    """
+    job_id = kwargs.get("id") or getattr(func, "__name__", "job")
+    try:
+        return sched.add_job(func, *args, **kwargs)
+    except Exception as e:
+        logger.error("failed to register scheduler job %s: %s", job_id, e)
+        return None
+
+
 def start_scheduler():
     global _scheduler
     if _scheduler is not None:
@@ -396,62 +413,62 @@ def start_scheduler():
     # window lets it still fire up to 60s late. Interval jobs (water/poll/heartbeat)
     # don't need it; they'll come around again shortly.
     # Morning briefing at 09:00 UTC (explicit tz so it's stable year-round).
-    sched.add_job(morning_briefing, "cron", hour=9, minute=0, timezone="UTC",
-                  misfire_grace_time=60)
-    sched.add_job(bedtime_reminder, "cron", day_of_week="mon-fri", hour=22, minute=30,
-                  misfire_grace_time=60)
-    sched.add_job(bedtime_reminder, "cron", day_of_week="sun,sat", hour=0, minute=0,
-                  misfire_grace_time=60)
-    sched.add_job(market_open_reminder, "cron", day_of_week="mon-fri", hour=14, minute=0,
-                  misfire_grace_time=60)
-    sched.add_job(reflection_prompt, "cron", hour=22, minute=0, misfire_grace_time=60)
+    _safe_add(sched, morning_briefing, "cron", hour=9, minute=0, timezone="UTC",
+              misfire_grace_time=60)
+    _safe_add(sched, bedtime_reminder, "cron", day_of_week="mon-fri", hour=22, minute=30,
+              misfire_grace_time=60)
+    _safe_add(sched, bedtime_reminder, "cron", day_of_week="sun,sat", hour=0, minute=0,
+              misfire_grace_time=60)
+    _safe_add(sched, market_open_reminder, "cron", day_of_week="mon-fri", hour=14, minute=0,
+              misfire_grace_time=60)
+    _safe_add(sched, reflection_prompt, "cron", hour=22, minute=0, misfire_grace_time=60)
     # Autonomous end-of-day summary — auto-sent, no user action required.
-    sched.add_job(daily_summary, "cron", hour=21, minute=0, timezone="UTC",
-                  misfire_grace_time=60)
+    _safe_add(sched, daily_summary, "cron", hour=21, minute=0, timezone="UTC",
+              misfire_grace_time=60)
     # Daily Obsidian vault sync at midnight (writes the just-ended day's log).
-    sched.add_job(obsidian_sync_job, "cron", hour=0, minute=0,
-                  id="obsidian_midnight_sync", misfire_grace_time=60)
+    _safe_add(sched, obsidian_sync_job, "cron", hour=0, minute=0,
+              id="obsidian_midnight_sync", misfire_grace_time=60)
     # Supplement reminders (local time) — morning prompt + evening nudge.
-    sched.add_job(supplement_reminder, "cron", hour=9, minute=0, misfire_grace_time=60)
-    sched.add_job(supplement_reminder, "cron", hour=20, minute=0, misfire_grace_time=60)
-    sched.add_job(water_check, "interval", minutes=30)
-    sched.add_job(poll_bot_trades, "interval", minutes=5)
-    sched.add_job(weekly_review, "cron", day_of_week="sun", hour=18, minute=0,
-                  misfire_grace_time=60)
+    _safe_add(sched, supplement_reminder, "cron", hour=9, minute=0, misfire_grace_time=60)
+    _safe_add(sched, supplement_reminder, "cron", hour=20, minute=0, misfire_grace_time=60)
+    _safe_add(sched, water_check, "interval", minutes=30)
+    _safe_add(sched, poll_bot_trades, "interval", minutes=5)
+    _safe_add(sched, weekly_review, "cron", day_of_week="sun", hour=18, minute=0,
+              misfire_grace_time=60)
     # Tier 3 Part 5 — weekly Telegram digest, Sunday 18:00 Europe/London. Explicit
     # tz: Railway runs UTC, and a bare 18:00 would drift an hour under BST.
-    sched.add_job(weekly_digest, "cron", day_of_week="sun", hour=18, minute=0,
-                  timezone="Europe/London", id="weekly_digest", replace_existing=True,
-                  misfire_grace_time=60)
+    _safe_add(sched, weekly_digest, "cron", day_of_week="sun", hour=18, minute=0,
+              timezone="Europe/London", id="weekly_digest", replace_existing=True,
+              misfire_grace_time=60)
     # Weekly CSV export — Sunday 12:00 Europe/London, matching ASFA_TZ so the
     # week boundaries line up with the London-stamped date columns. The tz is
     # passed explicitly rather than inherited from the scheduler default: it is
     # EXPORT_TZ-overridable, and the trigger must not silently disagree with the
     # window weekly_export computes. Fires well after the Sat 23:59 window
     # closes, so the exported week is always complete.
-    sched.add_job(weekly_csv_export, "cron", day_of_week="sun", hour=12, minute=0,
-                  timezone=EXPORT_TZ, id="weekly_csv_export",
-                  replace_existing=True, misfire_grace_time=60)
+    _safe_add(sched, weekly_csv_export, "cron", day_of_week="sun", hour=12, minute=0,
+              timezone=EXPORT_TZ, id="weekly_csv_export",
+              replace_existing=True, misfire_grace_time=60)
     # Daily production-DB backup at 03:00 Europe/London (quiet hours).
-    sched.add_job(db_backup, "cron", hour=3, minute=0,
-                  timezone="Europe/London", id="db_backup", misfire_grace_time=60)
+    _safe_add(sched, db_backup, "cron", hour=3, minute=0,
+              timezone="Europe/London", id="db_backup", misfire_grace_time=60)
     # Scout job lifecycle — auto-archive listings older than 14 days at 02:00
     # Europe/London (quiet hours, and explicit tz because Railway runs UTC).
-    sched.add_job(archive_stale_jobs, "cron", hour=2, minute=0,
-                  timezone="Europe/London", id="scout_archive_stale_jobs",
-                  replace_existing=True, misfire_grace_time=60)
+    _safe_add(sched, archive_stale_jobs, "cron", hour=2, minute=0,
+              timezone="Europe/London", id="scout_archive_stale_jobs",
+              replace_existing=True, misfire_grace_time=60)
     # Daily 7-day retention cap on the public CSP-report sink (03:30, quiet hours).
-    sched.add_job(csp_report_cleanup, "cron", hour=3, minute=30,
-                  timezone="Europe/London", id="csp_report_cleanup",
-                  replace_existing=True, misfire_grace_time=60)
+    _safe_add(sched, csp_report_cleanup, "cron", hour=3, minute=30,
+              timezone="Europe/London", id="csp_report_cleanup",
+              replace_existing=True, misfire_grace_time=60)
     # Phase 4: daily reflective diary generation — 02:00 Europe/London.
     # Diaries for core agents only (see DIARY_AGENTS); infra agents still run.
-    sched.add_job(generate_all_diaries, trigger="cron", hour=2, minute=0,
-                  timezone="Europe/London", id="agent_diaries_daily",
-                  replace_existing=True, misfire_grace_time=60)
+    _safe_add(sched, generate_all_diaries, trigger="cron", hour=2, minute=0,
+              timezone="Europe/London", id="agent_diaries_daily",
+              replace_existing=True, misfire_grace_time=60)
     # Phase 4: agent heartbeat / proactive health check every 30 minutes.
-    sched.add_job(run_heartbeat, trigger="interval", minutes=30,
-                  id="agent_heartbeat", replace_existing=True)
+    _safe_add(sched, run_heartbeat, trigger="interval", minutes=30,
+              id="agent_heartbeat", replace_existing=True)
     sched.start()
     _scheduler = sched
     logger.info("Scheduler started with %d jobs", len(sched.get_jobs()))

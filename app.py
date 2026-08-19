@@ -4872,8 +4872,16 @@ def _start_background():
     import threading
 
     from services.scheduler import start_scheduler
-    from services.telegram_bot import start_bot
+
+    # The scheduler is started FIRST and independently of every optional
+    # integration. Its jobs (including the midnight Obsidian sync) must register
+    # regardless of whether Telegram or Google are configured or reachable — a
+    # Telegram 401 during startup once crashed this path and left
+    # obsidian_sync_job unregistered. start_scheduler() now isolates each job
+    # registration internally, and the optional integrations below each run in
+    # their own try/except so one failing can never abort the others.
     sched = start_scheduler()
+
     # Scout job scan, daily at 06:00 (registered here to keep the scout feature
     # self-contained without editing services/scheduler.py).
     try:
@@ -4889,7 +4897,17 @@ def _start_background():
                       minutes=poll_minutes(), id="apprenticeship_scan")
     except Exception as e:
         logger.error("failed to register apprenticeship scan: %s", e)
-    start_bot()
+
+    # Telegram bot — optional. A missing/invalid token must only warn, never
+    # crash startup or take the scheduler down with it. start_bot() already
+    # no-ops when unconfigured and runs polling in a guarded daemon thread; this
+    # try/except additionally guards the (synchronous) thread-spawn/import step.
+    try:
+        from services.telegram_bot import start_bot
+        start_bot()
+    except Exception as e:
+        logger.warning("Telegram bot init skipped (non-fatal): %s", e)
+
     threading.Thread(target=_generate_startup_briefing, daemon=True).start()
 
 
