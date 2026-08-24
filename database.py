@@ -7845,7 +7845,7 @@ def prune_expired_sessions() -> None:
         pass
 
 
-# ── Full data export (gym / nutrition / steps / sleep / cardio) ────────────────
+# ── Full data export (gym / nutrition / steps / sleep / cardio / weight) ───────
 # Backs the Settings → Data Export card. Returns every logged row from the
 # fitness/health tables as plain dict lists, ready to be serialised to JSON or a
 # per-dataset CSV. Each dataset is a (columns, rows) pair so the CSV writer can
@@ -7896,7 +7896,92 @@ def export_user_data() -> dict:
         except Exception:
             columns, rows = [], []
         out[name] = {"columns": columns, "rows": rows}
+    # Bodyweight is spread across three tables with different shapes, so it can't
+    # be a single-SELECT entry in _EXPORT_QUERIES — build it separately.
+    out["weight"] = _weight_export_dataset()
     return out
+
+
+# ── Weight export (merges the three tables a bodyweight reading can land in) ────
+# A bodyweight reading is written in one of three places, all in kilograms:
+#   • body_weight       — the quick "log weight 80kg" chat command (manual)
+#   • gym_body_stats    — a weight typed into the gym tracker (manual)
+#   • body_composition  — a smart-scale scan. Synced Renpho ("Rephno") scans
+#     carry a source_id; rows without one are the manual body-composition form.
+# The export unions all three into one "weight" dataset with a uniform
+# date | weight_kg | weight_lbs | source | recorded_at shape. Weight is stored
+# only in kg, so weight_lbs is derived (× 2.20462). `body_composition` has no
+# `weight_lbs`/`source`/`recorded_at` columns — those are mapped from
+# date_scanned/source_id/synced_at. Read-only and defensive: a missing table
+# contributes nothing rather than raising (mirrors export_user_data). Rows are
+# sorted newest first so the sheet opens on the most recent weigh-in.
+_KG_TO_LBS = 2.2046226218
+_WEIGHT_EXPORT_COLUMNS = ["date", "weight_kg", "weight_lbs", "source", "recorded_at"]
+
+
+def _iso_ts(v) -> str:
+    """Normalise a stored timestamp to an ISO-8601 string; '' when missing or
+    unparseable. SQLite writes created_at as 'YYYY-MM-DD HH:MM:SS' while synced_at
+    is already an isoformat() string — both come out ISO here so the export is
+    clean regardless of source."""
+    if v in (None, ""):
+        return ""
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, date):
+        return v.isoformat()
+    s = str(v).strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt).isoformat()
+        except ValueError:
+            continue
+    return s  # already ISO-ish (may carry a tz offset) — leave as-is
+
+
+def _weight_export_dataset() -> dict:
+    """Every logged bodyweight reading, merged from body_weight, gym_body_stats
+    and body_composition, as {"columns": [...], "rows": [...]} for the data
+    export. See the block comment above for the source/label mapping."""
+    rows = []
+
+    def _q(sql):
+        try:
+            with get_db() as conn:
+                cur = conn.cursor()
+                cur.execute(sql)
+                return [dict(r) for r in cur.fetchall()]
+        except Exception:
+            return []
+
+    def _add(raw_date, weight_kg, source, recorded_at):
+        kg = _to_float(weight_kg)
+        if not kg or kg <= 0:
+            return  # a null/zero weight isn't a real reading
+        day = _parse_day(raw_date)
+        iso_date = day.isoformat() if day else (str(raw_date) if raw_date else "")
+        rows.append({
+            "date": iso_date,
+            "weight_kg": round(kg, 2),
+            "weight_lbs": round(kg * _KG_TO_LBS, 1),
+            "source": source,
+            "recorded_at": _iso_ts(recorded_at),
+        })
+
+    for r in _q("SELECT date, weight_kg, created_at FROM body_weight"):
+        _add(r.get("date"), r.get("weight_kg"), "manual", r.get("created_at"))
+    for r in _q("SELECT date, weight_kg, created_at FROM gym_body_stats"):
+        _add(r.get("date"), r.get("weight_kg"), "manual", r.get("created_at"))
+    for r in _q("SELECT date_scanned, weight_kg, source_id, synced_at, created_at "
+                "FROM body_composition"):
+        source = "Rephno" if r.get("source_id") else "manual"
+        _add(r.get("date_scanned"), r.get("weight_kg"), source,
+             r.get("synced_at") or r.get("created_at"))
+
+    # Newest first; blank/unparseable dates sort to the bottom.
+    rows.sort(key=lambda x: (x["date"], x["recorded_at"] or ""), reverse=True)
+    return {"columns": _WEIGHT_EXPORT_COLUMNS, "rows": rows}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

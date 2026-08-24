@@ -949,7 +949,7 @@ def api_revoke_session(session_id):
 
 @app.route("/api/settings/export-data", methods=["GET"])
 def api_export_data():
-    """Export all fitness/health data (gym, nutrition, steps, sleep, cardio).
+    """Export all fitness/health data (gym, nutrition, steps, sleep, cardio, weight).
     ?format=json (default) → one .json file with every dataset; ?format=csv → a
     .zip containing one CSV per dataset (datasets have different columns, so a
     single flat CSV can't hold them all). Session-gated GET, so a normal browser

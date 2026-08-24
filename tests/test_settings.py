@@ -204,6 +204,11 @@ def test_remote_logout_invalidates_session():
 def _seed_export_data():
     db.log_meal("2026-08-01", "Chicken & rice", 40, 60, 10, calories=520, time="12:00")
     db.add_step_entry("2026-08-01", "manual", 8000, {"steps": 8000})
+    # Weight lands in two of its three tables here: a manual quick-log and a
+    # synced Renpho ("Rephno") scan. The export should merge and label both.
+    db.log_body_weight("2026-08-01", 80.5)
+    db.upsert_body_composition("2026-08-02", {"weight_kg": 80.1, "bmi": 24.1},
+                               source_id="renpho-xyz-1")
 
 
 def test_export_json(client):
@@ -214,10 +219,21 @@ def test_export_json(client):
     assert "attachment" in r.headers.get("Content-Disposition", "")
     payload = json.loads(r.get_data(as_text=True))
     assert "data" in payload
-    for key in ("gym_sessions", "gym_sets", "nutrition_meals", "steps", "sleep", "cardio"):
+    for key in ("gym_sessions", "gym_sets", "nutrition_meals", "steps", "sleep",
+                "cardio", "weight"):
         assert key in payload["data"]
     meals = payload["data"]["nutrition_meals"]
     assert any(m["food_name"] == "Chicken & rice" for m in meals)
+    weight = payload["data"]["weight"]
+    manual = next(w for w in weight if w["date"] == "2026-08-01")
+    assert manual["weight_kg"] == 80.5 and manual["weight_lbs"] == 177.5
+    assert manual["source"] == "manual"
+    scan = next(w for w in weight if w["date"] == "2026-08-02")
+    assert scan["weight_kg"] == 80.1 and scan["source"] == "Rephno"
+    # Newest first: the 08-02 scan precedes the 08-01 manual log.
+    dates = [w["date"] for w in weight]
+    assert dates == sorted(dates, reverse=True)
+    assert dates.index("2026-08-02") < dates.index("2026-08-01")
 
 
 def test_export_csv_zip(client):
@@ -228,10 +244,14 @@ def test_export_csv_zip(client):
     zf = zipfile.ZipFile(io.BytesIO(r.get_data()))
     names = set(zf.namelist())
     assert {"nutrition_meals.csv", "steps.csv", "gym_sessions.csv",
-            "sleep.csv", "cardio.csv"}.issubset(names)
+            "sleep.csv", "cardio.csv", "weight.csv"}.issubset(names)
     meals_csv = zf.read("nutrition_meals.csv").decode()
     assert "food_name" in meals_csv.splitlines()[0]          # header present
     assert "Chicken & rice" in meals_csv
+    weight_csv = zf.read("weight.csv").decode()
+    assert weight_csv.splitlines()[0] == "date,weight_kg,weight_lbs,source,recorded_at"
+    assert "2026-08-01,80.5,177.5,manual" in weight_csv
+    assert "2026-08-02,80.1,176.6,Rephno" in weight_csv
 
 
 # ── Phase 2: Password change ────────────────────────────────────────────────────
