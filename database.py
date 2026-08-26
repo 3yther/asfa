@@ -3337,6 +3337,41 @@ def delete_scout_jobs(job_ids, archived_only: bool = True) -> int:
         return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
 
+def cleanup_job_pipeline(days: int = JOB_ACTIVE_DAYS, now=None) -> int:
+    """Permanently delete job-pipeline history older than `days`. Returns the
+    number of rows removed.
+
+    The job pipeline lives in `scout_jobs`, keyed on `found_date` (the
+    "%Y-%m-%d %H:%M:%S" creation/first-seen timestamp — there is no separate
+    created_at on this table). Rows found more than `days` ago are hard-deleted;
+    there is no archiving stage here, this is the final purge.
+
+    Two rows are deliberately spared:
+      * applied = 1 — the user has acted on this listing, so it is a live
+        application, not stale history. Deleting it would silently drop an
+        active application from the pipeline.
+      * found_date NULL/empty — cannot be aged, so it is never deleted on a
+        guess (same rule as archive_stale_scout_jobs()).
+
+    `now` is injectable for testing; it defaults to now_local() so the cutoff is
+    computed on the same clock that stamps found_date (Railway runs UTC while the
+    app's canonical zone is Europe/London).
+    """
+    _ensure_scout_tables()
+    now = now or now_local()
+    cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"DELETE FROM scout_jobs "
+            f"WHERE found_date IS NOT NULL AND found_date <> '' "
+            f"AND found_date < {ph} "
+            f"AND (applied IS NULL OR applied = 0)",
+            (cutoff,))
+        return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+
 _APPRENTICESHIPS_READY = False
 
 

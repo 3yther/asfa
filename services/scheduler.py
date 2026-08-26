@@ -336,6 +336,23 @@ def archive_stale_jobs():
         logger.error(f"scout auto-archive failed: {e}")
 
 
+@audited("scout", "cleanup_job_pipeline")
+def cleanup_job_pipeline():
+    """01:00 Europe/London — permanently delete job-pipeline history older than
+    db.JOB_ACTIVE_DAYS (14). Runs after the midnight Obsidian sync.
+
+    Unlike archive_stale_jobs (a soft state change at 02:00), this is a hard
+    delete of stale listings. Applied jobs (applied = 1) are spared by
+    db.cleanup_job_pipeline, so active applications are never removed.
+    """
+    try:
+        deleted = db.cleanup_job_pipeline()
+        logger.info("Deleted %d job entries older than %d days",
+                    deleted, db.JOB_ACTIVE_DAYS)
+    except Exception as e:
+        logger.error(f"job pipeline cleanup failed: {e}")
+
+
 def csp_report_cleanup():
     """Daily — cap the CSP-report sink at 7 days. The /api/csp-report endpoint is
     public and only rate-limited, so the table would otherwise grow unbounded."""
@@ -456,6 +473,12 @@ def start_scheduler():
     # Europe/London (quiet hours, and explicit tz because Railway runs UTC).
     _safe_add(sched, archive_stale_jobs, "cron", hour=2, minute=0,
               timezone="Europe/London", id="scout_archive_stale_jobs",
+              replace_existing=True, misfire_grace_time=60)
+    # Job-pipeline hard-delete — purge scout_jobs history older than 14 days at
+    # 01:00 Europe/London (after the midnight Obsidian sync, before the 02:00
+    # soft-archive). Explicit tz because Railway runs UTC. Applied jobs are kept.
+    _safe_add(sched, cleanup_job_pipeline, "cron", hour=1, minute=0,
+              timezone="Europe/London", id="scout_cleanup_job_pipeline",
               replace_existing=True, misfire_grace_time=60)
     # Daily 7-day retention cap on the public CSP-report sink (03:30, quiet hours).
     _safe_add(sched, csp_report_cleanup, "cron", hour=3, minute=30,
