@@ -1621,6 +1621,83 @@ def api_nutrition_score():
     return jsonify(s)
 
 
+# ── Training split (Sept 1-15 cut) ───────────────────────────────────────────
+# Nutrition split targets, weight trend, 14-day countdown + checklist, bench
+# progression, and the weekly review. All auth-gated by before_request.
+
+@app.route("/api/nutrition/split-targets")
+def api_split_nutrition_targets():
+    date_str = (request.args.get("date") or "").strip() or _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    return jsonify(db.get_split_nutrition_targets(date_str))
+
+
+@app.route("/api/fitness/weight-split-trend")
+def api_weight_split_trend():
+    return jsonify(db.get_weight_split_trend())
+
+
+@app.route("/api/asfa/split-progress")
+def api_split_progress():
+    date_str = (request.args.get("date") or "").strip() or _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    return jsonify(db.get_split_progress(date_str))
+
+
+@app.route("/api/asfa/split-checklist", methods=["POST"])
+def api_split_checklist_toggle():
+    data = request.get_json(force=True) or {}
+    date_str = (data.get("date") or "").strip() or _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    item = (data.get("item") or "").strip()
+    try:
+        checklist = db.set_split_checklist_item(date_str, item, bool(data.get("value")))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True, "today_checklist": checklist})
+
+
+@app.route("/api/fitness/bench-progression", methods=["GET"])
+def api_bench_progression():
+    date_str = (request.args.get("date") or "").strip() or _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    return jsonify(db.get_bench_progression(date_str))
+
+
+@app.route("/api/fitness/bench-progression", methods=["POST"])
+def api_bench_progression_log():
+    data = request.get_json(force=True) or {}
+    date_str = (data.get("session_date") or data.get("date") or "").strip() or _today()
+    if not _valid_date(date_str):
+        return jsonify({"error": "session_date must be YYYY-MM-DD"}), 400
+    row, err = db.log_bench_session(
+        session_date=date_str,
+        weight_kg=data.get("weight_kg"),
+        reps=data.get("reps"),
+        sets=data.get("sets", 1),
+        rpe=data.get("rpe"),
+        is_1rm_attempt=data.get("is_1rm_attempt", False),
+        notes=data.get("notes"),
+    )
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({"ok": True, "session": row, "progression": db.get_bench_progression(date_str)})
+
+
+@app.route("/api/asfa/split-weekly-review")
+def api_split_weekly_review():
+    try:
+        week = int(request.args.get("week", 1))
+    except (TypeError, ValueError):
+        week = 1
+    from services.training import generate_weekly_split_review
+    return jsonify(generate_weekly_split_review(week))
+
+
 @app.route("/api/nutrition/favorites")
 def api_nutrition_favorites():
     try:

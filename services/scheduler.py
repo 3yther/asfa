@@ -384,6 +384,32 @@ def weekly_csv_export():
         logger.error(f"weekly CSV export failed: {e}")
 
 
+@audited("weekly_review", "weekly_split_review")
+def weekly_split_review_job():
+    """Sunday 19:00 Europe/London — generate the Sept 1-15 split's weekly review
+    for whichever split-week today falls in, stash it in kv_store, and notify.
+    Never raises."""
+    from services.training import generate_weekly_split_review
+    try:
+        split = db.get_training_split()
+        start = datetime.strptime(split["start_date"], "%Y-%m-%d").date()
+        today = datetime.now().date()
+        week_num = max(1, min(3, (today - start).days // 7 + 1))
+        result = generate_weekly_split_review(week_num=week_num, user_id=1)
+        db.kv_set("split_weekly_review", json.dumps(
+            {"generated": today.strftime("%Y-%m-%d"), "review": result}))
+        logger.info("weekly split review generated: week %s", week_num)
+        _notify(
+            f"🏋️ Split week {result['week']} review "
+            f"({result['start_date']}→{result['end_date']}): "
+            f"weight {result['weight_start']}→{result['weight_end']}kg, "
+            f"nutrition {result['nutrition_adherence']}%, "
+            f"gym {result['gym_sessions']} sessions.",
+            "review")
+    except Exception as e:
+        logger.error(f"weekly split review failed: {e}")
+
+
 # ── Startup ────────────────────────────────────────────────────────────────────
 
 def _safe_add(sched, func, *args, **kwargs):
@@ -448,6 +474,10 @@ def start_scheduler():
     # closes, so the exported week is always complete.
     _safe_add(sched, weekly_csv_export, "cron", day_of_week="sun", hour=12, minute=0,
               timezone=EXPORT_TZ, id="weekly_csv_export",
+              replace_existing=True, misfire_grace_time=60)
+    # Sept 1-15 training-split weekly review — Sunday 19:00 Europe/London.
+    _safe_add(sched, weekly_split_review_job, "cron", day_of_week="sun", hour=19,
+              minute=0, timezone="Europe/London", id="weekly_split_review",
               replace_existing=True, misfire_grace_time=60)
     # Daily production-DB backup at 03:00 Europe/London (quiet hours).
     _safe_add(sched, db_backup, "cron", hour=3, minute=0,

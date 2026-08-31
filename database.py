@@ -9893,3 +9893,564 @@ def interview_delete_session(sid):
         ph = "%s" if USE_POSTGRES else "?"
         cur.execute(f"DELETE FROM interview_qa WHERE session_id={ph}", (sid,))
         cur.execute(f"DELETE FROM interview_sessions WHERE id={ph}", (sid,))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TRAINING SPLIT  —  Sept 1-15 upper/lower cut tracking
+# ─────────────────────────────────────────────────────────────────────────────
+# Single-user, like the rest of ASFA: no user_id / users FK (the spec assumed a
+# multi-user schema this app doesn't have). One active split lives at id=1 and is
+# seeded on first touch. Reuses existing data — `meals` for nutrition, the
+# `body_weight` table for weight, `bench_progression` (new) for the bench block.
+# Phases and countdowns are all derived from the real current date so the cards
+# behave correctly before the split starts, during it, and after it completes.
+# ═════════════════════════════════════════════════════════════════════════════
+
+_TRAINING_SPLITS_READY = False
+_BENCH_PROGRESSION_READY = False
+_SPLIT_CHECKLIST_READY = False
+
+# The plan the user handed over (see the Sept 1-15 dispatch). Seeded once; edit
+# via set_training_split(). locked_meals is stored as JSON text for SQLite/PG
+# portability.
+DEFAULT_SPLIT = {
+    "split_name": "Sept 1-15 Upper/Lower Cut",
+    "start_date": "2026-09-01",
+    "end_date": "2026-09-15",
+    "daily_calories": 1800,
+    "daily_protein": 175,
+    "target_weight_start": 80.0,
+    "target_weight_end": 76.0,
+    "locked_meals": {
+        # breakfast is a range (805-870); lunch is a fixed 850.
+        "breakfast": {"kcal_low": 805, "kcal_high": 870, "protein": 58},
+        "lunch": {"kcal": 850, "protein": 55},
+    },
+}
+
+# Bench block phases inside the split window.
+BENCH_PHASES = [
+    {"phase": "lock_in", "label": "Lock-In", "start": "2026-09-01", "end": "2026-09-07",
+     "target": "65kg × 5×5", "target_sessions": 4},
+    {"phase": "test",    "label": "1RM Test Week", "start": "2026-09-08", "end": "2026-09-12",
+     "target": "Work up to a heavy single", "target_sessions": 3},
+    {"phase": "maintain", "label": "Maintain", "start": "2026-09-13", "end": "2026-09-15",
+     "target": "Maintain / final reps", "target_sessions": 2},
+]
+BENCH_EXPECTED_1RM = "77-80kg"
+
+# The user's planned weekly weight targets (front-loaded, not a flat line): the
+# ending weight for each week of the split. Week 3 is the single final day.
+WEIGHT_WEEK_TARGETS = {1: 77.8, 2: 76.0, 3: 76.0}
+
+
+def _ensure_training_splits_table():
+    global _TRAINING_SPLITS_READY
+    if _TRAINING_SPLITS_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS training_splits (
+        id INTEGER PRIMARY KEY,
+        split_name TEXT,
+        start_date TEXT,
+        end_date TEXT,
+        daily_calories INTEGER,
+        daily_protein INTEGER,
+        locked_meals TEXT,
+        target_weight_start REAL,
+        target_weight_end REAL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(stmt)
+        cur.execute("SELECT COUNT(*) AS n FROM training_splits")
+        row = cur.fetchone()
+        n = (row["n"] if isinstance(row, dict) or hasattr(row, "keys") else row[0])
+        if not n:
+            ph = "%s" if USE_POSTGRES else "?"
+            d = DEFAULT_SPLIT
+            cur.execute(
+                "INSERT INTO training_splits (id, split_name, start_date, end_date, "
+                "daily_calories, daily_protein, locked_meals, target_weight_start, "
+                f"target_weight_end) VALUES (1,{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+                (d["split_name"], d["start_date"], d["end_date"], d["daily_calories"],
+                 d["daily_protein"], json.dumps(d["locked_meals"]),
+                 d["target_weight_start"], d["target_weight_end"]))
+    _TRAINING_SPLITS_READY = True
+
+
+def get_training_split() -> dict:
+    """The one active training split (id=1), locked_meals parsed back to a dict.
+    Seeds DEFAULT_SPLIT on first call so the endpoints always have data."""
+    _ensure_training_splits_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM training_splits WHERE id = 1")
+        row = cur.fetchone()
+    if not row:
+        return dict(DEFAULT_SPLIT)
+    d = dict(row)
+    try:
+        d["locked_meals"] = json.loads(d.get("locked_meals") or "{}")
+    except (TypeError, ValueError):
+        d["locked_meals"] = {}
+    return d
+
+
+def set_training_split(**fields) -> dict:
+    """Upsert the single split row. Accepts any of the DEFAULT_SPLIT keys;
+    locked_meals may be a dict (JSON-encoded on write). Returns the stored split."""
+    _ensure_training_splits_table()
+    allowed = ("split_name", "start_date", "end_date", "daily_calories",
+               "daily_protein", "locked_meals", "target_weight_start",
+               "target_weight_end")
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if "locked_meals" in updates and not isinstance(updates["locked_meals"], str):
+        updates["locked_meals"] = json.dumps(updates["locked_meals"])
+    if updates:
+        ph = "%s" if USE_POSTGRES else "?"
+        sets = ", ".join(f"{k} = {ph}" for k in updates)
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(f"UPDATE training_splits SET {sets} WHERE id = 1",
+                        tuple(updates.values()))
+    return get_training_split()
+
+
+# ── Date / phase helpers ─────────────────────────────────────────────────────
+
+def _split_today(date_str=None) -> date:
+    if date_str:
+        return datetime.strptime(date_str, "%Y-%m-%d").date()
+    return datetime.now().date()
+
+
+def _iso(d: date) -> str:
+    return d.strftime("%Y-%m-%d")
+
+
+def _sum_meals_for_date(date_str: str) -> dict:
+    """Consumed macros logged on `date_str`. Zeroes when nothing is logged."""
+    _ensure_meals_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COALESCE(SUM(calories),0) AS kcal, COALESCE(SUM(protein),0) AS protein, "
+            "COALESCE(SUM(carbs),0) AS carbs, COALESCE(SUM(fat),0) AS fat, COUNT(*) AS n "
+            f"FROM meals WHERE date = {ph}", (date_str,))
+        r = cur.fetchone()
+    r = dict(r)
+    return {
+        "calories": round(float(r["kcal"] or 0), 1),
+        "protein": round(float(r["protein"] or 0), 1),
+        "carbs": round(float(r["carbs"] or 0), 1),
+        "fat": round(float(r["fat"] or 0), 1),
+        "meals_logged": int(r["n"] or 0),
+    }
+
+
+# ── Feature 1: nutrition split targets ───────────────────────────────────────
+
+def get_split_nutrition_targets(date_str=None) -> dict:
+    """Locked-meal budget + live logged totals for the day, with a status band.
+    remaining_budget = daily target − locked breakfast − locked lunch, expressed
+    as a range because breakfast is a range (805-870)."""
+    split = get_training_split()
+    lm = split.get("locked_meals", {})
+    bf = lm.get("breakfast", {})
+    ln = lm.get("lunch", {})
+    total_cal = int(split["daily_calories"])
+    total_pro = int(split["daily_protein"])
+
+    bf_lo = float(bf.get("kcal_low", bf.get("kcal", 0)))
+    bf_hi = float(bf.get("kcal_high", bf.get("kcal", 0)))
+    bf_pro = float(bf.get("protein", 0))
+    ln_cal = float(ln.get("kcal", 0))
+    ln_pro = float(ln.get("protein", 0))
+
+    # A bigger breakfast (bf_hi) leaves less remaining, so it pairs with the low
+    # end of the remaining range, and vice-versa.
+    remaining_cal_low = round(total_cal - bf_hi - ln_cal, 0)
+    remaining_cal_high = round(total_cal - bf_lo - ln_cal, 0)
+    remaining_pro = round(total_pro - bf_pro - ln_pro, 1)
+
+    date_str = date_str or _iso(_split_today())
+    logged = _sum_meals_for_date(date_str)
+
+    over_by = round(logged["calories"] - total_cal, 1)
+    if logged["calories"] <= total_cal:
+        status = "on_track"          # green
+    elif over_by < 50:
+        status = "slightly_over"     # amber
+    else:
+        status = "over"              # red
+
+    return {
+        "total_daily": total_cal,
+        "protein": total_pro,
+        "locked_breakfast": {"kcal_low": bf_lo, "kcal_high": bf_hi, "protein": bf_pro},
+        "locked_lunch": {"kcal": ln_cal, "protein": ln_pro},
+        "remaining_budget": {
+            "kcal_low": remaining_cal_low,
+            "kcal_high": remaining_cal_high,
+            "protein": remaining_pro,
+        },
+        "logged": logged,
+        "over_by": over_by,
+        "status": status,
+        "date": date_str,
+    }
+
+
+# ── Feature 2: weight split trend ────────────────────────────────────────────
+
+def _latest_body_weight():
+    """Most recent (date, weight_kg) from body_weight, or (None, None)."""
+    _ensure_body_weight_table() if "_ensure_body_weight_table" in globals() else None
+    with get_db() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT date, weight_kg FROM body_weight ORDER BY date DESC LIMIT 1")
+            r = cur.fetchone()
+        except Exception:
+            return (None, None)
+    if not r:
+        return (None, None)
+    r = dict(r)
+    return (r["date"], float(r["weight_kg"]))
+
+
+def _weight_on_or_before(date_str: str):
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(f"SELECT weight_kg FROM body_weight WHERE date <= {ph} "
+                        "ORDER BY date DESC LIMIT 1", (date_str,))
+            r = cur.fetchone()
+        except Exception:
+            return None
+    return float(dict(r)["weight_kg"]) if r else None
+
+
+def get_weight_split_trend() -> dict:
+    """Weekly weight targets across the split with an on-pace flag per week.
+    Linear interpolation from target_weight_start → target_weight_end over the
+    split window gives each week's target weight."""
+    split = get_training_split()
+    start = _split_today(split["start_date"])
+    end = _split_today(split["end_date"])
+    w_start = float(split["target_weight_start"])
+    w_end = float(split["target_weight_end"])
+    total_days = max((end - start).days, 1)
+    per_day = (w_start - w_end) / total_days  # kg lost per day (positive)
+
+    def target_on(d: date) -> float:
+        d = min(max(d, start), end)
+        return round(w_start - per_day * (d - start).days, 1)
+
+    cur_date, cur_weight = _latest_body_weight()
+
+    weeks = []
+    wk_start = start
+    idx = 1
+    prev_target = w_start
+    while wk_start <= end:
+        wk_end = min(wk_start + timedelta(days=6), end)
+        # Honour the user's explicit weekly plan; fall back to interpolation for
+        # any week beyond the planned three.
+        t_start = round(prev_target, 1)
+        t_end = round(WEIGHT_WEEK_TARGETS.get(idx, target_on(wk_end)), 1)
+        prev_target = t_end
+        actual = _weight_on_or_before(_iso(wk_end))
+        on_pace = None
+        if actual is not None:
+            # within 0.5kg of the week's ending target counts as on pace.
+            diff = actual - t_end
+            if diff <= 0.0 + 1e-9:
+                on_pace = "ahead"
+            elif diff <= 0.5:
+                on_pace = "on_pace"
+            else:
+                on_pace = "behind"
+        weeks.append({
+            "week": idx, "start": _iso(wk_start), "end": _iso(wk_end),
+            "target_start": t_start, "target_end": t_end,
+            "actual": round(actual, 1) if actual is not None else None,
+            "on_pace": on_pace,
+        })
+        wk_start = wk_end + timedelta(days=1)
+        idx += 1
+
+    return {
+        "current_weight": round(cur_weight, 1) if cur_weight is not None else None,
+        "current_date": cur_date,
+        "start_weight": w_start,
+        "target_by_end": w_end,
+        "end_date": split["end_date"],
+        "rate_per_week": round(-per_day * 7, 1),  # negative = losing
+        "weeks": weeks,
+    }
+
+
+# ── Feature 3: countdown + daily checklist ───────────────────────────────────
+
+def _ensure_split_checklist_table():
+    global _SPLIT_CHECKLIST_READY
+    if _SPLIT_CHECKLIST_READY:
+        return
+    with get_db() as conn:
+        conn.cursor().execute(
+            """CREATE TABLE IF NOT EXISTS split_checklist (
+                date TEXT PRIMARY KEY,
+                weight_logged INTEGER DEFAULT 0,
+                nutrition_logged INTEGER DEFAULT 0,
+                gym_done INTEGER DEFAULT 0
+            )""")
+    _SPLIT_CHECKLIST_READY = True
+
+
+def _has_body_weight_on(date_str: str) -> bool:
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(f"SELECT 1 FROM body_weight WHERE date = {ph} LIMIT 1", (date_str,))
+            return cur.fetchone() is not None
+        except Exception:
+            return False
+
+
+def _has_gym_session_on(date_str: str) -> bool:
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(f"SELECT 1 FROM gym_sessions WHERE date = {ph} LIMIT 1", (date_str,))
+            return cur.fetchone() is not None
+        except Exception:
+            return False
+
+
+def get_split_checklist(date_str: str) -> dict:
+    """Today's checklist. Each item is auto-satisfied from real data (a logged
+    weight / meal / gym session) OR by an explicit manual toggle stored in
+    split_checklist — whichever is truthy."""
+    _ensure_split_checklist_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM split_checklist WHERE date = {ph}", (date_str,))
+        row = cur.fetchone()
+    manual = dict(row) if row else {}
+    meals = _sum_meals_for_date(date_str)
+    return {
+        "weight_logged": bool(manual.get("weight_logged")) or _has_body_weight_on(date_str),
+        "nutrition_logged": bool(manual.get("nutrition_logged")) or meals["meals_logged"] > 0,
+        "gym_done": bool(manual.get("gym_done")) or _has_gym_session_on(date_str),
+    }
+
+
+def set_split_checklist_item(date_str: str, item: str, value: bool) -> dict:
+    """Manually toggle one checklist item for a date."""
+    if item not in ("weight_logged", "nutrition_logged", "gym_done"):
+        raise ValueError("unknown checklist item")
+    _ensure_split_checklist_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    v = 1 if value else 0
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                f"INSERT INTO split_checklist (date, {item}) VALUES ({ph},{ph}) "
+                f"ON CONFLICT (date) DO UPDATE SET {item} = EXCLUDED.{item}",
+                (date_str, v))
+        else:
+            cur.execute(f"INSERT OR IGNORE INTO split_checklist (date) VALUES ({ph})", (date_str,))
+            cur.execute(f"UPDATE split_checklist SET {item} = {ph} WHERE date = {ph}", (v, date_str))
+    return get_split_checklist(date_str)
+
+
+def get_split_progress(date_str=None) -> dict:
+    """14-day countdown: days elapsed / remaining / completion %, plus today's
+    checklist and milestone dates. Clamped so it reads correctly before the
+    split starts and after it finishes."""
+    split = get_training_split()
+    start = _split_today(split["start_date"])
+    end = _split_today(split["end_date"])
+    today = _split_today(date_str)
+    days_total = (end - start).days + 1  # inclusive → 15 days for Sept 1-15
+
+    if today < start:
+        days_completed = 0
+        state = "not_started"
+    elif today > end:
+        days_completed = days_total
+        state = "complete"
+    else:
+        days_completed = (today - start).days + 1
+        state = "active"
+    days_remaining = max(days_total - days_completed, 0)
+    completion_pct = round(100 * days_completed / days_total) if days_total else 0
+
+    checklist = get_split_checklist(_iso(today))
+    logged = _sum_meals_for_date(_iso(today))
+
+    return {
+        "split_name": split["split_name"],
+        "start_date": split["start_date"],
+        "end_date": split["end_date"],
+        "today": _iso(today),
+        "state": state,
+        "days_total": days_total,
+        "days_completed": days_completed,
+        "days_remaining": days_remaining,
+        "completion_pct": completion_pct,
+        "milestones": [
+            {"date": "2026-09-08", "label": "1RM test week begins"},
+            {"date": "2026-09-15", "label": "Final day"},
+        ],
+        "today_checklist": checklist,
+        "today_nutrition": {"logged_kcal": logged["calories"],
+                            "target_kcal": int(split["daily_calories"])},
+    }
+
+
+# ── Feature 4: bench progression ─────────────────────────────────────────────
+
+def _ensure_bench_progression_table():
+    global _BENCH_PROGRESSION_READY
+    if _BENCH_PROGRESSION_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS bench_progression (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_date TEXT NOT NULL,
+        weight_kg REAL,
+        reps INTEGER,
+        sets INTEGER,
+        rpe REAL,
+        is_1rm_attempt INTEGER DEFAULT 0,
+        one_rep_max REAL,
+        phase TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"""
+    if USE_POSTGRES:
+        stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    with get_db() as conn:
+        conn.cursor().execute(stmt)
+    _BENCH_PROGRESSION_READY = True
+
+
+def _phase_for_date(date_str: str) -> str:
+    d = _split_today(date_str)
+    for p in BENCH_PHASES:
+        if _split_today(p["start"]) <= d <= _split_today(p["end"]):
+            return p["phase"]
+    # before the split → lock_in; after → maintain
+    if d < _split_today(BENCH_PHASES[0]["start"]):
+        return BENCH_PHASES[0]["phase"]
+    return BENCH_PHASES[-1]["phase"]
+
+
+def log_bench_session(session_date, weight_kg, reps, sets=1, rpe=None,
+                      is_1rm_attempt=False, notes=None):
+    """Record a bench session/attempt. 1RM attempts store an estimated (or, for a
+    true single, actual) one-rep max via the existing Epley helper. Returns
+    (row_dict, None) or (None, error)."""
+    _ensure_bench_progression_table()
+    try:
+        weight_kg = float(weight_kg)
+        reps = int(reps)
+        sets = int(sets)
+    except (TypeError, ValueError):
+        return (None, "weight_kg, reps and sets must be numbers")
+    if weight_kg < 0 or reps < 0 or sets < 0:
+        return (None, "weight_kg, reps and sets must be >= 0")
+    rpe = float(rpe) if rpe not in (None, "") else None
+    is_1rm_attempt = bool(is_1rm_attempt)
+    one_rm = calculate_one_rep_max(weight_kg, reps) if is_1rm_attempt else None
+    phase = _phase_for_date(session_date)
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO bench_progression (session_date, weight_kg, reps, sets, rpe, "
+            f"is_1rm_attempt, one_rep_max, phase, notes) VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})",
+            (session_date, weight_kg, reps, sets, rpe, 1 if is_1rm_attempt else 0,
+             one_rm, phase, notes))
+        new_id = cur.lastrowid if not USE_POSTGRES else None
+    return ({"id": new_id, "session_date": session_date, "weight_kg": weight_kg,
+             "reps": reps, "sets": sets, "rpe": rpe, "is_1rm_attempt": is_1rm_attempt,
+             "one_rep_max": one_rm, "phase": phase, "notes": notes}, None)
+
+
+def get_bench_sessions() -> list:
+    _ensure_bench_progression_table()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM bench_progression ORDER BY session_date, id")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_bench_progression(date_str=None) -> dict:
+    """Current bench phase, sessions completed vs target for that phase, best
+    tested 1RM to date, and the upcoming milestone."""
+    sessions = get_bench_sessions()
+    today = _split_today(date_str)
+    phase_key = _phase_for_date(_iso(today))
+    phase = next((p for p in BENCH_PHASES if p["phase"] == phase_key), BENCH_PHASES[0])
+
+    in_phase = [s for s in sessions
+                if _split_today(phase["start"]) <= _split_today(s["session_date"]) <= _split_today(phase["end"])]
+    tested = [s for s in sessions if s.get("is_1rm_attempt") and s.get("one_rep_max")]
+    best_1rm = max((float(s["one_rep_max"]) for s in tested), default=None)
+    last = sessions[-1] if sessions else None
+
+    # next milestone relative to today
+    milestone = None
+    for p in BENCH_PHASES:
+        if _split_today(p["start"]) > today:
+            milestone = {"date": p["start"], "label": f"{p['label']} begins"}
+            break
+
+    return {
+        "current_phase": phase_key,
+        "phase_label": phase["label"],
+        "phase_window": f"{phase['start']} → {phase['end']}",
+        "target": phase["target"],
+        "sessions_completed": len(in_phase),
+        "target_sessions": phase["target_sessions"],
+        "test_window": f"{BENCH_PHASES[1]['start']} → {BENCH_PHASES[1]['end']}",
+        "1rm_tested": best_1rm is not None,
+        "1rm_value": round(best_1rm, 1) if best_1rm is not None else None,
+        "expected_1rm": BENCH_EXPECTED_1RM,
+        "last_session": last,
+        "upcoming_milestone": milestone,
+    }
+
+
+# ── Feature 5: weekly split review (used by service + scheduler) ──────────────
+
+def get_split_week_bounds(week_num: int):
+    """(start_date, end_date) strings for week 1/2/3 of the split."""
+    split = get_training_split()
+    start = _split_today(split["start_date"])
+    end = _split_today(split["end_date"])
+    wk_start = start + timedelta(days=7 * (week_num - 1))
+    wk_end = min(wk_start + timedelta(days=6), end)
+    return (_iso(wk_start), _iso(wk_end))
+
+
+def count_gym_sessions_between(start_date: str, end_date: str) -> int:
+    """Number of gym sessions logged in the inclusive [start, end] window."""
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(f"SELECT COUNT(*) AS n FROM gym_sessions "
+                        f"WHERE date >= {ph} AND date <= {ph}", (start_date, end_date))
+            return int(dict(cur.fetchone())["n"])
+        except Exception:
+            return 0

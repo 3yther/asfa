@@ -619,6 +619,10 @@ const CARD_LOADERS = {
   supplements: fetchSupplements, bodycomp: fetchBodyComp,
   sleep: fetchSleep,
   finance: fetchFinance,
+  "split-progress": fetchSplitProgress,
+  "nutrition-split": fetchNutritionSplit,
+  "weight-split": fetchWeightSplit,
+  "bench-split": fetchBenchSplit,
 };
 
 function loadAll() {
@@ -2181,6 +2185,165 @@ function toast(msg, ms = 2200) {
 
 // Escapes quotes too — esc() output is interpolated into double-quoted
 // attributes (href/data-name), where an unescaped `"` breaks out.
+// ── Sept 1-15 Training Split ─────────────────────────────────────────────────
+// Four dashboard cards on the BODY tab: countdown+checklist, nutrition split
+// targets, weight cut trend, and bench progression. All read-only GETs plus a
+// checklist toggle POST. Colours: green on-track, amber warning, red off.
+const SPLIT_GREEN = "#39ff14", SPLIT_AMBER = "#ffcc33", SPLIT_RED = "#ff5a5a";
+
+function splitBar(pct, color) {
+  pct = Math.max(0, Math.min(100, Math.round(pct)));
+  return `<div style="background:rgba(255,255,255,.08);border-radius:4px;height:10px;overflow:hidden;margin:6px 0">
+    <div style="width:${pct}%;height:100%;background:${color};transition:width .4s"></div></div>`;
+}
+
+async function fetchSplitProgress() {
+  const el = document.getElementById("split-progress-body");
+  if (!el) return;
+  try {
+    const d = await apiGet("/api/asfa/split-progress");
+    renderSplitProgress(el, d);
+    if (!window.asfa_initial_load) glowCard("split-progress");
+  } catch { el.innerHTML = `<div class="muted mono">// SPLIT OFFLINE</div>`; }
+}
+
+function renderSplitProgress(el, d) {
+  const rem = document.getElementById("split-days-remaining");
+  const pct = d.completion_pct || 0;
+  // Green if on/ahead of pace (elapsed days ≥ completion), amber mid, red behind.
+  const pace = d.days_total ? Math.round(100 * d.days_completed / d.days_total) : 0;
+  const barColor = d.state === "complete" ? SPLIT_GREEN
+                 : pace >= 50 ? SPLIT_GREEN : pace >= 25 ? SPLIT_AMBER : SPLIT_RED;
+  if (rem) rem.textContent = d.state === "complete" ? "COMPLETE ✓"
+         : d.state === "not_started" ? "NOT STARTED"
+         : `${d.days_remaining} DAYS LEFT`;
+  const cl = d.today_checklist || {};
+  const check = (key, label, sub) => `
+    <button class="split-check" data-item="${key}" data-date="${esc(d.today)}"
+            onclick="toggleSplitCheck(this)" type="button"
+            style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;
+                   color:inherit;cursor:pointer;padding:6px 0;text-align:left;font:inherit">
+      <span style="color:${cl[key] ? SPLIT_GREEN : "#666"};font-size:16px">${cl[key] ? "✓" : "○"}</span>
+      <span>${label}</span><span class="muted mono" style="margin-left:auto;font-size:11px">${esc(sub || "")}</span>
+    </button>`;
+  const nut = d.today_nutrition || {};
+  const miles = (d.milestones || []).map(m => `${m.date.slice(5)} ${esc(m.label)}`).join(" · ");
+  el.innerHTML = `
+    ${splitBar(pct, barColor)}
+    <div class="mono" style="font-size:12px">${d.days_completed}/${d.days_total} days complete (${pct}%)</div>
+    <div class="muted mono" style="font-size:11px;margin:6px 0">Milestones: ${miles}</div>
+    <div class="hud-label" style="margin-top:8px">TODAY (${esc(d.today)})</div>
+    ${check("weight_logged", "Weight logged", cl.weight_logged ? "" : "tap to mark")}
+    ${check("nutrition_logged", "Nutrition logged", `${nut.logged_kcal || 0}/${nut.target_kcal || 0} kcal`)}
+    ${check("gym_done", "Gym done", cl.gym_done ? "" : "tap to mark")}`;
+}
+
+async function toggleSplitCheck(btn) {
+  const item = btn.dataset.item, date = btn.dataset.date;
+  const on = btn.querySelector("span").textContent.trim() === "✓";
+  try {
+    await apiPost("/api/asfa/split-checklist", { date, item, value: !on });
+    fetchSplitProgress();
+  } catch {}
+}
+
+async function fetchNutritionSplit() {
+  const el = document.getElementById("nutrition-split-body");
+  if (!el) return;
+  try {
+    const d = await apiGet("/api/nutrition/split-targets");
+    renderNutritionSplit(el, d);
+    if (!window.asfa_initial_load) glowCard("nutrition-split");
+  } catch { el.innerHTML = `<div class="muted mono">// NUTRITION OFFLINE</div>`; }
+}
+
+function renderNutritionSplit(el, d) {
+  const badge = document.getElementById("nsplit-status");
+  const color = d.status === "on_track" ? SPLIT_GREEN
+              : d.status === "slightly_over" ? SPLIT_AMBER : SPLIT_RED;
+  const label = d.status === "on_track" ? "ON TRACK ✓"
+              : d.status === "slightly_over" ? "SLIGHTLY OVER" : "OVER";
+  if (badge) { badge.textContent = label; badge.style.color = color; }
+  const bf = d.locked_breakfast, ln = d.locked_lunch, rb = d.remaining_budget, lg = d.logged;
+  const rng = (lo, hi) => lo === hi ? `${lo}` : `${lo}-${hi}`;
+  const calPct = d.total_daily ? 100 * lg.calories / d.total_daily : 0;
+  el.innerHTML = `
+    <div class="mono" style="font-size:12px;line-height:1.7">
+      <div>BREAKFAST (locked): <b>${rng(bf.kcal_low, bf.kcal_high)}</b> kcal · <b>${bf.protein}</b>g P</div>
+      <div>LUNCH (locked): <b>${ln.kcal}</b> kcal · <b>${ln.protein}</b>g P</div>
+      <div style="border-top:1px solid rgba(255,255,255,.12);margin:6px 0;padding-top:6px">
+        REMAINING: <b style="color:${SPLIT_GREEN}">${rng(rb.kcal_low, rb.kcal_high)}</b> kcal ·
+        <b style="color:${SPLIT_GREEN}">${rb.protein}</b>g P</div>
+    </div>
+    ${splitBar(calPct, color)}
+    <div class="mono" style="font-size:12px">Logged: <b style="color:${color}">${lg.calories}</b>/${d.total_daily} kcal ·
+      <b>${lg.protein}</b>/${d.protein}g protein</div>`;
+}
+
+async function fetchWeightSplit() {
+  const el = document.getElementById("weight-split-body");
+  if (!el) return;
+  try {
+    const d = await apiGet("/api/fitness/weight-split-trend");
+    renderWeightSplit(el, d);
+    if (!window.asfa_initial_load) glowCard("weight-split");
+  } catch { el.innerHTML = `<div class="muted mono">// WEIGHT OFFLINE</div>`; }
+}
+
+function renderWeightSplit(el, d) {
+  const rate = document.getElementById("wsplit-rate");
+  if (rate) rate.textContent = d.rate_per_week != null ? `${d.rate_per_week}kg/wk` : "";
+  const paceColor = { ahead: SPLIT_GREEN, on_pace: SPLIT_GREEN, behind: SPLIT_RED };
+  const paceMark = { ahead: "✓", on_pace: "✓", behind: "△", null: "?" };
+  const rows = (d.weeks || []).map(w => {
+    const c = paceColor[w.on_pace] || "#888";
+    const mark = w.on_pace ? paceMark[w.on_pace] : "?";
+    const actual = w.actual != null ? `${w.actual}kg` : "—";
+    return `<div class="mono" style="font-size:12px;display:flex;gap:8px;padding:3px 0">
+      <span style="min-width:52px">Wk ${w.week}</span>
+      <span style="flex:1">${w.target_start}→${w.target_end}kg target</span>
+      <span style="min-width:56px">act ${actual}</span>
+      <span style="color:${c}">${mark}</span></div>`;
+  }).join("");
+  const cur = d.current_weight != null ? `${d.current_weight}kg` : "—";
+  el.innerHTML = `
+    <div class="mono" style="font-size:12px;margin-bottom:6px">
+      Current: <b>${cur}</b> · Target (${(d.end_date||"").slice(5)}): <b style="color:${SPLIT_GREEN}">${d.target_by_end}kg</b></div>
+    ${rows}`;
+}
+
+async function fetchBenchSplit() {
+  const el = document.getElementById("bench-split-body");
+  if (!el) return;
+  try {
+    const d = await apiGet("/api/fitness/bench-progression");
+    renderBenchSplit(el, d);
+    if (!window.asfa_initial_load) glowCard("bench-split");
+  } catch { el.innerHTML = `<div class="muted mono">// BENCH OFFLINE</div>`; }
+}
+
+function renderBenchSplit(el, d) {
+  const badge = document.getElementById("bench-phase-label");
+  if (badge) badge.textContent = (d.phase_label || "").toUpperCase();
+  const sPct = d.target_sessions ? 100 * d.sessions_completed / d.target_sessions : 0;
+  const last = d.last_session;
+  const lastLine = last
+    ? `Last: ${last.session_date.slice(5)} — ${last.weight_kg}kg × ${last.reps}${last.sets > 1 ? "×" + last.sets : ""}${last.rpe ? " (RPE " + last.rpe + ")" : ""}`
+    : "No sessions logged yet";
+  const tested = d["1rm_tested"]
+    ? `<div style="color:${SPLIT_GREEN}">1RM tested: <b>${d["1rm_value"]}kg</b></div>`
+    : `<div class="muted">Expected 1RM: ${esc(d.expected_1rm)} (est.)</div>`;
+  const mile = d.upcoming_milestone
+    ? `<div style="color:${SPLIT_AMBER};margin-top:6px">⚠ ${d.upcoming_milestone.date.slice(5)}: ${esc(d.upcoming_milestone.label)}</div>`
+    : "";
+  el.innerHTML = `
+    <div class="mono" style="font-size:12px">PHASE: <b>${esc(d.phase_label)}</b> (${esc(d.phase_window)}) · ${esc(d.target)}</div>
+    ${splitBar(sPct, SPLIT_GREEN)}
+    <div class="mono" style="font-size:12px">Sessions: <b>${d.sessions_completed}/${d.target_sessions}</b></div>
+    <div class="muted mono" style="font-size:11px;margin:4px 0">${esc(lastLine)}</div>
+    ${tested}${mile}`;
+}
+
 function esc(s) {
   return String(s || "")
     .replace(/&/g, "&amp;")
