@@ -410,6 +410,23 @@ def weekly_split_review_job():
         logger.error(f"weekly split review failed: {e}")
 
 
+@audited("weekly_review", "bench_1rm_test_week_alert")
+def bench_1rm_test_week_alert():
+    """Sept 8 08:00 Europe/London — the split's bench 1RM test week begins.
+    Sends via Telegram if that toggle is on (else just the in-app bell + log).
+    Never raises. Guarded so a stray fire outside the split window stays quiet."""
+    try:
+        test_start = db.BENCH_PHASES[1]["start"]  # "2026-09-08"
+        _notify(
+            "🏋️ Bench 1RM TEST WEEK begins today — work up to a heavy single "
+            f"(expected {db.BENCH_EXPECTED_1RM}). Log attempts with "
+            "is_1rm_attempt=true so the card tracks your best.",
+            "review")
+        logger.info("bench 1RM test-week alert fired (window opens %s)", test_start)
+    except Exception as e:
+        logger.error(f"bench 1RM test-week alert failed: {e}")
+
+
 # ── Startup ────────────────────────────────────────────────────────────────────
 
 def _safe_add(sched, func, *args, **kwargs):
@@ -478,6 +495,10 @@ def start_scheduler():
     # Sept 1-15 training-split weekly review — Sunday 19:00 Europe/London.
     _safe_add(sched, weekly_split_review_job, "cron", day_of_week="sun", hour=19,
               minute=0, timezone="Europe/London", id="weekly_split_review",
+              replace_existing=True, misfire_grace_time=60)
+    # Bench 1RM test-week alert — Sept 8 08:00 Europe/London (start of the test phase).
+    _safe_add(sched, bench_1rm_test_week_alert, "cron", month=9, day=8, hour=8,
+              minute=0, timezone="Europe/London", id="bench_1rm_test_week_alert",
               replace_existing=True, misfire_grace_time=60)
     # Daily production-DB backup at 03:00 Europe/London (quiet hours).
     _safe_add(sched, db_backup, "cron", hour=3, minute=0,

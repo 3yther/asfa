@@ -10428,6 +10428,7 @@ def get_bench_progression(date_str=None) -> dict:
         "expected_1rm": BENCH_EXPECTED_1RM,
         "last_session": last,
         "upcoming_milestone": milestone,
+        "next_milestone": milestone,   # spec alias for upcoming_milestone
     }
 
 

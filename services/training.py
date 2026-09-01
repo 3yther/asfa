@@ -19,9 +19,24 @@ def _daterange(start: str, end: str):
         d += timedelta(days=1)
 
 
+def _split_nutrition_goals():
+    """Grade nutrition against the SPLIT targets (1800 kcal / 175g protein), not
+    the user's standing nutrition_goals row. Carbs/fat are left at 0, which
+    score_nutrition_day treats as "no target set / met", so a day is judged on
+    calories-in-band + protein-floor only — the two the split actually locks."""
+    split = db.get_training_split()
+    return {
+        "calorie_goal": float(split["daily_calories"]),
+        "protein_goal": float(split["daily_protein"]),
+        "carbs_goal": 0.0,
+        "fat_goal": 0.0,
+    }
+
+
 def _nutrition_adherence(start: str, end: str):
-    """Share of logged days that graded A or B (on target). Returns (pct,
-    days_on_target, days_logged)."""
+    """Share of logged days that graded A or B (on target) AGAINST SPLIT TARGETS.
+    Returns (pct, days_on_target, days_logged)."""
+    goals = _split_nutrition_goals()
     logged = 0
     on_target = 0
     for day in _daterange(start, end):
@@ -29,7 +44,7 @@ def _nutrition_adherence(start: str, end: str):
         if totals["meal_count"] == 0:
             continue
         logged += 1
-        grade = db.score_nutrition_day(day, totals=totals).get("grade")
+        grade = db.score_nutrition_day(day, totals=totals, goals=goals).get("grade")
         if grade in ("A", "B"):
             on_target += 1
     pct = round(100 * on_target / logged) if logged else 0
