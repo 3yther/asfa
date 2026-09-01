@@ -1050,3 +1050,26 @@ body.sheet-open { overflow: hidden; }
   color: var(--gym-red); width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
   flex-shrink: 0; }
 .cardio-del:hover { background: rgba(255,77,77,.2); }
+
+/* Workout-tab bodyweight banner — current weight from the latest Rephno weigh-in
+   (same body_composition source as the Dashboard stat and the Command page). */
+.workout-bodyweight {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  padding: 12px 16px; margin-bottom: 14px; border-radius: 12px;
+}
+.workout-bodyweight:empty { display: none; }
+.workout-bodyweight .wbw-label {
+  font: 600 .62rem/1 var(--mono); letter-spacing: .14em; color: var(--muted);
+}
+.workout-bodyweight .wbw-val {
+  font: 700 1.35rem/1 var(--mono); color: var(--gym-cyan);
+  text-shadow: 0 0 12px var(--cyan-glow);
+}
+.workout-bodyweight .wbw-meta {
+  font: 500 .72rem/1 var(--mono); letter-spacing: .04em; color: var(--muted);
+}
+.workout-bodyweight .wbw-link {
+  margin-left: auto; background: none; border: none; cursor: pointer;
+  font: 600 .72rem/1 var(--mono); letter-spacing: .04em; color: var(--gym-cyan);
+}
+.workout-bodyweight .wbw-link:hover { text-decoration: underline; }

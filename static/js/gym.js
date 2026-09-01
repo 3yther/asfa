@@ -77,20 +77,19 @@ const CYAN = "#00d9ff", GOLD = "#ffd700", VIOLET = "#7f77dd";
 // 6-day split, calendar week Mon–Sun: Mon Push (heavy bench), Tue Pull, Wed Bike
 // + Core, Thu Push (volume bench), Fri Pull (same as Tuesday), Sat + Sun rest.
 // Each trained day has its own day_type so the up-next suggestion cycles through
-// all five (push → pull → bike_core → push_b → pull_b).
-const ROTATION = ["push", "pull", "bike_core", "push_b", "pull_b"];
-// Weekly Quick Start schedule in calendar order. Gym days resolve to a routine by
-// day_type. The bike day is a logged session (it carries core work), so unlike the
-// old parallel cycling cards it does advance the rotation. Rest days are cards
-// only — there is no routine behind them.
+// all five (upper_a → lower_a → upper_b → lower_b → arms).
+const ROTATION = ["upper_a", "lower_a", "upper_b", "lower_b", "arms"];
+// Weekly Quick Start schedule in calendar order (Sept 1-15 upper/lower/arms
+// split). Gym days resolve to a routine by day_type. Mon + Thu are rest — cards
+// only, no routine behind them — so the first trained day of the week is Tuesday.
 const WEEK_SCHEDULE = [
-  { kind: "gym",  day_type: "push",      day: "Monday" },
-  { kind: "gym",  day_type: "pull",      day: "Tuesday" },
-  { kind: "gym",  day_type: "bike_core", day: "Wednesday" },
-  { kind: "gym",  day_type: "push_b",    day: "Thursday" },
-  { kind: "gym",  day_type: "pull_b",    day: "Friday" },
-  { kind: "rest", day: "Saturday", name: "Rest" },
-  { kind: "rest", day: "Sunday",   name: "Rest" },
+  { kind: "rest", day: "Monday", name: "Rest" },
+  { kind: "gym",  day_type: "upper_a", day: "Tuesday" },
+  { kind: "gym",  day_type: "lower_a", day: "Wednesday" },
+  { kind: "rest", day: "Thursday", name: "Rest" },
+  { kind: "gym",  day_type: "upper_b", day: "Friday" },
+  { kind: "gym",  day_type: "lower_b", day: "Saturday" },
+  { kind: "gym",  day_type: "arms",    day: "Sunday" },
 ];
 // Pre-workout supplement labels — keys mirror db.PRE_WORKOUT_TYPES.
 const PRE_WORKOUT_LABELS = { energy_drink: "Energy Drink", origin_pre_workout: "Origin Pre-Workout" };
@@ -172,7 +171,7 @@ $$(".gym-subtab").forEach(b => b.addEventListener("click", () => switchTab(b.dat
 /* ══ 2. DASHBOARD ═════════════════════════════════════════════════════════ */
 async function loadDashboard() {
   try {
-    const [xp, ranks, prs, sessions, recovery, weekly, cal, body, deload, restDays, cardio, expenditure] = await Promise.all([
+    const [xp, ranks, prs, sessions, recovery, weekly, cal, body, deload, restDays, cardio, expenditure, rephno] = await Promise.all([
       apiGet(`${API}/xp`), apiGet(`${API}/ranks`), apiGet(`${API}/prs`),
       apiGet(`${API}/sessions?limit=60`), apiGet(`${API}/muscle-recovery`),
       apiGet(`${API}/volume/weekly`), apiGet(`${API}/sessions/calendar?months=3`),
@@ -181,9 +180,11 @@ async function loadDashboard() {
       apiGet(`${API}/rest-days`).catch(() => []),
       apiGet(`${API}/cardio?limit=30`).catch(() => []),
       apiGet(`${API}/expenditure-trend?days=7`).catch(() => null),
+      apiGet(`${API}/bodyweight`).catch(() => ({ has_data: false })),
     ]);
     PR_BY_EX = {}; prs.forEach(p => PR_BY_EX[p.exercise_id] = p);
-    renderStats(xp, sessions, body);
+    renderStats(xp, sessions, body, rephno);
+    renderWorkoutBodyweight(rephno);
     renderBodygraph(ranks, prs);
     renderRankList(ranks, prs);
     renderRecovery(recovery);
@@ -237,14 +238,52 @@ function startOfWeekCount(sessions) {
   const monday = new Date(now); monday.setDate(now.getDate() - day); monday.setHours(0,0,0,0);
   return sessions.filter(s => new Date(s.date + "T00:00:00") >= monday).length;
 }
-function renderStats(xp, sessions, body) {
+function fmtWeighDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return iso;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = Math.round((today - d) / 86400000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// Workout-tab header: current bodyweight from the Rephno weigh-in (same source
+// as the Gym dashboard stat and the Command page), so the number is consistent
+// wherever it shows. Links to Progress to log / sync a fresh weigh-in.
+function renderWorkoutBodyweight(rephno) {
+  const el = $("#workout-bodyweight");
+  if (!el) return;
+  if (rephno && rephno.has_data && rephno.weight_kg != null) {
+    const src = rephno.source === "rephno" ? "Rephno" : "logged";
+    el.innerHTML = `<span class="wbw-label">BODYWEIGHT</span>
+      <span class="wbw-val">${fmtKg(rephno.weight_kg)}kg</span>
+      <span class="wbw-meta">${src} · ${esc(fmtWeighDate(rephno.date_scanned))}</span>
+      <button class="wbw-link" type="button" onclick="switchTab('progress')">Log weight ▶</button>`;
+  } else {
+    el.innerHTML = `<span class="wbw-label">BODYWEIGHT</span>
+      <span class="wbw-val">—</span>
+      <span class="wbw-meta">no weigh-in yet</span>
+      <button class="wbw-link" type="button" onclick="switchTab('progress')">Sync Rephno ▶</button>`;
+  }
+}
+
+function renderStats(xp, sessions, body, rephno) {
   const grid = $("#gym-stats");
-  const bw = (body && body[0]) ? body[0].weight_kg : null;
+  // Bodyweight comes from the latest Rephno scale sync (the same body_composition
+  // source the Command page reads); fall back to a manually logged gym body-stat.
+  const rb = (rephno && rephno.has_data) ? rephno : null;
+  const bw = rb ? rb.weight_kg : ((body && body[0]) ? body[0].weight_kg : null);
+  const bwSub = rb
+    ? (rb.source === "rephno" ? "Rephno · " : "logged · ") + fmtWeighDate(rb.date_scanned)
+    : (bw != null ? "latest" : "log in Progress");
   const rank = xp.overall_rank || "Bronze";
   const cards = [
     { v: xp.streak_days || 0, l: "Day Streak", sub: "keep it alive", gold: true },
     { v: (xp.total_xp || 0).toLocaleString(), l: "Total XP", sub: rank },
-    { v: bw != null ? fmtKg(bw) + "kg" : "—", l: "Bodyweight", sub: bw != null ? "latest" : "log in Progress" },
+    { v: bw != null ? fmtKg(bw) + "kg" : "—", l: "Bodyweight", sub: bwSub },
     { v: startOfWeekCount(sessions), l: "This Week", sub: "sessions" },
   ];
   grid.innerHTML = "";
@@ -312,7 +351,7 @@ function renderRecovery(recovery) {
 
 function suggestNextDayType(sessions) {
   const last = sessions.find(s => s.day_type && ROTATION.includes(s.day_type));
-  if (!last) return "push";
+  if (!last) return ROTATION[0];   // fresh week → Upper A (Tuesday) is up next
   const idx = ROTATION.indexOf(last.day_type);
   return ROTATION[(idx + 1) % ROTATION.length];
 }

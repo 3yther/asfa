@@ -1,9 +1,10 @@
 """Workout-split tests — the seeded gym routines that drive the /gym Workout tab's
-Quick Start picker and routine grid. Asserts the live 6-day split (Mon Push heavy,
-Tue Pull, Wed Bike + Core, Thu Push volume, Fri Pull, Sat/Sun rest), that retired
-days are reconciled away on re-seed, that each day's prescribed weights and set
-counts are what the plan says, and — the point of the lock — that a routine whose
-exercise order has drifted is put back in order on the next boot.
+Quick Start picker and routine grid. Asserts the live Sept 1-15 upper/lower/arms
+split (Tue Upper A heavy, Wed Lower A, Fri Upper B light, Sat Lower B, Sun Arms +
+Shoulders; Mon/Thu rest), that retired days are reconciled away on re-seed, that
+each day's prescribed weights and set counts are what the plan says, and — the
+point of the lock — that a routine whose exercise order has drifted is put back
+in order on the next boot.
 
 Runs either way — standalone (no pytest dependency) or under pytest:
 
@@ -28,14 +29,14 @@ import database as db  # noqa: E402
 import gym_seed        # noqa: E402
 
 # The Quick Start / routine grid orders by (order_index, id) and the up-next
-# rotation cycles Mon → Tue → Wed → Thu → Fri. Rest days carry no routine.
+# rotation cycles Tue → Wed → Fri → Sat → Sun. Rest days (Mon/Thu) carry no routine.
 # (name, day_type, exercise count, total sets, target minutes)
 EXPECTED = [
-    ("Push · Monday", "push", 5, 15, 38),
-    ("Pull · Tuesday", "pull", 6, 20, 50),
-    ("Bike + Core · Wednesday", "bike_core", 5, 13, 33),
-    ("Push · Thursday", "push_b", 4, 12, 30),
-    ("Pull · Friday", "pull_b", 6, 20, 50),
+    ("Upper A · Tuesday", "upper_a", 7, 20, 50),
+    ("Lower A · Wednesday", "lower_a", 4, 12, 30),
+    ("Upper B · Friday", "upper_b", 4, 11, 28),
+    ("Lower B · Saturday", "lower_b", 4, 12, 30),
+    ("Arms + Shoulders · Sunday", "arms", 6, 18, 45),
 ]
 
 
@@ -80,7 +81,10 @@ def test_2_retired_days_are_gone():
     names = {r["name"] for r in _routines()}
     # Days from every earlier split, including the 4-day Sat/Mon/Wed/Fri one.
     for retired in ("Legs Day", "Upper Day", "Lower Day", "Push Day", "Pull Day",
-                    "Push · Saturday", "Pull · Monday", "Push · Wednesday"):
+                    "Push · Saturday", "Pull · Monday", "Push · Wednesday",
+                    # the previous 6-day push/pull/bike split, now retired
+                    "Push · Monday", "Pull · Tuesday", "Bike + Core · Wednesday",
+                    "Push · Thursday", "Pull · Friday"):
         assert retired not in names, f"{retired} should be removed"
 
 
@@ -124,11 +128,11 @@ def test_8_each_day_leads_on_the_right_movement():
     def lead(name):
         return _exercises(name)[0]["name"]
 
-    assert lead("Push · Monday") == "Barbell Bench Press", "Mon leads on heavy bench"
-    assert lead("Push · Thursday") == "Barbell Bench Press", "Thu leads on volume bench"
-    assert lead("Pull · Tuesday") == "Lat Pulldown"
-    assert lead("Pull · Friday") == "Lat Pulldown"
-    assert lead("Bike + Core · Wednesday") == "Cycling", "the bike comes first"
+    assert lead("Upper A · Tuesday") == "Barbell Bench Press", "Upper A leads on heavy bench"
+    assert lead("Upper B · Friday") == "Barbell Bench Press", "Upper B leads on volume bench"
+    assert lead("Lower A · Wednesday") == "Barbell Squat", "Lower A leads on the squat"
+    assert lead("Lower B · Saturday") == "Leg Press"
+    assert lead("Arms + Shoulders · Sunday") == "Seated Dumbbell Shoulder Press"
 
 
 def test_9_every_seeded_exercise_exists_in_the_library():
@@ -144,50 +148,57 @@ def test_9_every_seeded_exercise_exists_in_the_library():
 def test_10_prescribed_weights_are_stored_as_targets():
     """The weights in the plan reach the logger as target_weight — a prescription
     it can show, never a logged value."""
-    mon = {e["name"]: e for e in _exercises("Push · Monday")}
-    assert mon["Barbell Bench Press"]["target_weight"] == 60
-    assert mon["Barbell Bench Press"]["sets"] == 5
-    assert (mon["Barbell Bench Press"]["rep_min"],
-            mon["Barbell Bench Press"]["rep_max"]) == (5, 5)
-    assert "warm-up" in (mon["Barbell Bench Press"]["notes"] or "")
-    assert mon["Incline Dumbbell Press"]["target_weight"] == 24
+    ua = {e["name"]: e for e in _exercises("Upper A · Tuesday")}
+    assert ua["Barbell Bench Press"]["target_weight"] == 65
+    assert ua["Barbell Bench Press"]["sets"] == 5
+    assert (ua["Barbell Bench Press"]["rep_min"],
+            ua["Barbell Bench Press"]["rep_max"]) == (5, 5)
+    assert "warm-up" in (ua["Barbell Bench Press"]["notes"] or "")
+    assert ua["Lat Pulldown"]["target_weight"] == 73
+    assert ua["Seated Cable Row"]["target_weight"] == 66
+    # accessories with no prescribed load carry no target
+    assert ua["Cable Lateral Raises"]["target_weight"] is None
+    assert ua["Dumbbell Curls"]["target_weight"] is None
 
-    thu = {e["name"]: e for e in _exercises("Push · Thursday")}
-    assert thu["Barbell Bench Press"]["target_weight"] == 60, "same bar, lighter scheme"
-    assert thu["Barbell Bench Press"]["sets"] == 3
-    assert thu["Lateral Raises"]["target_weight"] == 4.5
-
-    tue = {e["name"]: e for e in _exercises("Pull · Tuesday")}
-    assert tue["Lat Pulldown"]["target_weight"] == 73
-    assert tue["Pull-ups"]["target_weight"] is None, "bodyweight carries no target"
+    ub = {e["name"]: e for e in _exercises("Upper B · Friday")}
+    assert ub["Barbell Bench Press"]["target_weight"] == 65, "same bar, lighter scheme"
+    assert ub["Barbell Bench Press"]["sets"] == 3
+    assert (ub["Barbell Bench Press"]["rep_min"],
+            ub["Barbell Bench Press"]["rep_max"]) == (8, 8)
 
 
-def test_11_incline_walk_is_on_monday_only():
+def test_11_split_carries_no_cardio_slots():
+    """The upper/lower/arms split is pure resistance work — no incline walk, no
+    bike. Cardio is tracked separately, not inside these routines."""
     for name, _dt, _c, _s, _m in EXPECTED:
         names = [e["name"] for e in _exercises(name)]
-        if name == "Push · Monday":
-            assert "Incline Walk" in names, "the heavy bench day keeps the walk"
-        else:
-            assert "Incline Walk" not in names, f"{name} must not carry the incline walk"
+        assert "Incline Walk" not in names, f"{name} must not carry the incline walk"
+        assert "Cycling" not in names, f"{name} must not carry the bike"
+        assert not any(e["is_cardio"] for e in _exercises(name)), \
+            f"{name} must have no cardio slots"
 
 
-def test_12_friday_repeats_tuesday_exactly():
-    def shape(name):
-        return [(e["name"], e["sets"], e["rep_min"], e["rep_max"], e["target_weight"])
-                for e in _exercises(name)]
+def test_12_upper_b_is_the_light_version_of_upper_a():
+    """Upper B repeats Upper A's big lifts on the same bar but a lighter scheme —
+    bench drops from 5×5 to 3×8 at the identical 65kg."""
+    ua = {e["name"]: e for e in _exercises("Upper A · Tuesday")}
+    ub = {e["name"]: e for e in _exercises("Upper B · Friday")}
+    assert ua["Barbell Bench Press"]["target_weight"] == \
+        ub["Barbell Bench Press"]["target_weight"] == 65
+    assert ua["Barbell Bench Press"]["sets"] == 5
+    assert ub["Barbell Bench Press"]["sets"] == 3
+    # both keep the same pulldown/row targets
+    assert ua["Lat Pulldown"]["target_weight"] == ub["Lat Pulldown"]["target_weight"] == 73
+    assert ua["Seated Cable Row"]["target_weight"] == ub["Seated Cable Row"]["target_weight"] == 66
 
-    assert shape("Pull · Friday") == shape("Pull · Tuesday")
 
-
-def test_13_cardio_slots_are_flagged_from_the_library():
-    """is_cardio comes from the exercise's own type, so the logger shows duration
-    rows (not weight × reps) for the walk and the bike without a name special-case."""
-    mon = {e["name"]: e for e in _exercises("Push · Monday")}
-    assert bool(mon["Incline Walk"]["is_cardio"]) is True
-    assert bool(mon["Barbell Bench Press"]["is_cardio"]) is False
-    wed = {e["name"]: e for e in _exercises("Bike + Core · Wednesday")}
-    assert bool(wed["Cycling"]["is_cardio"]) is True
-    assert bool(wed["Plank"]["is_cardio"]) is False
+def test_13_non_cardio_lifts_are_flagged_correctly():
+    """is_cardio comes from the exercise's own library type, so the logger shows
+    weight × reps rows for these lifts, never duration rows."""
+    ua = {e["name"]: e for e in _exercises("Upper A · Tuesday")}
+    assert bool(ua["Barbell Bench Press"]["is_cardio"]) is False
+    la = {e["name"]: e for e in _exercises("Lower A · Wednesday")}
+    assert bool(la["Barbell Squat"]["is_cardio"]) is False
 
 
 # ── 3. Seeding is idempotent, reconciles, and re-imposes the locked order ──────
@@ -207,8 +218,8 @@ def test_15_routines_are_marked_locked():
 def test_16_a_reordered_routine_is_put_back_on_reseed():
     """The lock's whole purpose: if anything shuffles a day's exercises, the next
     boot restores the seeded order rather than letting it drift."""
-    before = [e["name"] for e in _exercises("Push · Monday")]
-    rid = _by_name()["Push · Monday"]["id"]
+    before = [e["name"] for e in _exercises("Upper A · Tuesday")]
+    rid = _by_name()["Upper A · Tuesday"]["id"]
     ph = "%s" if db.USE_POSTGRES else "?"
     with db.get_db() as conn:
         # Reverse the order_index of every slot in the day.
@@ -220,26 +231,26 @@ def test_16_a_reordered_routine_is_put_back_on_reseed():
             cur.execute(f"UPDATE gym_routine_exercises SET order_index = {ph} "
                         f"WHERE id = {ph}", (len(rows) - 1 - idx, row_id))
 
-    assert [e["name"] for e in _exercises("Push · Monday")] == list(reversed(before)), \
+    assert [e["name"] for e in _exercises("Upper A · Tuesday")] == list(reversed(before)), \
         "fixture must actually scramble the order"
 
     db.seed_gym_routines()   # simulate a redeploy
 
-    assert [e["name"] for e in _exercises("Push · Monday")] == before, \
+    assert [e["name"] for e in _exercises("Upper A · Tuesday")] == before, \
         "the locked order must be restored"
 
 
 def test_17_an_edited_prescription_is_restored_on_reseed():
-    rid = _by_name()["Push · Thursday"]["id"]
+    rid = _by_name()["Upper B · Friday"]["id"]
     ph = "%s" if db.USE_POSTGRES else "?"
     with db.get_db() as conn:
         conn.cursor().execute(
             f"UPDATE gym_routine_exercises SET sets = 9, target_weight = 5 "
             f"WHERE routine_id = {ph}", (rid,))
     db.seed_gym_routines()
-    thu = {e["name"]: e for e in _exercises("Push · Thursday")}
-    assert thu["Barbell Bench Press"]["sets"] == 3
-    assert thu["Barbell Bench Press"]["target_weight"] == 60
+    fri = {e["name"]: e for e in _exercises("Upper B · Friday")}
+    assert fri["Barbell Bench Press"]["sets"] == 3
+    assert fri["Barbell Bench Press"]["target_weight"] == 65
 
 
 def test_18_a_stale_routine_is_reconciled_away_on_reseed():
@@ -270,6 +281,41 @@ def test_18_a_stale_routine_is_reconciled_away_on_reseed():
     assert rows["n"] == 0, "the stale routine's exercise rows must be gone too"
 
 
+# ── 4. New-exercise + bodyweight linking ──────────────────────────────────────
+
+def test_19_hip_thrust_is_in_the_library_and_on_lower_b():
+    """Hip Thrust was the one gap the new split needed — it must exist in the
+    library (so the seed doesn't silently drop it) and appear on Lower B."""
+    library = {e["name"] for e in db.get_all_exercises()}
+    assert "Hip Thrust" in library, "Hip Thrust must be seeded into the library"
+    lower_b = [e["name"] for e in _exercises("Lower B · Saturday")]
+    assert "Hip Thrust" in lower_b, "Lower B must carry the Hip Thrust"
+
+
+def test_20_gym_bodyweight_reads_latest_rephno_scan():
+    """The Gym tab's bodyweight comes from the latest body_composition scan — the
+    same source the Command page reads — newest date wins, and a synced scan
+    (source_id present) is flagged 'rephno'."""
+    import app as app_module
+    client = app_module.app.test_client()
+    with client.session_transaction() as sess:
+        sess["authed"] = True
+
+    # no scans yet
+    empty = client.get("/api/gym/bodyweight").get_json()
+    assert empty["has_data"] is False and empty["weight_kg"] is None, empty
+
+    # a manual entry, then a newer Rephno sync
+    db.upsert_body_composition("2026-09-01", {"weight_kg": 79.8})
+    db.upsert_body_composition("2026-09-03", {"weight_kg": 79.2}, source_id="renpho-x")
+    body = client.get("/api/gym/bodyweight").get_json()
+    assert body["has_data"] is True, body
+    assert body["weight_kg"] == 79.2, "newest weigh-in wins"
+    assert body["weight_lbs"] == 174.6, body
+    assert body["date_scanned"] == "2026-09-03", body
+    assert body["source"] == "rephno", "a synced scan is flagged rephno"
+
+
 def main():
     setup_module()
     tests = [
@@ -283,14 +329,16 @@ def main():
         test_8_each_day_leads_on_the_right_movement,
         test_9_every_seeded_exercise_exists_in_the_library,
         test_10_prescribed_weights_are_stored_as_targets,
-        test_11_incline_walk_is_on_monday_only,
-        test_12_friday_repeats_tuesday_exactly,
-        test_13_cardio_slots_are_flagged_from_the_library,
+        test_11_split_carries_no_cardio_slots,
+        test_12_upper_b_is_the_light_version_of_upper_a,
+        test_13_non_cardio_lifts_are_flagged_correctly,
         test_14_reseeding_does_not_duplicate,
         test_15_routines_are_marked_locked,
         test_16_a_reordered_routine_is_put_back_on_reseed,
         test_17_an_edited_prescription_is_restored_on_reseed,
         test_18_a_stale_routine_is_reconciled_away_on_reseed,
+        test_19_hip_thrust_is_in_the_library_and_on_lower_b,
+        test_20_gym_bodyweight_reads_latest_rephno_scan,
     ]
     print("Workout-split tests:")
     passed = 0

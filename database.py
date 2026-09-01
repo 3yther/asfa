@@ -6762,29 +6762,32 @@ def _ensure_workout_plan_tables():
 # page and the Workout tab cannot drift apart, and the Monday-only incline walk
 # stays Monday-only by construction.
 
-PLAN_SPLIT_NAME = "6-Day Push/Pull/Bike Split"
+PLAN_SPLIT_NAME = "Sept 1-15 Upper/Lower/Arms Split"
 PLAN_TARGET_DATE = "2026-09-15"
 
 # Bumped whenever the committed structure below changes. seed_workout_plan
 # re-seeds the days when the stored version is older, which is the one case where
 # a redeploy is allowed to overwrite UI edits — a new split means the old days
 # describe training that no longer happens.
-PLAN_SEED_VERSION = 2
+PLAN_SEED_VERSION = 3
 
 _REST_NOTE = "10k steps, mobility only."
 
 # (day_number, day_name, session_type, routine_name | None, notes)
 # routine_name resolves against gym_seed.ROUTINE_EXERCISES; None = rest day.
+# Sept 1-15 upper/lower/arms: train Tue/Wed/Fri/Sat/Sun, rest Mon/Thu.
 PLAN_DAY_ROUTINES = [
-    (1, "Monday", "Push", "Push · Monday",
-     "Heavy bench — 5×5. The only day with the incline walk."),
-    (2, "Tuesday", "Pull", "Pull · Tuesday", "Back & biceps."),
-    (3, "Wednesday", "Bike + Core", "Bike + Core · Wednesday",
-     "Stamina + core — no heavy lifting."),
-    (4, "Thursday", "Push", "Push · Thursday", "Volume bench — 3×8. No cardio."),
-    (5, "Friday", "Pull", "Pull · Friday", "Identical to Tuesday."),
-    (6, "Saturday", "Rest", None, _REST_NOTE),
-    (7, "Sunday", "Rest", None, f"{_REST_NOTE} Weekly weigh-in."),
+    (1, "Monday", "Rest", None, _REST_NOTE),
+    (2, "Tuesday", "Upper A", "Upper A · Tuesday",
+     "Heavy upper — bench 5×5."),
+    (3, "Wednesday", "Lower A", "Lower A · Wednesday", "Squat-focused legs."),
+    (4, "Thursday", "Rest", None, _REST_NOTE),
+    (5, "Friday", "Upper B", "Upper B · Friday",
+     "Light/endurance — bench 3×8."),
+    (6, "Saturday", "Lower B", "Lower B · Saturday",
+     "Leg press & posterior chain."),
+    (7, "Sunday", "Arms + Shoulders", "Arms + Shoulders · Sunday",
+     "Delts & arms. Weekly weigh-in."),
 ]
 
 
@@ -6822,18 +6825,17 @@ def _build_plan_sessions():
 PLAN_SESSIONS = _build_plan_sessions()
 
 PLAN_DESCRIPTION = (
-    "A fixed 6-day week — Mon Push (heavy bench 5×5), Tue Pull, Wed Bike + Core, "
-    "Thu Push (volume bench 3×8), Fri Pull (same as Tuesday), Sat + Sun rest. "
-    "The 30 min incline walk belongs to Monday only."
+    "A 5-day upper/lower/arms week — Tue Upper A (heavy, bench 5×5), Wed Lower A "
+    "(squat-focused), Fri Upper B (light/endurance, bench 3×8), Sat Lower B (leg "
+    "press & posterior chain), Sun Arms + Shoulders. Mon + Thu rest."
 )
 
 PLAN_NOTES = (
     "Exercise order is locked — the seed re-imposes it on every boot, so the "
-    "logger always presents a day in the order above. Abs ride on the Wednesday "
-    "bike day. 10k steps daily via Apple Watch on rest days too. Log pre-workout "
-    "(Energy Drink or Origin Pre-Workout) and an RPE 1-10 effort rating each "
-    "session. Progression: add reps first, then weight. Weigh in weekly, every "
-    "Sunday."
+    "logger always presents a day in the order above. 10k steps daily via Apple "
+    "Watch on rest days too. Log pre-workout (Energy Drink or Origin Pre-Workout) "
+    "and an RPE 1-10 effort rating each session. Progression: add reps first, "
+    "then weight. Weigh in weekly, every Sunday."
 )
 
 # ── Personal baselines (environment, never committed) ────────────────────────
@@ -7070,11 +7072,14 @@ def get_workout_plan() -> dict:
 
 
 def summarise_split(days: list) -> dict:
-    """Count the week by session type. 'Gym' is any lifting day (Push/Pull);
-    cycling and rest are counted separately."""
-    gym = sum(1 for d in days if (d.get("session_type") or "") in ("Push", "Pull"))
-    cardio = sum(1 for d in days if (d.get("session_type") or "") in ("Cycling", "Bike + Core"))
+    """Count the week by session type. Rest and cardio days are named explicitly;
+    every other day with a session is a lifting/'gym' day. Counting gym as the
+    remainder keeps this correct across splits without an allow-list to maintain
+    (Upper/Lower/Arms, Push/Pull, …)."""
+    _CARDIO_TYPES = ("Cycling", "Bike + Core")
+    cardio = sum(1 for d in days if (d.get("session_type") or "") in _CARDIO_TYPES)
     rest = sum(1 for d in days if (d.get("session_type") or "") == "Rest")
+    gym = len(days) - cardio - rest
     return {"gym_days": gym, "cardio_days": cardio, "rest_days": rest,
             "total_days": len(days)}
 

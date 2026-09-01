@@ -549,25 +549,36 @@ EXERCISES = [
         "tips": "This is the stamina day — steady state, not intervals. Effort should stay talkable.",
         "rank_bronze": 10, "rank_silver": 20, "rank_gold": 30, "rank_platinum": 45, "rank_diamond": 60
     },
+    {
+        "name": "Hip Thrust",
+        "muscle_group": "glutes",
+        "secondary_muscles": ["hamstrings", "quads"],
+        "equipment": "barbell",
+        "exercise_type": "compound",
+        "youtube_url": "https://www.youtube.com/watch?v=xDmFkJxPzeM",
+        "instructions": "1. Sit with upper back on a bench, bar across the hips\n2. Plant feet flat, shin vertical at the top\n3. Drive through the heels and extend the hips\n4. Squeeze the glutes hard at lockout, ribs down\n5. Lower under control — don't dump the weight",
+        "tips": "Full hip extension, not a lower-back arch. A pad on the bar saves the hips. Glute Bridge is the floor variation.",
+        "rank_bronze": 40, "rank_silver": 80, "rank_gold": 120, "rank_platinum": 160, "rank_diamond": 200
+    },
 ]
 
-# ── The live 6-day split ──────────────────────────────────────────────────────
-# Calendar-anchored (not a rolling cycle): Mon Push heavy, Tue Pull, Wed Bike +
-# Core, Thu Push volume, Fri Pull (identical to Tuesday), Sat/Sun rest. The two
-# Push days and the two Pull days carry distinct day_type values so the up-next
-# rotation in gym.js cycles through all five trained days
-# (push → pull → bike_core → push_b → pull_b → …). Rest days are not routines —
-# there is nothing to log — so they live in gym.js's WEEK_SCHEDULE only.
+# ── The live Sept 1-15 upper/lower/arms split ─────────────────────────────────
+# Calendar-anchored (not a rolling cycle): Tue Upper A (heavy), Wed Lower A, Fri
+# Upper B (light/endurance), Sat Lower B, Sun Arms + Shoulders. Mon + Thu are
+# rest. Each trained day carries a distinct day_type so the up-next rotation in
+# gym.js cycles through all five (upper_a → lower_a → upper_b → lower_b → arms).
+# Rest days are not routines — there is nothing to log — so they live in gym.js's
+# WEEK_SCHEDULE only.
 #
 # This list is the single source of truth for the split: database.seed_gym_routines
 # rewrites any routine that drifts from it, and database.PLAN_SESSIONS renders the
 # same slots on /gym/plan. Order here IS the logging order (see LOCKED below).
 ROUTINES = [
-    {"name": "Push · Monday", "day_type": "push", "description": "Heavy bench, shoulders & triceps", "order_index": 0},
-    {"name": "Pull · Tuesday", "day_type": "pull", "description": "Back & biceps", "order_index": 1},
-    {"name": "Bike + Core · Wednesday", "day_type": "bike_core", "description": "Steady-state bike & core", "order_index": 2},
-    {"name": "Push · Thursday", "day_type": "push_b", "description": "Volume bench, chest & triceps", "order_index": 3},
-    {"name": "Pull · Friday", "day_type": "pull_b", "description": "Back & biceps — same as Tuesday", "order_index": 4},
+    {"name": "Upper A · Tuesday", "day_type": "upper_a", "description": "Heavy upper — bench 5×5", "order_index": 0},
+    {"name": "Lower A · Wednesday", "day_type": "lower_a", "description": "Squat-focused legs", "order_index": 1},
+    {"name": "Upper B · Friday", "day_type": "upper_b", "description": "Light/endurance upper", "order_index": 2},
+    {"name": "Lower B · Saturday", "day_type": "lower_b", "description": "Leg press & posterior chain", "order_index": 3},
+    {"name": "Arms + Shoulders · Sunday", "day_type": "arms", "description": "Delts & arms", "order_index": 4},
 ]
 
 # Exercise order within a day is fixed and must not drift — the seed is
@@ -602,46 +613,47 @@ def describe(slot) -> str:
 
 
 ROUTINE_EXERCISES = {
-    # Mon — Push, heavy bench (5×5). 15 sets → 38 min target. The incline walk is
-    # deliberately on this day ONLY; no other day carries treadmill work.
-    "Push · Monday": [
-        Slot("Barbell Bench Press", 5, 5, 5, 150, weight=60,
+    # Tue — Upper A, HEAVY. 20 sets → 50 min target. Bench leads on the 5×5.
+    "Upper A · Tuesday": [
+        Slot("Barbell Bench Press", 5, 5, 5, 150, weight=65,
              notes="warm-up 20×5, 40×3, 50×2"),
-        Slot("Incline Dumbbell Press", 3, 8, 8, 90, weight=24),
-        Slot("Seated Dumbbell Shoulder Press", 3, 10, 10, 75, weight=14),
-        Slot("Tricep Rope Pushdown", 3, 8, 8, 60, weight=24),
-        Slot("Incline Walk", 1, 30, 30, 0, prescription="30 min"),
-    ],
-    # Tue — Pull. 20 sets → 50 min target. Friday is the same session, exercise
-    # for exercise.
-    "Pull · Tuesday": [
-        Slot("Lat Pulldown", 4, 8, 8, 90, weight=73, notes="warm-up 45kg × 8"),
-        Slot("Barbell Row", 4, 10, 10, 90, weight=50),
+        Slot("Pec Deck", 2, 8, 10, 75),
+        Slot("Lat Pulldown", 3, 8, 8, 90, weight=73),
         Slot("Seated Cable Row", 3, 8, 8, 75, weight=66),
-        Slot("Pull-ups", 3, 1, 20, 90, prescription="3 sets to failure"),
-        Slot("Incline Dumbbell Curl", 3, 10, 10, 60, weight=14),
-        Slot("Hammer Curls", 3, 10, 10, 60, weight=14),
+        Slot("Cable Lateral Raises", 2, 10, 12, 60),
+        Slot("Cable Tricep Pushdown", 2, 8, 8, 60),
+        Slot("Dumbbell Curls", 3, 8, 10, 60),
     ],
-    # Wed — Bike + Core. 13 sets → 33 min target. Stamina and midsection only:
-    # no barbell work, so it never competes with the heavy bench days.
-    "Bike + Core · Wednesday": [
-        Slot("Cycling", 1, 20, 30, 0, prescription="20–30 min"),
-        Slot("Ab Wheel Rollout", 3, 10, 10, 60),
-        Slot("Hanging Leg Raise", 3, 12, 12, 60),
-        Slot("Pallof Press", 3, 8, 8, 45, prescription="3×8 each side"),
-        Slot("Plank", 3, 45, 45, 45, prescription="3×45 sec",
-             notes="logged in seconds"),
+    # Wed — Lower A. 12 sets → 30 min target. Squat-focused.
+    "Lower A · Wednesday": [
+        Slot("Barbell Squat", 3, 6, 8, 150, notes="or Leg Press"),
+        Slot("Leg Curl", 3, 8, 10, 90, notes="or Romanian Deadlift"),
+        Slot("Leg Extension", 3, 10, 12, 75),
+        Slot("Standing Calf Raise", 3, 12, 15, 60),
     ],
-    # Thu — Push, volume bench (3×8 at the same 60kg). 12 sets → 30 min target.
-    # No incline walk here — that belongs to Monday.
-    "Push · Thursday": [
-        Slot("Barbell Bench Press", 3, 8, 8, 120, weight=60),
-        Slot("Pec Deck", 3, 8, 8, 60, weight=73),
-        Slot("Lateral Raises", 3, 8, 8, 45, weight=4.5),
-        Slot("Seated Triceps Press", 3, 8, 8, 60, weight=54),
+    # Fri — Upper B, LIGHT/ENDURANCE. 11 sets → 28 min target. Same bench bar,
+    # lighter 3×8 scheme.
+    "Upper B · Friday": [
+        Slot("Barbell Bench Press", 3, 8, 8, 120, weight=65),
+        Slot("Lat Pulldown", 3, 8, 8, 90, weight=73),
+        Slot("Seated Cable Row", 3, 8, 8, 75, weight=66),
+        Slot("Pec Deck", 2, 8, 8, 75),
+    ],
+    # Sat — Lower B. 12 sets → 30 min target. Leg press & posterior chain.
+    "Lower B · Saturday": [
+        Slot("Leg Press", 3, 8, 10, 120),
+        Slot("Walking Lunges", 3, 8, 8, 90, prescription="3×8 each leg",
+             notes="or Bulgarian Split Squats"),
+        Slot("Leg Curl", 3, 10, 12, 75, notes="hamstring curl"),
+        Slot("Hip Thrust", 3, 12, 12, 90, notes="or Glute Bridge"),
+    ],
+    # Sun — Arms + Shoulders. 18 sets → 45 min target. Weekly weigh-in day.
+    "Arms + Shoulders · Sunday": [
+        Slot("Seated Dumbbell Shoulder Press", 3, 10, 10, 75),
+        Slot("Lateral Raises", 3, 10, 12, 60),
+        Slot("Cable Tricep Pushdown", 3, 8, 8, 60),
+        Slot("Seated Triceps Press", 3, 8, 8, 60),
+        Slot("Barbell Curl", 3, 8, 10, 60, notes="or EZ-Bar Curl"),
+        Slot("Hammer Curls", 3, 8, 10, 60),
     ],
 }
-
-# Friday repeats Tuesday exactly — one definition, referenced twice, so the two
-# can never drift apart.
-ROUTINE_EXERCISES["Pull · Friday"] = ROUTINE_EXERCISES["Pull · Tuesday"]

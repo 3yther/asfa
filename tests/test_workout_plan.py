@@ -119,12 +119,12 @@ def test_3_api_returns_all_four_sections():
 
 # ── 2. The split displays correctly ───────────────────────────────────────────
 
-def test_4_split_is_4_gym_1_cardio_2_rest():
+def test_4_split_is_5_gym_0_cardio_2_rest():
     plan = db.get_workout_plan()
     s = plan["summary"]
     assert s["total_days"] == 7, s
-    assert s["gym_days"] == 4, f"expected 4 gym days, got {s['gym_days']}"
-    assert s["cardio_days"] == 1, f"expected 1 cardio day, got {s['cardio_days']}"
+    assert s["gym_days"] == 5, f"expected 5 gym days, got {s['gym_days']}"
+    assert s["cardio_days"] == 0, f"expected 0 cardio days, got {s['cardio_days']}"
     assert s["rest_days"] == 2, f"expected 2 rest days, got {s['rest_days']}"
 
 
@@ -141,9 +141,9 @@ def test_5_days_are_the_calendar_week_monday_first():
 def test_6_each_day_has_the_right_session_type():
     by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
     expected = {
-        "Monday": "Push", "Tuesday": "Pull", "Wednesday": "Bike + Core",
-        "Thursday": "Push", "Friday": "Pull",
-        "Saturday": "Rest", "Sunday": "Rest",
+        "Monday": "Rest", "Tuesday": "Upper A", "Wednesday": "Lower A",
+        "Thursday": "Rest", "Friday": "Upper B",
+        "Saturday": "Lower B", "Sunday": "Arms + Shoulders",
     }
     for day, stype in expected.items():
         assert by_day[day]["session_type"] == stype, \
@@ -153,60 +153,54 @@ def test_6_each_day_has_the_right_session_type():
 def test_7_lifting_days_carry_their_prescriptions():
     by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
 
-    # Monday leads on the heavy bench, with the warm-up ramp spelled out.
-    monday = by_day["Monday"]
-    assert monday["exercises"][0].startswith("Barbell Bench Press")
-    assert "5×5" in monday["exercises"][0]
-    assert "warm-up 20×5, 40×3, 50×2" in monday["exercises"][0]
-
-    # Thursday is the same lift at volume — different prescription, no warm-up ramp.
-    thursday = by_day["Thursday"]
-    assert thursday["exercises"][0].startswith("Barbell Bench Press")
-    assert "3×8" in thursday["exercises"][0]
-    assert "Pec Deck" in " ".join(thursday["exercises"])
-
-    # Tuesday's pull leads on the lat pulldown and finishes on the curls.
+    # Tuesday (Upper A) leads on the heavy bench, warm-up ramp spelled out, and
+    # finishes on the curls.
     tuesday = by_day["Tuesday"]
-    assert tuesday["exercises"][0].startswith("Lat Pulldown")
-    assert tuesday["exercises"][-1].startswith("Hammer Curls")
-    assert any("to failure" in e for e in tuesday["exercises"]), "pull-ups go to failure"
+    assert tuesday["exercises"][0].startswith("Barbell Bench Press")
+    assert "5×5" in tuesday["exercises"][0]
+    assert "warm-up 20×5, 40×3, 50×2" in tuesday["exercises"][0]
+    assert "Pec Deck" in " ".join(tuesday["exercises"])
+    assert tuesday["exercises"][-1].startswith("Dumbbell Curls")
 
+    # Friday (Upper B) is the same lift at volume — 3×8, same 65kg bar.
+    friday = by_day["Friday"]
+    assert friday["exercises"][0].startswith("Barbell Bench Press")
+    assert "3×8" in friday["exercises"][0]
 
-def test_7b_incline_walk_is_monday_only():
-    """The 30-min incline walk belongs to the heavy bench day and nowhere else."""
-    days = db.get_workout_plan()["days"]
-    for d in days:
-        text = " ".join(d["exercises"]) + " " + (d["cardio"] or "")
-        if d["day_name"] == "Monday":
-            assert "Incline Walk" in text and "30 min" in text
-        else:
-            assert "Incline Walk" not in text, \
-                f"{d['day_name']} must not carry the incline walk"
-
-
-def test_7c_friday_pull_is_identical_to_tuesday():
-    by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
-    assert by_day["Friday"]["exercises"] == by_day["Tuesday"]["exercises"], \
-        "Friday repeats Tuesday exercise for exercise"
-
-
-def test_8_bike_and_rest_days_carry_no_lifting():
-    by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
-
-    # Bike + Core: cycling stamina plus core work, no barbell lifting.
+    # Wednesday (Lower A) leads on the squat.
     wednesday = by_day["Wednesday"]
-    assert "20–30 min" in (wednesday["cardio"] or "")
-    assert any(e.startswith("Plank") for e in wednesday["exercises"])
-    assert not any("Bench" in e for e in wednesday["exercises"]), \
-        "no heavy lifting on the bike day"
+    assert wednesday["exercises"][0].startswith("Barbell Squat")
 
-    # Saturday and Sunday are full rest — nothing to log at all.
-    for day in ("Saturday", "Sunday"):
+
+def test_7b_no_cardio_anywhere_in_the_split():
+    """The upper/lower/arms split is pure resistance — no incline walk, no bike,
+    and no session carries a cardio line."""
+    for d in db.get_workout_plan()["days"]:
+        text = " ".join(d["exercises"]) + " " + (d["cardio"] or "")
+        assert "Incline Walk" not in text, f"{d['day_name']} must carry no incline walk"
+        assert "Cycling" not in text, f"{d['day_name']} must carry no bike"
+        assert not d["cardio"], f"{d['day_name']} must carry no cardio line"
+
+
+def test_7c_upper_b_is_the_light_version_of_upper_a():
+    by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
+    ua = by_day["Tuesday"]["exercises"][0]   # bench 5×5
+    ub = by_day["Friday"]["exercises"][0]    # bench 3×8
+    assert ua.startswith("Barbell Bench Press") and "5×5" in ua
+    assert ub.startswith("Barbell Bench Press") and "3×8" in ub
+    assert "65kg" in ua and "65kg" in ub, "same bar, lighter scheme"
+
+
+def test_8_rest_days_carry_no_lifting():
+    by_day = {d["day_name"]: d for d in db.get_workout_plan()["days"]}
+
+    # Monday and Thursday are full rest — nothing to log at all.
+    for day in ("Monday", "Thursday"):
         assert by_day[day]["exercises"] == [], f"{day} must carry no exercises"
         assert not by_day[day]["cardio"], f"{day} must carry no cardio"
         assert "10k steps" in (by_day[day]["notes"] or "")
 
-    # Weekly weigh-in rides on Sunday (a fixed calendar day).
+    # Weekly weigh-in rides on Sunday (a fixed calendar day, an Arms day).
     assert "weigh-in" in (by_day["Sunday"]["notes"] or "").lower()
 
 
@@ -561,7 +555,7 @@ def test_23_edit_rejects_bad_input():
 def test_24_edit_day_of_the_split():
     client = _client()
     seeded = {d["day_number"]: d for d in db.get_workout_plan()["days"]}
-    # Day 1 is Monday's Push — flip it to Pull.
+    # Day 1 is Monday's Rest — flip it to a Pull lifting day.
     r = client.post("/api/gym/plan/day/1",
                     json={"session_type": "Pull", "exercises": ["Lat Pulldown", "Rows"]},
                     headers={"X-CSRF-Token": "tok"})
@@ -570,8 +564,9 @@ def test_24_edit_day_of_the_split():
     assert by_day["Monday"]["session_type"] == "Pull"
     assert by_day["Monday"]["exercises"] == ["Lat Pulldown", "Rows"]
 
-    # Summary recounts live off the edit — still 4 lifting days (now 3 Pull, 1 Push).
-    assert db.get_workout_plan()["summary"]["gym_days"] == 4
+    # Summary recounts live off the edit — a former rest day is now a lifting day,
+    # so gym days go 5 → 6.
+    assert db.get_workout_plan()["summary"]["gym_days"] == 6
 
     r = client.post("/api/gym/plan/day/8", json={"session_type": "Push"},
                     headers={"X-CSRF-Token": "tok"})
@@ -588,13 +583,13 @@ def main():
         test_1_plan_page_renders,
         test_2_plan_page_is_session_gated,
         test_3_api_returns_all_four_sections,
-        test_4_split_is_4_gym_1_cardio_2_rest,
+        test_4_split_is_5_gym_0_cardio_2_rest,
         test_5_days_are_the_calendar_week_monday_first,
         test_6_each_day_has_the_right_session_type,
         test_7_lifting_days_carry_their_prescriptions,
-        test_7b_incline_walk_is_monday_only,
-        test_7c_friday_pull_is_identical_to_tuesday,
-        test_8_bike_and_rest_days_carry_no_lifting,
+        test_7b_no_cardio_anywhere_in_the_split,
+        test_7c_upper_b_is_the_light_version_of_upper_a,
+        test_8_rest_days_carry_no_lifting,
         test_8b_the_plan_is_marked_locked,
         test_9_plan_notes_cover_order_steps_and_rpe,
         test_10_percent_complete_is_derived_from_the_logged_pr,

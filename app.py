@@ -2426,6 +2426,27 @@ def api_gym_body_stats():
     return jsonify(db.get_body_stats(limit))
 
 
+@app.route("/api/gym/bodyweight")
+def api_gym_bodyweight():
+    """Current bodyweight from the latest Rephno (Renpho) scale sync — the SAME
+    body_composition source the Command page reads (db.latest_body_composition),
+    so the Gym tab, the Workout header and the dashboard never disagree. Returns
+    weight in kg + derived lbs, the weigh-in date, and whether it came from the
+    scale (source_id present) or a manual entry."""
+    latest = db.latest_body_composition()
+    if not latest or latest.get("weight_kg") is None:
+        return jsonify({"has_data": False, "weight_kg": None, "weight_lbs": None,
+                        "date_scanned": None, "source": None})
+    kg = round(float(latest["weight_kg"]), 1)
+    return jsonify({
+        "has_data": True,
+        "weight_kg": kg,
+        "weight_lbs": round(kg * 2.20462, 1),
+        "date_scanned": latest.get("date_scanned"),
+        "source": "rephno" if latest.get("source_id") else "manual",
+    })
+
+
 @app.route("/api/gym/expenditure-trend")
 def api_gym_expenditure_trend():
     """Back-calculated daily burn, its 7-day trend, and the bodyweight-goal ETA.
