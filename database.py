@@ -439,6 +439,13 @@ def init_db():
         _add_column(cursor, "user_settings", "alert_water_intake",
                     "INTEGER DEFAULT 1")
 
+        # Cosmos entrance screen (Settings → Display & Preferences). Global,
+        # single-row toggle for the cinematic black-hole landing on the command
+        # page. Default ON (INTEGER 1) so the animation shows unless disabled,
+        # stored as INTEGER for the same SQLite/Postgres round-trip as above.
+        _add_column(cursor, "user_settings", "cosmos_enabled",
+                    "INTEGER DEFAULT 1")
+
         # habits predates UNIQUE(date); collapse any duplicate days and enforce
         # it on DBs created before the constraint existed.
         _dedupe_habits(cursor)
@@ -7641,6 +7648,47 @@ def update_notification_prefs(user_id: int = DEFAULT_USER_ID, **fields) -> dict:
             f"UPDATE user_settings SET {set_clause} WHERE user_id = {ph}",
             (*updates.values(), user_id))
     return get_notification_prefs(user_id)
+
+
+def get_cosmos_enabled(user_id: int = DEFAULT_USER_ID) -> bool:
+    """Whether the Cosmos entrance screen (cinematic black-hole landing) is on.
+    Defaults to True on a fresh/empty DB or a NULL column. Never raises."""
+    ph = "%s" if USE_POSTGRES else "?"
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT cosmos_enabled FROM user_settings WHERE user_id = {ph}",
+                (user_id,))
+            row = cur.fetchone()
+    except Exception:
+        row = None
+    if row is None:
+        return True
+    val = row[0] if not isinstance(row, (dict, sqlite3.Row)) else row["cosmos_enabled"]
+    if val is None:
+        return True
+    return _coerce_bool(val)
+
+
+def set_cosmos_enabled(user_id: int = DEFAULT_USER_ID, enabled: bool = True) -> bool:
+    """Upsert the Cosmos entrance toggle and return the stored value. Booleans are
+    stored as 0/1 for the SQLite/Postgres round-trip."""
+    ph = "%s" if USE_POSTGRES else "?"
+    flag = 1 if _coerce_bool(enabled) else 0
+    with get_db() as conn:
+        cur = conn.cursor()
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO user_settings (user_id) VALUES (%s) "
+                "ON CONFLICT (user_id) DO NOTHING", (user_id,))
+        else:
+            cur.execute(
+                "INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (user_id,))
+        cur.execute(
+            f"UPDATE user_settings SET cosmos_enabled = {ph} WHERE user_id = {ph}",
+            (flag, user_id))
+    return bool(flag)
 
 
 def is_within_quiet_hours(prefs: dict = None, now: datetime = None,
