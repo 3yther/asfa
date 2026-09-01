@@ -281,6 +281,46 @@
   const btnStyle = (c) => `background:#123;color:${c};border:1px solid ${c};border-radius:6px;
     padding:8px 12px;cursor:pointer;font-family:inherit;font-size:13px;`;
 
+  // ── Display & Preferences ───────────────────────────────────────────────────
+  // Global toggle for the Cosmos entrance screen (the cinematic black-hole
+  // landing on the command page). Saves immediately on change; the command page
+  // reads the same setting server-side and skips the overlay when it's off.
+  (function initDisplayPrefs() {
+    const container = document.getElementById("display-prefs-container");
+    if (!container) return;
+
+    function render(enabled) {
+      container.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;
+          gap:12px;padding:7px 0;">
+          <span>
+            <span style="color:#cfe;font-size:13px;display:block;">Cosmos Entrance Screen</span>
+            <span style="color:${DIM};font-size:12px;">Show welcome animation on login (all devices)</span>
+          </span>
+          <span>${toggle("cosmos-enabled", enabled)}</span>
+        </div>`;
+
+      document.getElementById("cosmos-enabled").addEventListener("change", async (e) => {
+        const on = e.target.checked;
+        try {
+          const r = await apiSend("/api/settings/cosmos-enabled", "POST",
+            { cosmos_enabled: on });
+          if (r && typeof r.cosmos_enabled === "boolean") e.target.checked = r.cosmos_enabled;
+          toast("Preference saved", GREEN);
+        } catch (err) {
+          e.target.checked = !on;  // revert the visual on failure
+          toast("Could not save: " + esc(err.message || err), RED);
+        }
+      });
+    }
+
+    apiGet("/api/settings/cosmos-enabled")
+      .then((r) => render(!!r.cosmos_enabled))
+      .catch((e) => {
+        container.innerHTML = `<p style="color:${RED};">Error: ${esc(e.message || e)}</p>`;
+      });
+  })();
+
   // ── Notifications & Alerts ──────────────────────────────────────────────────
   (function initNotifications() {
     const container = document.getElementById("notifications-container");

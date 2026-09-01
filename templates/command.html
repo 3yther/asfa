@@ -120,7 +120,11 @@
      Hyperspace warp → WebGL black hole (Three.js, custom lensing shader) →
      fall-in transition → dashboard. Driven by static/js/blackhole.js. Falls
      back to a CSS black hole on weak GPU / mobile, and is skipped entirely on
-     prefers-reduced-motion. Removes itself from the DOM on ENTER. -->
+     prefers-reduced-motion. Removes itself from the DOM on ENTER.
+     Gated by the global "Cosmos entrance screen" preference (Settings →
+     Display & Preferences): when off, neither this overlay nor its scripts are
+     rendered, so the page lands straight on the dashboard with no flash. -->
+{% if cosmos_enabled %}
 <div id="bh-landing" class="bh-landing" aria-hidden="true">
   <canvas id="bh-warp" class="bh-warp"></canvas>
   <div id="bh-stage" class="bh-stage"></div>
@@ -135,6 +139,7 @@
   <div class="bh-skip mono">PRESS ANY KEY TO SKIP</div>
   <div id="bh-flash" class="bh-flash"></div>
 </div>
+{% endif %}
 
 <canvas id="starfield-bg" style="position:fixed;inset:0;z-index:-1;pointer-events:none;"></canvas>
 
@@ -1040,7 +1045,9 @@
      specifiers ("three", "three/addons/…") and dynamic-imports them so a CDN
      failure degrades to the CSS fallback instead of trapping the user. This is
      the ES-module build (0.161.0) and is independent of the global r128
-     <script> in <head> that starfield.js uses. -->
+     <script> in <head> that starfield.js uses. Only emitted when the Cosmos
+     entrance preference is on (the overlay above is gated the same way). -->
+{% if cosmos_enabled %}
 <script type="importmap">
 {
   "imports": {
@@ -1058,5 +1065,6 @@
   }, 9000);
 </script>
 <script type="module" src="{{ url_for('static', filename='js/blackhole.js') }}"></script>
+{% endif %}
 </body>
 </html>

@@ -716,6 +716,10 @@ def command():
         active="command",
         google_connected=is_authenticated(),
         spotify_connected=spotify.is_connected(),
+        # Global toggle (Settings → Display & Preferences). When off, the Cosmos
+        # entrance overlay is not rendered at all, so login lands straight on the
+        # dashboard with no flash. See templates/command.html.
+        cosmos_enabled=db.get_cosmos_enabled(db.DEFAULT_USER_ID),
     )
 
 
@@ -911,6 +915,22 @@ def api_settings_notifications():
         prefs = db.update_notification_prefs(db.DEFAULT_USER_ID, **fields)
         return jsonify({"success": True, "preferences": prefs})
     return jsonify({"preferences": db.get_notification_prefs(db.DEFAULT_USER_ID)})
+
+
+# ── Settings: Display & Preferences ─────────────────────────────────────────────
+# Global toggle for the Cosmos entrance screen (cinematic black-hole landing).
+# When OFF, the command page skips the overlay server-side and lands straight on
+# the dashboard on every device. Default ON. Auth-gated + CSRF like every write.
+
+@app.route("/api/settings/cosmos-enabled", methods=["GET", "POST"])
+def api_settings_cosmos_enabled():
+    """GET → {cosmos_enabled: bool}. POST {cosmos_enabled: bool} → persist and
+    echo the stored value."""
+    if request.method == "POST":
+        d = request.get_json(silent=True) or {}
+        enabled = db.set_cosmos_enabled(db.DEFAULT_USER_ID, bool(d.get("cosmos_enabled")))
+        return jsonify({"cosmos_enabled": enabled})
+    return jsonify({"cosmos_enabled": db.get_cosmos_enabled(db.DEFAULT_USER_ID)})
 
 
 # ── Settings: Privacy & Account (Phase 2) ───────────────────────────────────────
