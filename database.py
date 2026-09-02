@@ -3704,6 +3704,44 @@ def get_scout_pipeline_reminders(days: int = 7) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
+def cleanup_job_pipeline(days: int = 14) -> dict:
+    """Permanently delete job pipeline and application entries older than `days`.
+
+    Deletes from:
+    - scout_pipeline: where updated_at (or created_at if null) is older than cutoff
+    - scout_applications: where applied_date is older than cutoff
+
+    Returns dict with counts: {"pipeline": N, "applications": M, "total": N+M}
+    """
+    _ensure_scout_tables()
+    now = datetime.now()
+    cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    deleted = {"pipeline": 0, "applications": 0}
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+
+        # Delete scout_pipeline entries older than cutoff
+        cur.execute(
+            f"DELETE FROM scout_pipeline WHERE "
+            f"COALESCE(updated_at, created_at) < {ph}",
+            (cutoff,))
+        deleted["pipeline"] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+        # Delete scout_applications entries older than cutoff (by date, not datetime)
+        cur.execute(
+            f"DELETE FROM scout_applications WHERE "
+            f"applied_date IS NOT NULL AND applied_date < {ph}",
+            (cutoff_date,))
+        deleted["applications"] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+    deleted["total"] = deleted["pipeline"] + deleted["applications"]
+    return deleted
+
+
 def _backfill_scout_pipeline() -> int:
     """Idempotently pull already-scraped scout_jobs into the pipeline at
     stage='saved'. Dedups by job_url (or title+company when the url is blank),

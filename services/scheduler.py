@@ -336,6 +336,29 @@ def archive_stale_jobs():
         logger.error(f"scout auto-archive failed: {e}")
 
 
+@audited("scout", "cleanup_job_pipeline")
+def cleanup_job_pipeline():
+    """02:30 Europe/London — permanently delete job pipeline entries and
+    applications older than 14 days.
+
+    This is a hard delete: pipeline entries and old applications are removed
+    from the database to prevent bloat and keep the interface responsive.
+    """
+    try:
+        result = db.cleanup_job_pipeline(days=14)
+        total = result["total"]
+        pipeline = result["pipeline"]
+        apps = result["applications"]
+        logger.info("job pipeline cleanup: %d entries deleted (pipeline=%d, applications=%d)",
+                    total, pipeline, apps)
+        if total > 0:
+            _notify(f"🧹 Job pipeline cleanup: deleted {total} old entries "
+                   f"({pipeline} pipeline, {apps} applications)",
+                   kind="cleanup", telegram=False)
+    except Exception as e:
+        logger.error(f"job pipeline cleanup failed: {e}")
+
+
 def csp_report_cleanup():
     """Daily — cap the CSP-report sink at 7 days. The /api/csp-report endpoint is
     public and only rate-limited, so the table would otherwise grow unbounded."""
@@ -507,6 +530,11 @@ def start_scheduler():
     # Europe/London (quiet hours, and explicit tz because Railway runs UTC).
     _safe_add(sched, archive_stale_jobs, "cron", hour=2, minute=0,
               timezone="Europe/London", id="scout_archive_stale_jobs",
+              replace_existing=True, misfire_grace_time=60)
+    # Job pipeline cleanup — permanently delete old entries at 02:30 Europe/London
+    # (after archive_stale_jobs, before other quiet-hour jobs).
+    _safe_add(sched, cleanup_job_pipeline, "cron", hour=2, minute=30,
+              timezone="Europe/London", id="job_pipeline_cleanup",
               replace_existing=True, misfire_grace_time=60)
     # Daily 7-day retention cap on the public CSP-report sink (03:30, quiet hours).
     _safe_add(sched, csp_report_cleanup, "cron", hour=3, minute=30,
