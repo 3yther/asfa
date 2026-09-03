@@ -9,6 +9,7 @@ export const GRASS = {
   plumeWidth: 0.08,
   plumeStart: 0.62,      // susuki heads are long — the top ~40% of the stalk
   lean: [0.22, 0.52],    // baked, wind-ward tilt in radians, per instance
+  lensClearance: 1.1,
   wind: { dir: [0.82, 0.57], speed: 1.15, freq: 0.55, strength: 0.30, gustFreq: 0.13 },
   colors: { base: 0x7d837e, mid: 0xc9cdc6, tip: 0xf0f2ee, glow: 0xe9f1ef },
 };
@@ -103,11 +104,16 @@ export function createGrassField(sun, skyGlow, cameraPos = new THREE.Vector3(0, 
   // Instances are laid out once and sorted front-to-back: the camera never
   // moves, so the opaque stem draw gets early-z rejection for free.
   const placements = [];
+  const clear2 = GRASS.lensClearance ** 2;
   for (let i = 0; i < count; i++) {
     // sqrt keeps the disc evenly covered; a raw uniform radius clumps at the centre
-    const r = Math.sqrt(Math.random()) * radius;
-    const a = Math.random() * Math.PI * 2;
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    let x, z;
+    do {
+      const r = Math.sqrt(Math.random()) * radius;
+      const a = Math.random() * Math.PI * 2;
+      x = Math.cos(a) * r; z = Math.sin(a) * r;
+      // The camera sits inside the field; nothing may grow on the lens.
+    } while ((x - cameraPos.x) ** 2 + (z - cameraPos.z) ** 2 < clear2);
     placements.push({
       x, z, rot: Math.random() * Math.PI,
       // A standing tilt down-wind, baked into the placement. The wind shader
@@ -147,7 +153,7 @@ export function createGrassField(sun, skyGlow, cameraPos = new THREE.Vector3(0, 
   // Feathered plume edges without a transparent sort: MSAA is on, so coverage
   // does the blending and the heads stay a single draw call.
   headMaterial.alphaToCoverage = true;
-  headMaterial.alphaTest = 0.12;
+  headMaterial.alphaTest = 0.45;
 
   const uniforms = {
     uTime:        { value: 0 },
@@ -227,9 +233,11 @@ export function createGrassField(sun, skyGlow, cameraPos = new THREE.Vector3(0, 
         // barbs average into a solid fill under 2× coverage sampling.
         float l1 = abs( fract( pt * 9.0 - ua * 2.6 + vTint * 5.0 ) - 0.5 ) * 2.0;
         float l2 = abs( fract( pt * 17.0 + ua * 1.4 - vTint * 8.0 ) - 0.5 ) * 2.0;
-        float barb = max( 1.0 - smoothstep( 0.0, 0.32, l1 ), 0.6 * ( 1.0 - smoothstep( 0.0, 0.22, l2 ) ) );
-        // Fluff: an unstructured grain so the gaps are not clean.
-        float fluff = pow( abs( sin( u * 31.0 + pt * 19.0 + vTint * 9.0 ) ), 3.0 ) * 0.35;
+        // Near-binary on purpose: with two coverage samples, anything between
+        // 0.3 and 0.7 alpha lands as a flat half-tone and the head fills in.
+        float barb = max( 1.0 - smoothstep( 0.22, 0.30, l1 ), 0.9 * ( 1.0 - smoothstep( 0.12, 0.19, l2 ) ) );
+        // Fluff: sparse specks between the barbs, not a wash.
+        float fluff = smoothstep( 0.86, 0.95, abs( sin( u * 31.0 + pt * 19.0 + vTint * 9.0 ) ) ) * 0.9;
         // Ragged edge: the reach of the barbs varies along the head, so the
         // outline is never the clean teardrop the geometry has.
         float reach = 0.5 + 0.5 * abs( sin( pt * 5.0 + vTint * 7.0 ) * sin( pt * 11.0 - vTint * 3.0 ) );

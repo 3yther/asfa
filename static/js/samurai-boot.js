@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { SamuraiScene, CONFIG } from './samurai-theme.js';
 import { createKatana } from './katana.js';
 import { createGrassField } from './grass-shader.js';
@@ -27,9 +28,15 @@ if (!supportsWebGL()) {
   loader.classList.add('hidden');
 } else {
   const app = new SamuraiScene(canvas).init();
-  app.scene.add(createKatana(CONFIG.colors.sunGlow));
+  // The katana group carries its own point-down flip; the lean goes on a
+  // pivot above it so the two rotations compose instead of overwriting.
+  const katanaPivot = new THREE.Group();
+  katanaPivot.add(createKatana(CONFIG.colors.sunGlow));
+  katanaPivot.position.set(...CONFIG.katana.position);
+  katanaPivot.rotation.z = CONFIG.katana.lean;
+  app.scene.add(katanaPivot);
 
-  const grass = createGrassField(app.sun, CONFIG.colors.sunGlow);
+  const grass = createGrassField(app.sun, CONFIG.colors.sunGlow, app.camera.position);
   app.scene.add(grass);
   app.add({ update: grass.userData.update });
 

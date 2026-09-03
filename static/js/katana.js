@@ -92,6 +92,31 @@ function buildBlade() {
   return g;
 }
 
+// Mokko-gata guard: a four-lobed plate with the blade slot and a pair of
+// hitsu-ana openings, extruded with a small bevel so the rim catches light.
+function tsubaGeometry() {
+  const shape = new THREE.Shape();
+  const R = 0.148, n = 72;
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const r = R * (0.9 + 0.10 * Math.cos(a * 4));
+    const x = Math.cos(a) * r, y = Math.sin(a) * r;
+    if (i === 0) shape.moveTo(x, y); else shape.lineTo(x, y);
+  }
+  // Shape x is the blade's depth axis after the rotation below, so the slot
+  // is long in x and thin in y.
+  const slot = new THREE.Path(); slot.absellipse(0, 0, 0.056, 0.015, 0, Math.PI * 2, false, 0);
+  const kozuka = new THREE.Path(); kozuka.absellipse(0.0, 0.082, 0.020, 0.030, 0, Math.PI * 2, false, 0);
+  const kogai = new THREE.Path(); kogai.absellipse(0.0, -0.082, 0.014, 0.028, 0, Math.PI * 2, false, 0);
+  shape.holes.push(slot, kozuka, kogai);
+  const g = new THREE.ExtrudeGeometry(shape, {
+    depth: 0.014, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 2, curveSegments: 24,
+  });
+  g.rotateX(Math.PI / 2);
+  g.translate(0, 0.007, 0);
+  return g;
+}
+
 function steelMaterial(rimColor) {
   const m = new THREE.MeshPhysicalMaterial({
     color: 0xcfdadf,
@@ -139,6 +164,15 @@ function steelMaterial(rimColor) {
         // Polished steel under a bright overcast stays bright face-on too.
         outgoingLight += uRim * 0.12;
         outgoingLight *= 1.0 + 0.30 * hamon;
+        // Bo-hi: a fuller groove along the spine side, shaded as a channel with
+        // a lit lip on the edge side. Runs from just past the habaki to the
+        // start of the kissaki.
+        float run = smoothstep( 0.04, 0.07, vAlong ) * ( 1.0 - smoothstep( 0.84, 0.88, vAlong ) );
+        float groove = smoothstep( 0.14, 0.18, vSection ) * ( 1.0 - smoothstep( 0.30, 0.34, vSection ) ) * run;
+        float lip = smoothstep( 0.32, 0.34, vSection ) * ( 1.0 - smoothstep( 0.36, 0.40, vSection ) ) * run;
+        outgoingLight *= 1.0 - 0.32 * groove + 0.22 * lip;
+        // Yokote: the crease where the point's polish meets the body.
+        outgoingLight *= 1.0 + 0.10 * smoothstep( 0.892, 0.900, vAlong ) * ( 1.0 - smoothstep( 0.905, 0.925, vAlong ) );
         #include <opaque_fragment>`);
   };
   return m;
@@ -186,7 +220,13 @@ export function createKatana(rimColor = 0xeaf3f5) {
         float b = fract( vWrapUv.x * 6.0 - vWrapUv.y * 9.0 );
         float lattice = min( abs( a - 0.5 ), abs( b - 0.5 ) ) * 2.0;
         float silk = 1.0 - smoothstep( 0.42, 0.56, lattice );
-        diffuseColor.rgb = mix( vec3( 0.13, 0.13, 0.12 ), vec3( 0.95, 0.95, 0.91 ), silk );`)
+        // Same (ray skin) shows in the diamonds: pale nodes on a dark ground.
+        vec2 g = fract( vWrapUv * vec2( 34.0, 52.0 ) ) - 0.5;
+        float node = 1.0 - smoothstep( 0.16, 0.30, length( g ) );
+        vec3 same = mix( vec3( 0.10, 0.10, 0.09 ), vec3( 0.62, 0.60, 0.55 ), node );
+        diffuseColor.rgb = mix( same, vec3( 0.95, 0.95, 0.91 ), silk );
+        // Cord edges read as recessed where they cross.
+        diffuseColor.rgb *= 1.0 - 0.18 * smoothstep( 0.30, 0.42, lattice ) * silk;`)
       .replace('#include <opaque_fragment>', `
         float ndv = max( dot( normalize( normal ), normalize( vViewPosition ) ), 0.0 );
         outgoingLight += uRim * pow( 1.0 - ndv, 3.5 ) * 0.25;
@@ -196,29 +236,53 @@ export function createKatana(rimColor = 0xeaf3f5) {
   const blade = new THREE.Mesh(buildBlade(), steel);
   group.add(blade);
 
-  const habaki = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.052, 0.055, 0.10, 20), iron
-  );
-  habaki.position.y = -0.05;
-  group.add(habaki);
+  const brass = new THREE.MeshPhysicalMaterial({
+    color: 0xb08a48, metalness: 1.0, roughness: 0.38, envMapIntensity: 2.2,
+  });
+  const gold = new THREE.MeshPhysicalMaterial({
+    color: 0xd4a94a, metalness: 1.0, roughness: 0.3, envMapIntensity: 2.6,
+  });
 
-  const tsuba = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.155, 0.155, 0.018, 40), iron
-  );
-  tsuba.position.y = -0.115;
+  // Habaki: the brass collar, two-stepped, snug on the blade.
+  const habaki = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.052, 0.042, 24), brass);
+  habaki.position.y = -0.07;
+  group.add(habaki);
+  const habakiStep = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.054, 0.012, 24), brass);
+  habakiStep.position.y = -0.097;
+  group.add(habakiStep);
+
+  // Seppa: thin washers either side of the guard.
+  for (const y of [-0.108, -0.132]) {
+    const seppa = new THREE.Mesh(new THREE.CylinderGeometry(0.066, 0.066, 0.005, 32), brass);
+    seppa.position.y = y;
+    group.add(seppa);
+  }
+
+  const tsuba = new THREE.Mesh(tsubaGeometry(), iron);
+  tsuba.position.y = -0.12;
   group.add(tsuba);
 
+  // Fuchi: the collar where the wrap meets the guard.
+  const fuchi = new THREE.Mesh(new THREE.CylinderGeometry(0.047, 0.045, 0.03, 24), iron);
+  fuchi.position.y = -0.152;
+  group.add(fuchi);
+
   const tsuka = new THREE.Mesh(
-    new THREE.CylinderGeometry(HANDLE.radius, HANDLE.radius * 1.12, HANDLE.length, 20),
+    new THREE.CylinderGeometry(HANDLE.radius, HANDLE.radius * 1.1, HANDLE.length, 24),
     wrap
   );
-  tsuka.position.y = -0.125 - HANDLE.length / 2;
+  tsuka.position.y = -0.167 - HANDLE.length / 2;
   group.add(tsuka);
 
-  const kashira = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.046, 0.040, 0.045, 20), iron
-  );
-  kashira.position.y = -0.125 - HANDLE.length - 0.012;
+  // Menuki: the small gold ornament under the wrap, a third of the way down.
+  const menuki = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), gold);
+  menuki.scale.set(0.010, 0.032, 0.007);
+  menuki.position.set(0, -0.167 - HANDLE.length * 0.36, HANDLE.radius + 0.002);
+  menuki.rotation.z = 0.25;
+  group.add(menuki);
+
+  const kashira = new THREE.Mesh(new THREE.CylinderGeometry(0.047, 0.041, 0.045, 24), iron);
+  kashira.position.y = -0.167 - HANDLE.length - 0.012;
   group.add(kashira);
 
   for (const m of group.children) {

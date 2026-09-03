@@ -6,7 +6,11 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 export const CONFIG = {
-  camera: { fov: 52, near: 0.1, far: 500, position: [0, 1.55, 4.8], lookAt: [0, 1.40, 0] },
+  // Low, in among the plumes, looking slightly up: the horizon hides behind
+  // the near heads and the sky takes the top two thirds, as in the reference.
+  camera: { fov: 52, near: 0.1, far: 500, position: [-0.9, 0.95, 3.6], lookAt: [0.2, 1.55, 0] },
+  // Planted off-centre right, leaning ~20° with the top to frame-left.
+  katana: { position: [1.0, 0, 0], lean: 0.36 },
   // Storm overcast: slate-teal throughout, no sun. Light is a cool diffuse
   // from behind-left, so the plumes rim-light white against a dark dome.
   colors: {
