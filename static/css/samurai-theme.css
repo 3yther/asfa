@@ -1,0 +1,213 @@
+/* Samurai entrance screen — full-viewport WebGL takeover.
+   Self-contained: this page deliberately does not load style.css or the top
+   nav, so nothing here can leak into the rest of the app. */
+
+.samurai-root {
+  margin: 0;
+  height: 100dvh;
+  overflow: hidden;
+  background: #43585c;
+  color: #eef2ee;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+#samurai-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+}
+
+/* Fades out once the scene has rendered its first frames. */
+#samurai-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-content: center;
+  gap: 18px;
+  justify-items: center;
+  background: #2b3a3e;
+  transition: opacity 900ms ease;
+}
+#samurai-loader.hidden { opacity: 0; pointer-events: none; }
+
+.samurai-loader-mark {
+  font-size: 12px;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: rgba(238, 242, 238, 0.62);
+}
+.samurai-loader-bar {
+  width: 180px;
+  height: 1px;
+  background: rgba(238, 242, 238, 0.16);
+  overflow: hidden;
+}
+.samurai-loader-bar::after {
+  content: '';
+  display: block;
+  height: 100%;
+  width: 40%;
+  background: rgba(238, 242, 238, 0.75);
+  animation: samurai-sweep 1.5s ease-in-out infinite;
+}
+@keyframes samurai-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+/* Screen-space vignette. Cheaper as one composited layer than as a shader
+   pass, and it sits under the menu so the UI stays at full contrast. */
+#samurai-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: radial-gradient(115% 85% at 50% 46%,
+    rgba(0,0,0,0) 42%, rgba(10,20,22,0.20) 78%, rgba(8,16,18,0.44) 100%);
+}
+
+/* WebGL unavailable — static fallback stands in for the scene. */
+#samurai-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: none;
+  background:
+    radial-gradient(120% 80% at 50% 92%, #93a294 0%, #4a6a68 46%, #1e3138 100%);
+}
+#samurai-fallback.show { display: block; }
+
+@media (prefers-reduced-motion: reduce) {
+  .samurai-loader-bar::after { animation: none; width: 100%; }
+  #samurai-loader { transition: none; }
+}
+
+/* ── UI layer ───────────────────────────────────────────────────────────────
+   Sits above the canvas and the vignette. Everything is pointer-events:none by
+   default so stray overlay boxes never eat a click on the scene; only the
+   actual links opt back in. */
+
+.samurai-ui {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(20px, 5vw, 64px);
+}
+
+.samurai-brand {
+  position: fixed;
+  top: clamp(18px, 3.4vw, 38px);
+  left: clamp(20px, 5vw, 64px);
+  pointer-events: auto;
+}
+.samurai-logo {
+  display: inline-flex;
+  gap: 2px;
+  font-size: clamp(15px, 1.5vw, 19px);
+  font-weight: 600;
+  letter-spacing: 0.36em;
+  text-decoration: none;
+  color: rgba(238, 244, 236, 0.9);
+  text-shadow: 0 1px 14px rgba(8, 18, 20, 0.75);
+  transition: color 260ms ease, letter-spacing 380ms cubic-bezier(.2,.7,.2,1);
+}
+.samurai-logo .br { color: rgba(238, 244, 236, 0.42); transition: color 260ms ease; }
+.samurai-logo:hover { color: #fff; letter-spacing: 0.44em; }
+.samurai-logo:hover .br { color: rgba(238, 244, 236, 0.8); }
+
+.samurai-menu {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(2px, 0.7vh, 8px);
+  max-width: min(46vw, 420px);
+}
+
+.samurai-menu a {
+  position: relative;
+  display: inline-block;
+  width: fit-content;
+  padding: clamp(3px, 0.5vh, 7px) 2px;
+  font-family: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+  font-size: clamp(21px, 3.1vw, 40px);
+  font-weight: 500;
+  line-height: 1.12;
+  letter-spacing: 0.055em;
+  color: rgba(233, 240, 231, 0.74);
+  text-decoration: none;
+  text-shadow: 0 2px 18px rgba(6, 14, 16, 0.8);
+  transition: color 300ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.samurai-menu a:hover,
+.samurai-menu a:focus-visible { color: #fdfffc; }
+
+.samurai-menu a:focus-visible {
+  outline: 1px solid rgba(233, 240, 231, 0.55);
+  outline-offset: 6px;
+}
+
+/* The brush stroke: tapered at both ends via the gradient's transparent stops,
+   wiped on from the left so it reads as a single loaded pass of a brush. */
+.samurai-menu a::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 1px;
+  width: 100%;
+  height: 2px;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: linear-gradient(90deg,
+    rgba(233, 240, 231, 0) 0%,
+    rgba(233, 240, 231, 0.85) 9%,
+    rgba(233, 240, 231, 0.62) 62%,
+    rgba(233, 240, 231, 0) 100%);
+  filter: blur(0.35px);
+  transition: transform 430ms cubic-bezier(.19,.72,.2,1);
+}
+.samurai-menu a:hover::after,
+.samurai-menu a:focus-visible::after { transform: scaleX(1); }
+
+/* Motion blur on the label itself. blur() is isotropic, so the horizontal
+   scale on the same keyframe is what sells the direction of the stroke. */
+.samurai-menu a .ink { display: inline-block; }
+.samurai-menu a:hover .ink,
+.samurai-menu a:focus-visible .ink { animation: samurai-brush 440ms cubic-bezier(.19,.72,.2,1); }
+
+@keyframes samurai-brush {
+  0%   { transform: translateX(-13px) scaleX(1.05); filter: blur(3.2px); opacity: 0.42; }
+  55%  { filter: blur(0.7px); opacity: 0.94; }
+  100% { transform: translateX(0) scaleX(1); filter: blur(0); opacity: 1; }
+}
+
+@media (max-width: 760px) {
+  .samurai-ui { justify-content: flex-end; padding-bottom: clamp(26px, 7vh, 62px); }
+  .samurai-menu { max-width: 100%; gap: 1px; }
+  .samurai-menu a { font-size: clamp(19px, 5.6vw, 27px); }
+}
+
+/* Short landscape phones have no room for a nine-item column, so it wraps. */
+@media (max-height: 520px) and (min-width: 761px) {
+  .samurai-menu {
+    flex-flow: column wrap;
+    max-height: 68vh;
+    max-width: min(78vw, 720px);
+    gap: 0 clamp(20px, 4vw, 52px);
+  }
+  .samurai-menu a { font-size: clamp(17px, 2.1vw, 24px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .samurai-menu a .ink { animation: none; }
+  .samurai-menu a::after { transition: none; }
+  .samurai-logo { transition: color 260ms ease; }
+}
