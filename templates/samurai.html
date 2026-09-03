@@ -7,7 +7,7 @@
 <title>ASFA // SAMURAI</title>
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/samurai-theme.css') }}">
 </head>
 <body class="samurai-root">
@@ -58,6 +58,7 @@
   }, 9000);
 </script>
 
+<script src="{{ url_for('static', filename='js/samurai-menu.js') }}" defer></script>
 <script type="module" src="{{ url_for('static', filename='js/samurai-boot.js') }}"></script>
 </body>
 </html>

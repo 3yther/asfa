@@ -127,72 +127,95 @@
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  gap: clamp(2px, 0.7vh, 8px);
-  max-width: min(46vw, 420px);
+  gap: clamp(8px, 2.2vh, 26px);
+  max-width: min(50vw, 520px);
 }
 
+/* Resting: light, wide-tracked uppercase sans; nothing else. */
 .samurai-menu a {
   position: relative;
   display: inline-block;
   width: fit-content;
-  padding: clamp(3px, 0.5vh, 7px) 2px;
-  font-family: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
-  font-size: clamp(21px, 3.1vw, 40px);
-  font-weight: 500;
-  line-height: 1.12;
-  letter-spacing: 0.055em;
-  color: rgba(233, 240, 231, 0.74);
+  padding: 0.3em 0.2em;
+  font-family: 'Montserrat', 'Inter', system-ui, sans-serif;
+  font-weight: 300;
+  font-size: clamp(14px, 1.55vw, 21px);
+  line-height: 1.2;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(235, 235, 230, 0.75);
   text-decoration: none;
-  text-shadow: 0 2px 18px rgba(6, 14, 16, 0.8);
-  transition: color 300ms ease;
+  text-shadow: 0 1px 12px rgba(6, 14, 16, 0.55);
   -webkit-tap-highlight-color: transparent;
-}
-.samurai-menu a:hover,
-.samurai-menu a:focus-visible { color: #fdfffc; }
-
-.samurai-menu a:focus-visible {
-  outline: 1px solid rgba(233, 240, 231, 0.55);
-  outline-offset: 6px;
+  outline: none;
 }
 
-/* The brush stroke: tapered at both ends via the gradient's transparent stops,
-   wiped on from the left so it reads as a single loaded pass of a brush. */
-.samurai-menu a::after {
-  content: '';
+.samurai-menu .lbl {
+  position: relative;
+  z-index: 1;
+  white-space: nowrap;
+}
+/* The inverted copy: sits exactly over the label and is revealed by the same
+   wipe as the stroke, so dark glyphs only ever appear over white paint. */
+.samurai-menu .lbl.ink {
   position: absolute;
   left: 0;
-  bottom: 1px;
-  width: 100%;
-  height: 2px;
-  transform: scaleX(0);
-  transform-origin: left center;
-  background: linear-gradient(90deg,
-    rgba(233, 240, 231, 0) 0%,
-    rgba(233, 240, 231, 0.85) 9%,
-    rgba(233, 240, 231, 0.62) 62%,
-    rgba(233, 240, 231, 0) 100%);
-  filter: blur(0.35px);
-  transition: transform 430ms cubic-bezier(.19,.72,.2,1);
+  top: 0;
+  padding: inherit;
+  color: #14140f;
+  text-shadow: none;
+  z-index: 2;
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 190ms cubic-bezier(.4, 0, .7, 1) 0ms;
+  will-change: clip-path;
 }
-.samurai-menu a:hover::after,
-.samurai-menu a:focus-visible::after { transform: scaleX(1); }
 
-/* Motion blur on the label itself. blur() is isotropic, so the horizontal
-   scale on the same keyframe is what sells the direction of the stroke. */
-.samurai-menu a .ink { display: inline-block; }
-.samurai-menu a:hover .ink,
-.samurai-menu a:focus-visible .ink { animation: samurai-brush 440ms cubic-bezier(.19,.72,.2,1); }
-
-@keyframes samurai-brush {
-  0%   { transform: translateX(-13px) scaleX(1.05); filter: blur(3.2px); opacity: 0.42; }
-  55%  { filter: blur(0.7px); opacity: 0.94; }
-  100% { transform: translateX(0) scaleX(1); filter: blur(0); opacity: 1; }
+/* The stroke: positioned and sized per item by samurai-menu.js, which also
+   generates its SVG. Everything animated here is compositor-only. */
+.samurai-menu .stroke {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 190ms cubic-bezier(.4, 0, .7, 1) 60ms;
+  will-change: clip-path;
+  filter: drop-shadow(0 1px 6px rgba(8, 16, 18, 0.25));
 }
+.samurai-menu .stroke svg { display: block; width: 100%; height: 100%; }
+
+/* Enter: stroke leads (320ms ease-out), the ink flip trails it by 60ms. */
+.samurai-menu a:hover .stroke,
+.samurai-menu a:focus-visible .stroke,
+.samurai-menu a:active .stroke,
+.samurai-menu a.is-hot .stroke {
+  clip-path: inset(0 0 0 0);
+  transition: clip-path 320ms cubic-bezier(.16, .8, .3, 1) 0ms;
+}
+.samurai-menu a:hover .lbl.ink,
+.samurai-menu a:focus-visible .lbl.ink,
+.samurai-menu a:active .lbl.ink,
+.samurai-menu a.is-hot .lbl.ink {
+  clip-path: inset(0 0 0 0);
+  transition: clip-path 280ms cubic-bezier(.16, .8, .3, 1) 60ms;
+}
+
+/* Leave: wipes out left-to-right, ink first, at ~60% of the enter time. */
+.samurai-menu a.is-leaving .stroke {
+  clip-path: inset(0 0 0 100%);
+  transition: clip-path 190ms cubic-bezier(.4, 0, .7, 1) 60ms;
+}
+.samurai-menu a.is-leaving .lbl.ink {
+  clip-path: inset(0 0 0 100%);
+  transition: clip-path 190ms cubic-bezier(.4, 0, .7, 1) 0ms;
+}
+/* Snap back to the resting clip between leave and the next enter. */
+.samurai-menu a.no-anim .stroke,
+.samurai-menu a.no-anim .lbl.ink { transition: none; }
 
 @media (max-width: 760px) {
   .samurai-ui { justify-content: flex-end; padding-bottom: clamp(26px, 7vh, 62px); }
-  .samurai-menu { max-width: 100%; gap: 1px; }
-  .samurai-menu a { font-size: clamp(19px, 5.6vw, 27px); }
+  .samurai-menu { max-width: 100%; gap: clamp(4px, 1.2vh, 10px); }
+  .samurai-menu a { font-size: clamp(13px, 4.2vw, 18px); }
 }
 
 /* Short landscape phones have no room for a nine-item column, so it wraps. */
@@ -203,11 +226,12 @@
     max-width: min(78vw, 720px);
     gap: 0 clamp(20px, 4vw, 52px);
   }
-  .samurai-menu a { font-size: clamp(17px, 2.1vw, 24px); }
+  .samurai-menu a { font-size: clamp(12px, 1.5vw, 17px); }
 }
 
+/* Reduced motion: no wipe, the end state applies at once; the effect stays. */
 @media (prefers-reduced-motion: reduce) {
-  .samurai-menu a .ink { animation: none; }
-  .samurai-menu a::after { transition: none; }
+  .samurai-menu .stroke,
+  .samurai-menu .lbl.ink { transition: none !important; }
   .samurai-logo { transition: color 260ms ease; }
 }
