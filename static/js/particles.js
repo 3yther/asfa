@@ -1,21 +1,22 @@
 import * as THREE from 'three';
-import { SKY_GLOW_GLSL } from './samurai-theme.js';
+import { SKY_GLOW_GLSL, NOISE_GLSL } from './samurai-theme.js';
 
 export const MIST = {
-  count: 120, box: 46, yRange: [0.05, 1.9],
-  size: [3.2, 8.5], drift: 0.22, opacity: 0.09, color: 0xe4e2d6,
+  count: 60, box: 46, yRange: [0.05, 1.9],
+  size: [3.2, 8.5], drift: 0.22, opacity: 0.05, color: 0xb9c4c4,
 };
+// Sparse, large, soft flecks — seed fluff on the wind — readable one by one
+// against the dark dome rather than a dust haze.
 export const DUST = {
-  count: 220, box: 30, yRange: [0.25, 2.7], spread: 3.2,
-  size: [0.09, 0.36], drift: 0.55, opacity: 0.6, color: 0xf7eedd,
+  count: 90, box: 32, yRange: [0.3, 3.0], spread: 6.0,
+  size: [0.14, 0.55], drift: 0.5, opacity: 0.8, color: 0xf3f6f2,
 };
 
-// Three drifting bands at different depths and speeds. The parallax between
-// them is what reads as weather; one uniform haze reads as a filter.
+// Low haze at three depths and speeds; cool and faint under the overcast.
 export const MIST_BANDS = [
-  { z: -2.5,  y: 0.55, height: 1.15, width: 60, speed: 0.045, scale: 0.9, opacity: 0.30 },
-  { z: -7.5,  y: 0.85, height: 1.8,  width: 80, speed: 0.028, scale: 0.55, opacity: 0.38 },
-  { z: -14.0, y: 1.25, height: 2.8,  width: 120, speed: 0.016, scale: 0.35, opacity: 0.46 },
+  { z: -2.5,  y: 0.55, height: 1.15, width: 60, speed: 0.045, scale: 0.9, opacity: 0.16 },
+  { z: -7.5,  y: 0.85, height: 1.8,  width: 80, speed: 0.028, scale: 0.55, opacity: 0.22 },
+  { z: -14.0, y: 1.25, height: 2.8,  width: 120, speed: 0.016, scale: 0.35, opacity: 0.30 },
 ];
 
 // Generated rather than loaded: the page's CSP is connect-src 'self', so an
@@ -167,7 +168,7 @@ void main() {
 
 // Value-noise fbm scrolled with the wind. The band takes the same colour the
 // sky dome shows behind it — haze included — so it never reads as a grey card.
-const BAND_FRAG = SKY_GLOW_GLSL + /* glsl */`
+const BAND_FRAG = SKY_GLOW_GLSL + NOISE_GLSL + /* glsl */`
 uniform float uTime;
 uniform float uSpeed;
 uniform float uScale;
@@ -178,19 +179,6 @@ uniform vec3  uSunGlow;
 uniform vec2  uWindDir;
 varying vec2 vUv;
 varying vec3 vWorldPos;
-
-float hash( vec2 p ) { return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
-float vnoise( vec2 p ) {
-  vec2 i = floor( p ), f = fract( p );
-  f = f * f * ( 3.0 - 2.0 * f );
-  return mix( mix( hash( i ), hash( i + vec2( 1, 0 ) ), f.x ),
-              mix( hash( i + vec2( 0, 1 ) ), hash( i + vec2( 1, 1 ) ), f.x ), f.y );
-}
-float fbm( vec2 p ) {
-  float a = 0.5, v = 0.0;
-  for ( int k = 0; k < 4; k++ ) { v += a * vnoise( p ); p = p * 2.03 + 17.1; a *= 0.5; }
-  return v;
-}
 
 void main() {
   vec2 p = vec2( vUv.x * 9.0, vUv.y * 2.2 ) * uScale;

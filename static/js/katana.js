@@ -94,10 +94,10 @@ function buildBlade() {
 
 function steelMaterial(rimColor) {
   const m = new THREE.MeshPhysicalMaterial({
-    color: 0xd6dadc,
+    color: 0xcfdadf,
     metalness: 1.0,
-    roughness: 0.22,
-    envMapIntensity: 1.9,
+    roughness: 0.2,
+    envMapIntensity: 4.0,
     anisotropy: 0.85,
     anisotropyRotation: 0,
   });
@@ -129,14 +129,16 @@ function steelMaterial(rimColor) {
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         float hb = 0.56 + 0.05 * sin( vAlong * 41.0 ) + 0.025 * sin( vAlong * 97.0 + 1.7 );
         float hamon = smoothstep( hb - 0.08, hb + 0.08, vSection );
-        roughnessFactor = mix( roughnessFactor * 1.45, roughnessFactor * 0.7, hamon );`)
+        roughnessFactor = mix( roughnessFactor * 1.7, roughnessFactor * 0.6, hamon );`)
       // Fresnel rim along the cutting edge — meant to be the brightest thing in
       // frame and to carry the bloom.
       .replace('#include <opaque_fragment>', `
         float ndv = max( dot( normalize( normal ), normalize( vViewPosition ) ), 0.0 );
         float fres = pow( 1.0 - ndv, 3.2 );
-        outgoingLight += uRim * fres * ( 0.35 + 0.65 * vEdge ) * 3.4;
-        outgoingLight *= 1.0 + 0.14 * hamon;
+        outgoingLight += uRim * fres * ( 0.35 + 0.65 * vEdge ) * 4.2;
+        // Polished steel under a bright overcast stays bright face-on too.
+        outgoingLight += uRim * 0.12;
+        outgoingLight *= 1.0 + 0.30 * hamon;
         #include <opaque_fragment>`);
   };
   return m;
@@ -162,22 +164,32 @@ function fittingsMaterial(rimColor) {
   return m;
 }
 
-export function createKatana(rimColor = 0xfff1d6) {
+export function createKatana(rimColor = 0xeaf3f5) {
   const group = new THREE.Group();
 
   const steel = steelMaterial(rimColor);
   const iron = fittingsMaterial(rimColor);
+  // Tsuka-ito: white silk wrapped in the diamond pattern, dark same showing
+  // through the gaps. Drawn in the shader on the cylinder's UVs.
   const wrap = new THREE.MeshPhysicalMaterial({
-    color: 0x1c1c1c, metalness: 0.0, roughness: 0.5, clearcoat: 0.8, clearcoatRoughness: 0.3,
+    color: 0xffffff, metalness: 0.0, roughness: 0.62, clearcoat: 0.25, clearcoatRoughness: 0.5,
   });
   wrap.onBeforeCompile = (shader) => {
     shader.uniforms.uRim = { value: new THREE.Color(rimColor) };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\n varying vec2 vWrapUv;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n vWrapUv = uv;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>
-        uniform vec3 uRim;`)
+      .replace('#include <common>', `#include <common>\n uniform vec3 uRim; varying vec2 vWrapUv;`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float a = fract( vWrapUv.x * 6.0 + vWrapUv.y * 9.0 );
+        float b = fract( vWrapUv.x * 6.0 - vWrapUv.y * 9.0 );
+        float lattice = min( abs( a - 0.5 ), abs( b - 0.5 ) ) * 2.0;
+        float silk = 1.0 - smoothstep( 0.42, 0.56, lattice );
+        diffuseColor.rgb = mix( vec3( 0.13, 0.13, 0.12 ), vec3( 0.95, 0.95, 0.91 ), silk );`)
       .replace('#include <opaque_fragment>', `
         float ndv = max( dot( normalize( normal ), normalize( vViewPosition ) ), 0.0 );
-        outgoingLight += uRim * pow( 1.0 - ndv, 3.5 ) * 0.35;
+        outgoingLight += uRim * pow( 1.0 - ndv, 3.5 ) * 0.25;
         #include <opaque_fragment>`);
   };
 

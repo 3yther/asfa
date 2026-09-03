@@ -7,43 +7,57 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 export const CONFIG = {
   camera: { fov: 52, near: 0.1, far: 500, position: [0, 1.55, 4.8], lookAt: [0, 1.40, 0] },
+  // Storm overcast: slate-teal throughout, no sun. Light is a cool diffuse
+  // from behind-left, so the plumes rim-light white against a dark dome.
   colors: {
-    skyZenith:  0x38453f,
-    skyHorizon: 0xd3d4c7,
-    skyNadir:   0x5e645a,
-    sunGlow:    0xf8ead2,
-    fog:        0xc7c9bd,
-    sun:        0xfff0dc,
-    ambientSky: 0x9a9d90,
-    ambientGnd: 0x45463c,
-    ground:     0x4a4a3f,
+    skyZenith:  0x161f23,
+    skyHorizon: 0x5e6e71,
+    skyNadir:   0x3a4447,
+    cloudDark:  0x141d20,
+    cloudLight: 0x83949a,
+    sunGlow:    0x9fb0b2,
+    fog:        0x5a6a6d,
+    sun:        0xdce7e9,
+    ambientSky: 0xb7c4c6,
+    ambientGnd: 0x2c3534,
+    ground:     0x232b29,
   },
-  fog: { near: 3, far: 24 },
-  // Low and behind the field, opposite the camera: the whole look is rim light
-  // raking toward the lens, not a key lighting the scene from the front.
-  sun: { position: [-9, 4.2, -28], intensity: 2.6 },
-  // Threshold sits above the fogged horizon in linear light, so only the blade
-  // rim, the brightest plume tips and the sun core cross it.
-  bloom: { threshold: 1.15, strength: 0.7, radius: 0.4, downscale: 4 },
+  fog: { near: 3, far: 16 },
+  sun: { position: [-14, 9, -24], intensity: 1.7 },
+  bloom: { threshold: 1.15, strength: 0.65, radius: 0.4, downscale: 4 },
   // Measured on an M-series MacBook Air at 2560×1600: the full chain ran at
   // 39 ms/frame, of which the half-resolution bloom was 19 ms. Bloom is a
   // soft effect by definition, so it runs at quarter res; and the scene is
-  // fragment-bound, so DPR is capped at 1.5 rather than 2 — on a 2× display
+  // fragment-bound, so DPR is capped at 1.4 rather than 2 — on a 2× display
   // that is 44% fewer pixels for a difference the mist hides. A device that
   // still measures itself slow in its first seconds steps down to 1.25.
-  maxPixelRatio: 1.5,
-  fallbackPixelRatio: 1.25,
+  maxPixelRatio: 1.4,
+  fallbackPixelRatio: 1.2,
   slowFrameMs: 20,
 };
 
-// Shared by the sky dome and the grass fog: the far field must dissolve into
-// exactly the colour the dome shows behind it, sun bloom included.
+// Shared by the sky dome, the mist bands and anything that fogs toward the
+// dome, so the far field dissolves into exactly the colour shown behind it.
+// Under overcast there is no sun core; this is a broad, faint cool lift on
+// the side the light comes from.
 export const SKY_GLOW_GLSL = /* glsl */`
 vec3 skyGlow( vec3 dir, vec3 sunDir, vec3 glow, float band ) {
   float sd = max( dot( dir, sunDir ), 0.0 );
-  // Tight core only. The camera faces the sun, so any wide falloff term
-  // becomes a warm wash over every visible sky pixel instead of a low sun.
-  return glow * ( pow( sd, 26.0 ) * 0.48 + pow( sd, 7.0 ) * 0.07 ) * ( 0.30 + 0.70 * band );
+  return glow * ( pow( sd, 3.0 ) * 0.10 ) * ( 0.35 + 0.65 * band );
+}`;
+
+export const NOISE_GLSL = /* glsl */`
+float hash( vec2 p ) { return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
+float vnoise( vec2 p ) {
+  vec2 i = floor( p ), f = fract( p );
+  f = f * f * ( 3.0 - 2.0 * f );
+  return mix( mix( hash( i ), hash( i + vec2( 1, 0 ) ), f.x ),
+              mix( hash( i + vec2( 0, 1 ) ), hash( i + vec2( 1, 1 ) ), f.x ), f.y );
+}
+float fbm( vec2 p ) {
+  float a = 0.5, v = 0.0;
+  for ( int k = 0; k < 4; k++ ) { v += a * vnoise( p ); p = p * 2.03 + 17.1; a *= 0.5; }
+  return v;
 }`;
 
 const SKY_VERT = `
@@ -56,19 +70,35 @@ void main() {
 // The GoT look hangs on a pale mist band sitting exactly on the eyeline, with
 // the sky falling off to dark teal above it. A gaussian centred on the horizon
 // keeps that band tight instead of smearing it across the whole sphere.
-const SKY_FRAG = SKY_GLOW_GLSL + `
+const SKY_FRAG = SKY_GLOW_GLSL + NOISE_GLSL + `
 uniform vec3 uZenith;
 uniform vec3 uHorizon;
 uniform vec3 uNadir;
+uniform vec3 uCloudDark;
+uniform vec3 uCloudLight;
 uniform vec3 uSunDir;
 uniform vec3 uSunGlow;
+uniform float uTime;
 varying vec3 vWorldDir;
 void main() {
-  float h = vWorldDir.y;
+  vec3 dir = normalize(vWorldDir);
+  float h = dir.y;
   vec3 col = mix(uNadir, uZenith, smoothstep(-0.35, 0.85, h));
-  float band = exp(-h * h * 5.0);
+  float band = exp(-h * h * 14.0);
   col = mix(col, uHorizon, band * 0.78);
-  col += skyGlow(normalize(vWorldDir), uSunDir, uSunGlow, band);
+
+  // Cloud deck: the dome projected onto a plane overhead so the masses
+  // foreshorten toward the horizon, two fbm octaves at different drifts for
+  // the layered look, faded out where the haze band takes over.
+  float hh = max(h, 0.06);
+  vec2 pp = dir.xz / (hh + 0.35);
+  float c1 = fbm(pp * 1.15 + vec2(uTime * 0.010, uTime * 0.004));
+  float c2 = fbm(pp * 2.6 - vec2(uTime * 0.018, 0.0));
+  float cloud = smoothstep(0.36, 0.74, c1 * 0.72 + c2 * 0.28);
+  vec3 deck = mix(uCloudDark, uCloudLight, cloud);
+  col = mix(col, deck, (1.0 - band * 0.9) * 0.9);
+
+  col += skyGlow(dir, uSunDir, uSunGlow, band);
   gl_FragColor = vec4(col, 1.0);
 }`;
 
@@ -134,14 +164,14 @@ function installGrading() {
       vec3 CustomToneMapping( vec3 color ) {
         color = ACESFilmicToneMapping( color );
         float l = dot( color, vec3( 0.2126, 0.7152, 0.0722 ) );
-        color = mix( vec3( l ), color, 0.78 );
+        color = mix( vec3( l ), color, 0.74 );
         // Highlights get contrast; shadows stay soft and lifted, never crushed.
         vec3 curved = color * color * ( 3.0 - 2.0 * color );
         color = mix( color, curved, smoothstep( 0.35, 0.9, l ) * 0.5 );
-        color = color * 0.965 + 0.026;
-        // Warm overall, with the darks pulled toward grey-green rather than teal.
-        color *= vec3( 1.0, 1.0, 0.985 );
-        color += vec3( -0.008, 0.005, 0.0 ) * ( 1.0 - l );
+        color = color * 0.965 + 0.024;
+        // Cool throughout, with the darks pulled toward slate-teal.
+        color *= vec3( 0.975, 1.0, 1.02 );
+        color += vec3( -0.012, 0.003, 0.016 ) * ( 1.0 - l );
         return clamp( color, 0.0, 1.0 );
       }`
     );
@@ -189,8 +219,11 @@ export class SamuraiScene {
           uZenith:  { value: new THREE.Color(c.skyZenith) },
           uHorizon: { value: new THREE.Color(c.skyHorizon) },
           uNadir:   { value: new THREE.Color(c.skyNadir) },
+          uCloudDark:  { value: new THREE.Color(c.cloudDark) },
+          uCloudLight: { value: new THREE.Color(c.cloudLight) },
           uSunDir:  { value: new THREE.Vector3(...CONFIG.sun.position).normalize() },
           uSunGlow: { value: new THREE.Color(c.sunGlow) },
+          uTime:    { value: 0 },
         },
         vertexShader: SKY_VERT,
         fragmentShader: SKY_FRAG,
@@ -225,7 +258,7 @@ export class SamuraiScene {
     this.sun.shadow.bias = -0.0008;
     this.scene.add(this.sun);
 
-    this.hemi = new THREE.HemisphereLight(c.ambientSky, c.ambientGnd, 0.8);
+    this.hemi = new THREE.HemisphereLight(c.ambientSky, c.ambientGnd, 1.1);
     this.scene.add(this.hemi);
 
     // Shadow catcher and horizon filler. The grass field sits on top of this.
@@ -317,6 +350,7 @@ export class SamuraiScene {
       const dt = Math.min(this.clock.getDelta(), 0.1);
       const t = this.clock.elapsedTime;
       this._adapt(dt);
+      this.sky.material.uniforms.uTime.value = t;
       for (const m of this.modules) m.update?.(dt, t);
       this.composer.render();
     };
