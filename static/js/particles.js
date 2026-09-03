@@ -1,13 +1,22 @@
 import * as THREE from 'three';
+import { SKY_GLOW_GLSL } from './samurai-theme.js';
 
 export const MIST = {
-  count: 340, box: 46, yRange: [0.05, 1.9],
-  size: [2.6, 6.4], drift: 0.28, opacity: 0.115, color: 0xc9d3c8,
+  count: 120, box: 46, yRange: [0.05, 1.9],
+  size: [3.2, 8.5], drift: 0.22, opacity: 0.09, color: 0xe4e2d6,
 };
 export const DUST = {
-  count: 620, box: 34, yRange: [0.15, 2.8],
-  size: [0.05, 0.17], drift: 0.95, opacity: 0.42, color: 0xdfe6da,
+  count: 220, box: 30, yRange: [0.25, 2.7], spread: 3.2,
+  size: [0.09, 0.36], drift: 0.55, opacity: 0.6, color: 0xf7eedd,
 };
+
+// Three drifting bands at different depths and speeds. The parallax between
+// them is what reads as weather; one uniform haze reads as a filter.
+export const MIST_BANDS = [
+  { z: -2.5,  y: 0.55, height: 1.15, width: 60, speed: 0.045, scale: 0.9, opacity: 0.30 },
+  { z: -7.5,  y: 0.85, height: 1.8,  width: 80, speed: 0.028, scale: 0.55, opacity: 0.38 },
+  { z: -14.0, y: 1.25, height: 2.8,  width: 120, speed: 0.016, scale: 0.35, opacity: 0.46 },
+];
 
 // Generated rather than loaded: the page's CSP is connect-src 'self', so an
 // external sprite would be blocked, and a radial falloff is two lines anyway.
@@ -29,6 +38,7 @@ function softSprite() {
 const VERT = /* glsl */`
 attribute float aSize;
 attribute float aPhase;
+attribute float aAlpha;
 uniform float uTime;
 uniform vec2  uWindDir;
 uniform float uDrift;
@@ -50,7 +60,10 @@ void main() {
 
   // Fade at both ends: distant particles would otherwise pile up into a haze
   // wall, and near ones smear across the whole frame as they clip the camera.
-  vFade = smoothstep( 0.6, 3.0, dist ) * ( 1.0 - smoothstep( uBox * 0.30, uBox * 0.52, dist ) );
+  // A slow per-particle pulse gives the opacity variation a still field lacks.
+  float pulse = 0.55 + 0.45 * sin( uTime * 0.7 + aPhase * 3.1 );
+  vFade = aAlpha * pulse
+        * smoothstep( 0.6, 3.0, dist ) * ( 1.0 - smoothstep( uBox * 0.30, uBox * 0.52, dist ) );
 
   gl_PointSize = aSize * ( 300.0 / max( dist, 0.001 ) );
   gl_Position = projectionMatrix * mv;
@@ -77,31 +90,45 @@ void main() {
   #endif
 }`;
 
+// Approximate normal deviate — dust is biased toward the lit ground around the
+// blade so the key light has something to be seen in.
+function gauss() {
+  return (Math.random() + Math.random() + Math.random() - 1.5) * 1.35;
+}
+
 function buildLayer(cfg, sprite, fog) {
   const { count, box, yRange, size } = cfg;
   const pos = new Float32Array(count * 3);
   const sz = new Float32Array(count);
   const ph = new Float32Array(count);
+  const al = new Float32Array(count);
 
   for (let i = 0; i < count; i++) {
-    pos[i * 3]     = (Math.random() - 0.5) * box;
+    if (cfg.spread) {
+      pos[i * 3]     = THREE.MathUtils.clamp(gauss() * cfg.spread, -box / 2, box / 2);
+      pos[i * 3 + 2] = THREE.MathUtils.clamp(gauss() * cfg.spread, -box / 2, box / 2);
+    } else {
+      pos[i * 3]     = (Math.random() - 0.5) * box;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * box;
+    }
     pos[i * 3 + 1] = yRange[0] + Math.random() * (yRange[1] - yRange[0]);
-    pos[i * 3 + 2] = (Math.random() - 0.5) * box;
     sz[i] = size[0] + Math.random() * (size[1] - size[0]);
     ph[i] = Math.random() * Math.PI * 2;
+    al[i] = 0.25 + Math.random() * 0.75;
   }
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('aSize', new THREE.BufferAttribute(sz, 1));
   geo.setAttribute('aPhase', new THREE.BufferAttribute(ph, 1));
+  geo.setAttribute('aAlpha', new THREE.BufferAttribute(al, 1));
 
   const uniforms = {
     uTime:     { value: 0 },
     uWindDir:  { value: new THREE.Vector2(0.82, 0.57).normalize() },
     uDrift:    { value: cfg.drift },
     uBox:      { value: box },
-    uBob:      { value: cfg === MIST ? 0.10 : 0.26 },
+    uBob:      { value: cfg === MIST ? 0.10 : 0.22 },
     uMap:      { value: sprite },
     uColor:    { value: new THREE.Color(cfg.color) },
     uOpacity:  { value: cfg.opacity },
@@ -129,21 +156,96 @@ function buildLayer(cfg, sprite, fog) {
   return { points: pts, uniforms };
 }
 
-export function createParticles(fog) {
+const BAND_VERT = /* glsl */`
+varying vec2 vUv;
+varying vec3 vWorldPos;
+void main() {
+  vUv = uv;
+  vWorldPos = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+}`;
+
+// Value-noise fbm scrolled with the wind. The band takes the same colour the
+// sky dome shows behind it — haze included — so it never reads as a grey card.
+const BAND_FRAG = SKY_GLOW_GLSL + /* glsl */`
+uniform float uTime;
+uniform float uSpeed;
+uniform float uScale;
+uniform float uOpacity;
+uniform vec3  uFogColor;
+uniform vec3  uSunDir;
+uniform vec3  uSunGlow;
+uniform vec2  uWindDir;
+varying vec2 vUv;
+varying vec3 vWorldPos;
+
+float hash( vec2 p ) { return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
+float vnoise( vec2 p ) {
+  vec2 i = floor( p ), f = fract( p );
+  f = f * f * ( 3.0 - 2.0 * f );
+  return mix( mix( hash( i ), hash( i + vec2( 1, 0 ) ), f.x ),
+              mix( hash( i + vec2( 0, 1 ) ), hash( i + vec2( 1, 1 ) ), f.x ), f.y );
+}
+float fbm( vec2 p ) {
+  float a = 0.5, v = 0.0;
+  for ( int k = 0; k < 4; k++ ) { v += a * vnoise( p ); p = p * 2.03 + 17.1; a *= 0.5; }
+  return v;
+}
+
+void main() {
+  vec2 p = vec2( vUv.x * 9.0, vUv.y * 2.2 ) * uScale;
+  p.x += uTime * uSpeed * uWindDir.x * 6.0;
+  p.y += uTime * uSpeed * 0.35;
+  float n = fbm( p );
+  n = smoothstep( 0.32, 0.78, n );
+  // Bands sit on the ground and thin out upward.
+  float vert = smoothstep( 0.0, 0.18, vUv.y ) * ( 1.0 - smoothstep( 0.45, 1.0, vUv.y ) );
+  float horiz = smoothstep( 0.0, 0.12, vUv.x ) * ( 1.0 - smoothstep( 0.88, 1.0, vUv.x ) );
+  float a = n * vert * horiz * uOpacity;
+  vec3 dir = normalize( vWorldPos - cameraPosition );
+  vec3 col = uFogColor + skyGlow( dir, uSunDir, uSunGlow, exp( -dir.y * dir.y * 5.0 ) );
+  gl_FragColor = vec4( col, a );
+}`;
+
+function buildBand(cfg, fog, sunDir, glow) {
+  const uniforms = {
+    uTime:     { value: 0 },
+    uSpeed:    { value: cfg.speed },
+    uScale:    { value: cfg.scale },
+    uOpacity:  { value: cfg.opacity },
+    uFogColor: { value: new THREE.Color(fog.color) },
+    uSunDir:   { value: sunDir.clone().normalize() },
+    uSunGlow:  { value: new THREE.Color(glow) },
+    uWindDir:  { value: new THREE.Vector2(0.82, 0.57).normalize() },
+  };
+  const mat = new THREE.ShaderMaterial({
+    uniforms, vertexShader: BAND_VERT, fragmentShader: BAND_FRAG,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(cfg.width, cfg.height), mat);
+  mesh.position.set(0, cfg.y, cfg.z);
+  mesh.frustumCulled = false;
+  return { mesh, uniforms };
+}
+
+export function createParticles(fog, sunPosition, glowColor) {
   const sprite = softSprite();
   const mist = buildLayer(MIST, sprite, fog);
   const dust = buildLayer(DUST, sprite, fog);
+  const bands = MIST_BANDS.map((b) => buildBand(b, fog, sunPosition, glowColor));
 
   const group = new THREE.Group();
-  group.add(mist.points, dust.points);
+  group.add(mist.points, dust.points, ...bands.map((b) => b.mesh));
 
   group.userData.update = (dt, t) => {
     mist.uniforms.uTime.value = t;
     dust.uniforms.uTime.value = t;
+    for (const b of bands) b.uniforms.uTime.value = t;
   };
   group.userData.dispose = () => {
     sprite.dispose();
     for (const l of [mist, dust]) { l.points.geometry.dispose(); l.points.material.dispose(); }
+    for (const b of bands) { b.mesh.geometry.dispose(); b.mesh.material.dispose(); }
   };
   return group;
 }

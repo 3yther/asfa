@@ -1,12 +1,15 @@
 import * as THREE from 'three';
+import { SKY_GLOW_GLSL } from './samurai-theme.js';
 
 export const GRASS = {
   count: 42000,
   radius: 24,
-  height: [0.34, 0.78],
-  width: 0.026,
-  segments: 4,
+  height: 0.62,          // base; per-instance 0.6×–1.4× of this
+  stemWidth: 0.016,
+  plumeWidth: 0.05,
+  plumeStart: 0.80,      // fraction of blade height where the head fans out
   wind: { dir: [0.82, 0.57], speed: 1.15, freq: 0.55, strength: 0.30, gustFreq: 0.13 },
+  colors: { base: 0x6b6a5e, mid: 0xa8a596, tip: 0xd6d2c5, glow: 0xf6e9d2 },
 };
 
 // Wind is applied in world space, after the instance transform: bending in
@@ -33,52 +36,106 @@ const WIND_VERTEX = /* glsl */`
   worldPos.xz += uWindDir * bend;
   worldPos.y  -= abs( bend ) * 0.22;
 
+  // Handed to the fragment stage so the plume shimmer is phase-locked to the
+  // same motion the eye is already tracking.
+  vWave = wave * ( 0.30 + 0.70 * gust );
+  vWorldPos = worldPos.xyz;
+
   mvPosition = viewMatrix * worldPos;
   gl_Position = projectionMatrix * mvPosition;
 `;
 
-function bladeGeometry() {
-  const { segments, width } = GRASS;
-  const pos = [], hs = [], idx = [];
+// A susuki stalk: a thin, barely tapering stem for four fifths of its height,
+// then a feathered head. The head is real geometry (so it silhouettes and
+// catches backlight) and the feathering is done with alpha in the fragment.
+const STATIONS = [0, 0.22, 0.45, 0.66, 0.80, 0.87, 0.94, 1.0];
 
-  for (let i = 0; i <= segments; i++) {
-    const v = i / segments;
-    const w = width * 0.5 * Math.pow(1 - v, 0.65);
+function halfWidth(v) {
+  const { stemWidth, plumeWidth, plumeStart } = GRASS;
+  const stem = stemWidth * 0.5 * (1 - 0.45 * Math.min(v / plumeStart, 1));
+  if (v <= plumeStart) return stem;
+  const t = (v - plumeStart) / (1 - plumeStart);
+  const plume = plumeWidth * 0.5 * Math.pow(Math.sin(t * Math.PI), 0.55);
+  return Math.max(stem * (1 - t), plume);
+}
+
+// Built as two pieces that share every instance attribute. The stem carries
+// most of the pixels and is fully opaque, so the GPU can reject hidden
+// fragments early; only the head, which needs alpha for its bristles, pays
+// for discard. One alpha-tested draw for the whole blade measured at roughly
+// double the cost, because near blades overlap several deep.
+function bladeGeometry(stations) {
+  const pos = [], hs = [], side = [], idx = [];
+  for (const v of stations) {
+    const w = halfWidth(v);
     pos.push(-w, v, 0, w, v, 0);
     hs.push(v, v);
+    side.push(-1, 1);
   }
-  for (let i = 0; i < segments; i++) {
+  for (let i = 0; i < stations.length - 1; i++) {
     const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
     idx.push(a, c, b, b, c, d);
   }
-
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('aHeight', new THREE.Float32BufferAttribute(hs, 1));
+  g.setAttribute('aSide', new THREE.Float32BufferAttribute(side, 1));
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
 }
 
-export function createGrassField() {
-  const geo = bladeGeometry();
-  const { count, radius, height } = GRASS;
+export function createGrassField(sun, skyGlow, cameraPos = new THREE.Vector3(0, 1.55, 4.8)) {
+  const { count, radius, height, colors, plumeStart } = GRASS;
+  const split = STATIONS.indexOf(plumeStart);
+  const stemGeo = bladeGeometry(STATIONS.slice(0, split + 1));
+  const headGeo = bladeGeometry(STATIONS.slice(split));
+
+  // Instances are laid out once and sorted front-to-back: the camera never
+  // moves, so the opaque stem draw gets early-z rejection for free.
+  const placements = [];
+  for (let i = 0; i < count; i++) {
+    // sqrt keeps the disc evenly covered; a raw uniform radius clumps at the centre
+    const r = Math.sqrt(Math.random()) * radius;
+    const a = Math.random() * Math.PI * 2;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    placements.push({
+      x, z, rot: Math.random() * Math.PI,
+      // Wide height spread is what separates a wild field from a lawn.
+      h: height * (0.6 + Math.random() * 0.8),
+      w: 0.8 + Math.random() * 0.5,
+      phase: Math.random() * Math.PI * 2,
+      tint: Math.random(),
+      d: (x - cameraPos.x) ** 2 + (z - cameraPos.z) ** 2,
+    });
+  }
+  placements.sort((p, q) => p.d - q.d);
 
   const phase = new Float32Array(count);
   const tint = new Float32Array(count);
-  for (let i = 0; i < count; i++) {
-    phase[i] = Math.random() * Math.PI * 2;
-    tint[i] = Math.random();
+  for (let i = 0; i < count; i++) { phase[i] = placements[i].phase; tint[i] = placements[i].tint; }
+  const phaseAttr = new THREE.InstancedBufferAttribute(phase, 1);
+  const tintAttr = new THREE.InstancedBufferAttribute(tint, 1);
+  for (const g of [stemGeo, headGeo]) {
+    g.setAttribute('aPhase', phaseAttr);
+    g.setAttribute('aTint', tintAttr);
   }
-  geo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phase, 1));
-  geo.setAttribute('aTint', new THREE.InstancedBufferAttribute(tint, 1));
 
-  const material = new THREE.MeshStandardMaterial({
-    color: 0x67754e,
-    roughness: 0.92,
+  const baseMaterial = () => new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.82,
     metalness: 0.0,
+    // The sky IBL alone would wash the heads to white; the backlight terms in
+    // the fragment stage are what should carry the brightness.
+    envMapIntensity: 0.35,
     side: THREE.DoubleSide,
   });
+  const stemMaterial = baseMaterial();
+  const headMaterial = baseMaterial();
+  // Feathered plume edges without a transparent sort: MSAA is on, so coverage
+  // does the blending and the heads stay a single draw call.
+  headMaterial.alphaToCoverage = true;
+  headMaterial.alphaTest = 0.12;
 
   const uniforms = {
     uTime:        { value: 0 },
@@ -87,14 +144,22 @@ export function createGrassField() {
     uWindFreq:    { value: GRASS.wind.freq },
     uWindStrength:{ value: GRASS.wind.strength },
     uGustFreq:    { value: GRASS.wind.gustFreq },
+    uSunDir:      { value: sun.position.clone().normalize() },
+    uSunColor:    { value: sun.color.clone() },
+    uBase:        { value: new THREE.Color(colors.base) },
+    uMid:         { value: new THREE.Color(colors.mid) },
+    uTip:         { value: new THREE.Color(colors.tip) },
+    uGlow:        { value: new THREE.Color(colors.glow) },
+    uSunGlow:     { value: new THREE.Color(skyGlow) },
   };
 
-  material.onBeforeCompile = (shader) => {
+  const onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
 
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
         attribute float aHeight;
+        attribute float aSide;
         attribute float aPhase;
         attribute float aTint;
         uniform float uTime;
@@ -104,49 +169,123 @@ export function createGrassField() {
         uniform float uWindStrength;
         uniform float uGustFreq;
         varying float vH;
-        varying float vTint;`)
+        varying float vSide;
+        varying float vTint;
+        varying float vWave;
+        varying vec3  vWorldPos;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vH = aHeight;
+        vSide = aSide;
         vTint = aTint;`)
       .replace('#include <project_vertex>', WIND_VERTEX);
 
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
+        uniform vec3  uSunDir;
+        uniform vec3  uSunColor;
+        uniform vec3  uBase;
+        uniform vec3  uMid;
+        uniform vec3  uTip;
+        uniform vec3  uGlow;
+        uniform vec3  uSunGlow;
         varying float vH;
-        varying float vTint;`)
+        varying float vSide;
+        varying float vTint;
+        varying float vWave;
+        varying vec3  vWorldPos;
+        ` + SKY_GLOW_GLSL)
       .replace('#include <color_fragment>', `#include <color_fragment>
-        // Light is occluded near the base of a dense sward; without this the
-        // field reads as a flat carpet rather than something with depth.
-        diffuseColor.rgb *= mix( 0.34, 1.12, vH );
-        diffuseColor.rgb *= mix( 0.86, 1.12, vTint );`);
+        // Warm taupe at the shadowed base rising to silver-cream at the head.
+        vec3 stalk = mix( uBase, uMid, smoothstep( 0.0, 0.55, vH ) );
+        stalk = mix( stalk, uTip, smoothstep( 0.50, 1.0, vH ) );
+        stalk *= mix( 0.90, 1.08, vTint );
+        diffuseColor.rgb = stalk;
+
+        // The head is cut into bristles rather than made uniformly translucent:
+        // a spiky silhouette is what reads as a plume, four-level coverage
+        // blending on a solid leaf shape just reads as a paler leaf.
+        float plume = smoothstep( 0.78, 0.86, vH );
+        float pt = clamp( ( vH - 0.80 ) / 0.20, 0.0, 1.0 );
+        float u = vSide;
+        // Two bristle frequencies so the silhouette breaks up at every scale
+        // the head is seen at, instead of reading as a comb up close.
+        float b1 = pow( abs( sin( u * 11.0 + vTint * 6.2832 + pt * 2.4 ) ), 1.6 );
+        float b2 = pow( abs( sin( u * 23.0 - vTint * 10.7 + pt * 5.0 ) ), 2.2 );
+        float bristle = max( b1 * 0.85, b2 * 0.7 );
+        float feather = 1.0 - pow( abs( u ), 1.5 );
+        float core = smoothstep( 0.30, 0.0, abs( u ) );
+        float head = max( bristle * feather * ( 1.05 - 0.45 * pt ), core );
+        diffuseColor.a = mix( 1.0, head, plume );
+        // The rachis is darker than the florets it carries; a flat fill is
+        // what made the heads look like paper.
+        diffuseColor.rgb *= 1.0 - 0.30 * plume * smoothstep( 0.35, 0.0, abs( u ) );
+        diffuseColor.rgb *= 0.93 + 0.07 * sin( vH * 90.0 + vTint * 40.0 );`)
+      .replace('#include <opaque_fragment>', `
+        vec3 V = normalize( cameraPosition - vWorldPos );
+
+        // Translucency: a stalk between the eye and the sun glows instead of
+        // going dark. Thin tips pass more light than the base, and the
+        // per-stalk variation stands in for the self-shadowing of a dense sward.
+        float back = pow( max( dot( V, -uSunDir ), 0.0 ), 2.0 );
+        float passes = ( 0.18 + 0.82 * vH ) * mix( 0.45, 1.0, vTint );
+        outgoingLight += uGlow * uSunColor * back * passes * 0.75;
+
+        // Plume shimmer, driven by the wind phase so the flash and the sway
+        // are the same motion.
+        float shimmer = pow( max( vWave, 0.0 ), 3.0 ) * smoothstep( 0.66, 1.0, vH );
+        outgoingLight += uGlow * shimmer * ( 0.25 + 0.75 * back ) * 0.9;
+
+        // Distant stalks lose contrast before the fog lifts them.
+        float dist = length( cameraPosition - vWorldPos );
+        float fade = smoothstep( 5.0, 22.0, dist );
+        float lum = dot( outgoingLight, vec3( 0.2126, 0.7152, 0.0722 ) );
+        outgoingLight = mix( outgoingLight, vec3( lum ), fade * 0.55 );
+
+        #include <opaque_fragment>`)
+      .replace('#include <fog_fragment>', `
+        #ifdef USE_FOG
+          vec3 fdir = normalize( vWorldPos - cameraPosition );
+          float fband = exp( -fdir.y * fdir.y * 7.0 );
+          vec3 fcol = fogColor + skyGlow( fdir, uSunDir, uSunGlow, fband );
+          float ff = smoothstep( fogNear, fogFar, vFogDepth );
+          gl_FragColor.rgb = mix( gl_FragColor.rgb, fcol, ff );
+        #endif`);
   };
 
-  const mesh = new THREE.InstancedMesh(geo, material, count);
-  mesh.castShadow = false;
-  mesh.receiveShadow = true;
-  mesh.frustumCulled = false;
+  stemMaterial.onBeforeCompile = onBeforeCompile;
+  headMaterial.onBeforeCompile = onBeforeCompile;
 
+  const stem = new THREE.InstancedMesh(stemGeo, stemMaterial, count);
+  const head = new THREE.InstancedMesh(headGeo, headMaterial, count);
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const p = new THREE.Vector3();
   const sc = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
-
   for (let i = 0; i < count; i++) {
-    // sqrt keeps the disc evenly covered; a raw uniform radius clumps at the centre
-    const r = Math.sqrt(Math.random()) * radius;
-    const a = Math.random() * Math.PI * 2;
-    p.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-
-    q.setFromAxisAngle(up, Math.random() * Math.PI);
-    const h = height[0] + Math.random() * (height[1] - height[0]);
-    sc.set(0.75 + Math.random() * 0.5, h, 1);
-
+    const pl = placements[i];
+    p.set(pl.x, 0, pl.z);
+    q.setFromAxisAngle(up, pl.rot);
+    sc.set(pl.w, pl.h, 1);
     m.compose(p, q, sc);
-    mesh.setMatrixAt(i, m);
+    stem.setMatrixAt(i, m);
   }
-  mesh.instanceMatrix.needsUpdate = true;
+  stem.instanceMatrix.needsUpdate = true;
+  // Same placements, one upload: the head reuses the stem's matrix buffer.
+  head.instanceMatrix = stem.instanceMatrix;
+
+  const mesh = new THREE.Group();
+  for (const part of [stem, head]) {
+    part.castShadow = false;
+    part.receiveShadow = true;
+    part.frustumCulled = false;
+    mesh.add(part);
+  }
 
   mesh.userData.update = (dt, t) => { uniforms.uTime.value = t; };
+  mesh.userData.setSun = (light) => {
+    uniforms.uSunDir.value.copy(light.position).normalize();
+    uniforms.uSunColor.value.copy(light.color);
+  };
   return mesh;
 }

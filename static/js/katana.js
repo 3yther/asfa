@@ -21,6 +21,10 @@ const SECTION = [
   [-0.42, -0.30],
   [ 0.02, -0.50],
 ];
+// Per-corner: how far across the blade (0 = mune, 1 = edge) and how much the
+// corner belongs to the cutting edge. Drives the hamon and the rim light.
+const SECTION_POS  = [1.0, 0.55, 0.10, 0.0, 0.10, 0.55];
+const SECTION_EDGE = [1.0, 0.22, 0.0,  0.0, 0.0,  0.22];
 
 // Gradual taper down the blade, then the kissaki collapsing to the point.
 function taper(t) {
@@ -38,8 +42,7 @@ function buildBlade() {
   const R = length / Math.sin(arc);
   const segs = SECTION.length;
 
-  const pos = [];
-  const idx = [];
+  const pos = [], uv = [], sec = [], edge = [], idx = [];
 
   for (let i = 0; i <= stations; i++) {
     const t = i / stations;
@@ -54,12 +57,14 @@ function buildBlade() {
     const tk = thickness * (1 - 0.10 * t) * (t < 0.9 ? 1 : s / taper(0.9));
 
     for (let f = 0; f < segs; f++) {
-      for (const c of [SECTION[f], SECTION[(f + 1) % segs]]) {
-        pos.push(
-          spineX + c[0] * w * outX,
-          spineY + c[0] * w * outY,
-          c[1] * tk
-        );
+      for (const ci of [f, (f + 1) % segs]) {
+        const c = SECTION[ci];
+        pos.push(spineX + c[0] * w * outX, spineY + c[0] * w * outY, c[1] * tk);
+        // u runs down the blade so the derived tangent — and with it the
+        // anisotropic highlight — stretches along its length.
+        uv.push(t, SECTION_POS[ci]);
+        sec.push(SECTION_POS[ci]);
+        edge.push(SECTION_EDGE[ci]);
       }
     }
   }
@@ -77,24 +82,104 @@ function buildBlade() {
 
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('aSection', new THREE.Float32BufferAttribute(sec, 1));
+  g.setAttribute('aEdge', new THREE.Float32BufferAttribute(edge, 1));
   g.setIndex(idx);
   g.computeVertexNormals();
+  g.computeTangents();
   g.computeBoundingBox();
   return g;
 }
 
-export function createKatana() {
+function steelMaterial(rimColor) {
+  const m = new THREE.MeshPhysicalMaterial({
+    color: 0xd6dadc,
+    metalness: 1.0,
+    roughness: 0.22,
+    envMapIntensity: 1.9,
+    anisotropy: 0.85,
+    anisotropyRotation: 0,
+  });
+
+  const uniforms = { uRim: { value: new THREE.Color(rimColor) } };
+
+  m.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute float aSection;
+        attribute float aEdge;
+        varying float vSection;
+        varying float vEdge;
+        varying float vAlong;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vSection = aSection;
+        vEdge = aEdge;
+        vAlong = uv.x;`);
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform vec3 uRim;
+        varying float vSection;
+        varying float vEdge;
+        varying float vAlong;`)
+      // Hamon: the differentially hardened edge steel takes a finer polish
+      // than the spine, so it is glossier on one side of a soft, wavy line.
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        float hb = 0.56 + 0.05 * sin( vAlong * 41.0 ) + 0.025 * sin( vAlong * 97.0 + 1.7 );
+        float hamon = smoothstep( hb - 0.08, hb + 0.08, vSection );
+        roughnessFactor = mix( roughnessFactor * 1.45, roughnessFactor * 0.7, hamon );`)
+      // Fresnel rim along the cutting edge — meant to be the brightest thing in
+      // frame and to carry the bloom.
+      .replace('#include <opaque_fragment>', `
+        float ndv = max( dot( normalize( normal ), normalize( vViewPosition ) ), 0.0 );
+        float fres = pow( 1.0 - ndv, 3.2 );
+        outgoingLight += uRim * fres * ( 0.35 + 0.65 * vEdge ) * 3.4;
+        outgoingLight *= 1.0 + 0.14 * hamon;
+        #include <opaque_fragment>`);
+  };
+  return m;
+}
+
+// Lacquered wood and iron: dark for contrast, but with a specular roll-off so
+// they read as objects rather than a silhouette cut from the frame.
+function fittingsMaterial(rimColor) {
+  const m = new THREE.MeshPhysicalMaterial({
+    color: 0x1c1c1c, metalness: 0.9, roughness: 0.40, envMapIntensity: 0.9,
+  });
+  const uniforms = { uRim: { value: new THREE.Color(rimColor) } };
+  m.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform vec3 uRim;`)
+      .replace('#include <opaque_fragment>', `
+        float ndv = max( dot( normalize( normal ), normalize( vViewPosition ) ), 0.0 );
+        outgoingLight += uRim * pow( 1.0 - ndv, 4.0 ) * 0.55;
+        #include <opaque_fragment>`);
+  };
+  return m;
+}
+
+export function createKatana(rimColor = 0xfff1d6) {
   const group = new THREE.Group();
 
-  const steel = new THREE.MeshStandardMaterial({
-    color: 0xd7dee2, metalness: 1.0, roughness: 0.17, envMapIntensity: 1.0,
+  const steel = steelMaterial(rimColor);
+  const iron = fittingsMaterial(rimColor);
+  const wrap = new THREE.MeshPhysicalMaterial({
+    color: 0x1c1c1c, metalness: 0.0, roughness: 0.5, clearcoat: 0.8, clearcoatRoughness: 0.3,
   });
-  const iron = new THREE.MeshStandardMaterial({
-    color: 0x2a2f33, metalness: 0.85, roughness: 0.52,
-  });
-  const wrap = new THREE.MeshStandardMaterial({
-    color: 0x14181b, metalness: 0.0, roughness: 0.88,
-  });
+  wrap.onBeforeCompile = (shader) => {
+    shader.uniforms.uRim = { value: new THREE.Color(rimColor) };
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform vec3 uRim;`)
+      .replace('#include <opaque_fragment>', `
+        float ndv = max( dot( normalize( normal ), normalize( vViewPosition ) ), 0.0 );
+        outgoingLight += uRim * pow( 1.0 - ndv, 3.5 ) * 0.35;
+        #include <opaque_fragment>`);
+  };
 
   const blade = new THREE.Mesh(buildBlade(), steel);
   group.add(blade);

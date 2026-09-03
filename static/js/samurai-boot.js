@@ -1,4 +1,4 @@
-import { SamuraiScene } from './samurai-theme.js';
+import { SamuraiScene, CONFIG } from './samurai-theme.js';
 import { createKatana } from './katana.js';
 import { createGrassField } from './grass-shader.js';
 import { createParticles } from './particles.js';
@@ -27,13 +27,13 @@ if (!supportsWebGL()) {
   loader.classList.add('hidden');
 } else {
   const app = new SamuraiScene(canvas).init();
-  app.scene.add(createKatana());
+  app.scene.add(createKatana(CONFIG.colors.sunGlow));
 
-  const grass = createGrassField();
+  const grass = createGrassField(app.sun, CONFIG.colors.sunGlow);
   app.scene.add(grass);
   app.add({ update: grass.userData.update });
 
-  const particles = createParticles(app.scene.fog);
+  const particles = createParticles(app.scene.fog, app.sun.position, CONFIG.colors.sunGlow);
   app.scene.add(particles);
   app.add({ update: particles.userData.update, dispose: particles.userData.dispose });
 
