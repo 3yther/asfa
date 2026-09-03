@@ -3,6 +3,7 @@ import { SamuraiScene, CONFIG } from './samurai-theme.js';
 import { createKatana } from './katana.js';
 import { createGrassField } from './grass-shader.js';
 import { createParticles } from './particles.js';
+import { createClouds } from './clouds.js';
 
 const canvas = document.getElementById('samurai-canvas');
 const loader = document.getElementById('samurai-loader');
@@ -28,6 +29,16 @@ if (!supportsWebGL()) {
   loader.classList.add('hidden');
 } else {
   const app = new SamuraiScene(canvas).init();
+
+  // Clouds: transparent, so Three's own opaque-then-transparent pass with
+  // depth-testing already puts them behind the grass/katana silhouette and
+  // in front of the sky dome (which never writes depth) — no explicit
+  // renderOrder needed. Added here, before the opaque scene content, purely
+  // to keep scene-graph order matching that visual layering.
+  const clouds = createClouds(app.sun, app.camera);
+  app.scene.add(clouds);
+  app.add({ update: clouds.userData.update, dispose: clouds.userData.dispose });
+
   // The katana group carries its own point-down flip; the lean goes on a
   // pivot above it so the two rotations compose instead of overwriting.
   const katanaPivot = new THREE.Group();
