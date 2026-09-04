@@ -131,19 +131,24 @@
   max-width: min(50vw, 520px);
 }
 
-/* Resting: light, wide-tracked uppercase sans; nothing else. */
+/* Resting: Japanese ink-brush calligraphy (Yuji Boku), natural case.
+   Deliberately NOT uppercase: Yuji Boku's capital-only Latin forms are far
+   more ornamented than its lowercase, closer to display flourishes than
+   letters, and "MISSION CONTROL" set that way was genuinely hard to read at
+   menu size — tested side by side before choosing. Tracking is tight (not
+   the wide 0.18em the old uppercase sans used) so adjacent letters read as
+   one continuous brush gesture instead of separate stamped glyphs. */
 .samurai-menu a {
   position: relative;
   display: inline-block;
   width: fit-content;
-  padding: 0.3em 0.2em;
-  font-family: 'Montserrat', 'Inter', system-ui, sans-serif;
-  font-weight: 300;
-  font-size: clamp(14px, 1.55vw, 21px);
-  line-height: 1.2;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgba(235, 235, 230, 0.75);
+  padding: 0.22em 0.2em;
+  font-family: 'Yuji Boku', 'Inter', system-ui, sans-serif;
+  font-weight: 400;
+  font-size: clamp(17px, 2.05vw, 27px);
+  line-height: 1.3;
+  letter-spacing: 0.015em;
+  color: rgba(235, 235, 230, 0.82);
   text-decoration: none;
   text-shadow: 0 1px 12px rgba(6, 14, 16, 0.55);
   -webkit-tap-highlight-color: transparent;
@@ -214,8 +219,11 @@
 
 @media (max-width: 760px) {
   .samurai-ui { justify-content: flex-end; padding-bottom: clamp(26px, 7vh, 62px); }
-  .samurai-menu { max-width: 100%; gap: clamp(4px, 1.2vh, 10px); }
-  .samurai-menu a { font-size: clamp(13px, 4.2vw, 18px); }
+  .samurai-menu { max-width: 100%; gap: clamp(5px, 1.4vh, 12px); }
+  /* Floor raised from the old uppercase sans's 13px — Yuji Boku's brush
+     detail (the flourish on capitals, the stroke taper) starts to mush
+     below ~17px. Tested at 17px against the shortest real menu items. */
+  .samurai-menu a { font-size: clamp(17px, 4.8vw, 22px); }
 }
 
 /* Short landscape phones have no room for a nine-item column, so it wraps. */
@@ -226,7 +234,7 @@
     max-width: min(78vw, 720px);
     gap: 0 clamp(20px, 4vw, 52px);
   }
-  .samurai-menu a { font-size: clamp(12px, 1.5vw, 17px); }
+  .samurai-menu a { font-size: clamp(16px, 1.8vw, 21px); }
 }
 
 /* Reduced motion: no wipe, the end state applies at once; the effect stays. */
