@@ -2805,6 +2805,15 @@ def kv_set(key, value):
             cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?,?)", (key, value))
 
 
+def kv_delete(key) -> bool:
+    """Remove a kv_store row. Returns True if a row was actually deleted."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(f"DELETE FROM kv_store WHERE key = {ph}", (key,))
+        return cur.rowcount > 0
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # MISSION CONTROL — gamified AI-agent ecosystem (agents, logs, battles, missions)
 # Self-initialising, same pattern as supplements/focus: idempotent CREATE on
