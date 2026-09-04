@@ -946,6 +946,16 @@ def samurai_theme():
     return render_template("samurai.html", active="samurai")
 
 
+# Cosmos's sibling of /samurai-theme: the same nine-item menu and navigation
+# contract, rendered over the Gargantua lensing shader instead of the grass
+# field. Persistent (you can come back to it from the logo), not a one-shot
+# entrance — the pre-dashboard black-hole animation on /command is separate and
+# unchanged.
+@app.route("/cosmos-theme")
+def cosmos_theme():
+    return render_template("cosmos.html", active="cosmos")
+
+
 @app.route("/gym")
 def gym():
     return render_template("gym.html", active="gym", active_tab="gym")
