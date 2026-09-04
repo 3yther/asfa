@@ -176,10 +176,7 @@ _PUBLIC_ENDPOINTS = {"login", "static", "mission_control_health", "api_system_he
                      "login_guest", "portfolio", "cv_download",
                      # Magic-link sign-in: both legs happen before a session
                      # exists, same as /login itself.
-                     "login_email_request", "login_magic",
-                     # TEMPORARY recovery route — see its own definition. Gated
-                     # by ADMIN_RECOVERY_TOKEN, not a session, by design.
-                     "admin_clear_password_override"}
+                     "login_email_request", "login_magic"}
 
 # Read-only API keys let external clients (the MCP server) reach the endpoints
 # below without the session passphrase — but ONLY these, and only via GET/HEAD.
@@ -259,27 +256,6 @@ def _verify_password(candidate: str) -> bool:
 def _set_password(new_password: str) -> None:
     """Persist a new passphrase as a salted hash (overrides the env var)."""
     db.kv_set(_PASSWORD_HASH_KEY, generate_password_hash(new_password))
-
-
-# ── TEMPORARY: password-override recovery route ─────────────────────────────────
-# One-time-use. A stored kv_store override from a past Settings change is
-# silently winning over APP_PASSWORD (see _verify_password above) and nobody
-# currently knows what that stored passphrase is, which is an unrecoverable
-# lockout without DB access. This route clears just that one row so login
-# falls back to APP_PASSWORD. Gated by ADMIN_RECOVERY_TOKEN (a one-off random
-# value, set directly on Railway, never committed) rather than the session
-# passphrase — the whole point is to work when the passphrase is unusable.
-# DELETE THIS ROUTE (and the Railway var) once used — see chat for removal.
-@app.route("/admin/clear-password-override", methods=["POST"])
-def admin_clear_password_override():
-    expected = os.environ.get("ADMIN_RECOVERY_TOKEN", "")
-    provided = request.headers.get("X-Admin-Token", "")
-    if not expected or not hmac.compare_digest(provided, expected):
-        return jsonify({"error": "forbidden"}), 403
-    had_override = db.kv_delete(_PASSWORD_HASH_KEY)
-    db.log_audit("auth", "password_override_cleared", "success",
-                 reason="manual recovery — stored passphrase override removed")
-    return jsonify({"ok": True, "override_was_present": had_override})
 
 
 def _register_session():
