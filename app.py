@@ -564,6 +564,16 @@ def login():
             # Record this login in the server-side session registry so it shows
             # up under Active Sessions and can be revoked from another device.
             _register_session()
+            # Only the default landing (no deep link the user was trying to
+            # reach) is subject to the entrance-theme choice — a bookmarked
+            # or shared link (?next=/gym) always wins. Cosmos plays inline on
+            # /command itself (unchanged, gated by entrance_theme there); only
+            # 'samurai' needs an actual redirect, to its own full-page route.
+            # The entry=1 flag marks this as a login-originated visit so the
+            # samurai page knows to play its slash transition — it never
+            # fires on a plain navigation to /samurai-theme.
+            if next_url == "/" and db.get_entrance_theme(db.DEFAULT_USER_ID) == "samurai":
+                return redirect(url_for("samurai_theme", entry=1))
             return redirect(next_url)
         try:
             failures = db.record_auth_failure(ip)
@@ -716,10 +726,13 @@ def command():
         active="command",
         google_connected=is_authenticated(),
         spotify_connected=spotify.is_connected(),
-        # Global toggle (Settings → Display & Preferences). When off, the Cosmos
-        # entrance overlay is not rendered at all, so login lands straight on the
-        # dashboard with no flash. See templates/command.html.
-        cosmos_enabled=db.get_cosmos_enabled(db.DEFAULT_USER_ID),
+        # Entrance theme (Settings → Display & Preferences). Only 'cosmos'
+        # means anything to this template — it gates the inline black-hole
+        # overlay, unchanged from before. 'samurai' never reaches /command
+        # directly (login redirects it to /samurai-theme instead; see
+        # login()); 'none' and 'samurai' both just render the plain
+        # dashboard here. See templates/command.html.
+        entrance_theme=db.get_entrance_theme(db.DEFAULT_USER_ID),
     )
 
 
@@ -928,19 +941,23 @@ def api_settings_notifications():
 
 
 # ── Settings: Display & Preferences ─────────────────────────────────────────────
-# Global toggle for the Cosmos entrance screen (cinematic black-hole landing).
-# When OFF, the command page skips the overlay server-side and lands straight on
-# the dashboard on every device. Default ON. Auth-gated + CSRF like every write.
+# Which entrance plays on login: 'none' | 'cosmos' | 'samurai'. Cosmos plays
+# inline on /command itself (unchanged); samurai redirects to its own full
+# page (see login()); none skips straight to the dashboard. Default 'cosmos'.
+# Auth-gated + CSRF like every write.
 
-@app.route("/api/settings/cosmos-enabled", methods=["GET", "POST"])
-def api_settings_cosmos_enabled():
-    """GET → {cosmos_enabled: bool}. POST {cosmos_enabled: bool} → persist and
-    echo the stored value."""
+@app.route("/api/settings/entrance-theme", methods=["GET", "POST"])
+def api_settings_entrance_theme():
+    """GET → {entrance_theme}. POST {entrance_theme} → persist and echo the
+    stored value, or 400 if the value isn't one of ENTRANCE_THEMES."""
     if request.method == "POST":
         d = request.get_json(silent=True) or {}
-        enabled = db.set_cosmos_enabled(db.DEFAULT_USER_ID, bool(d.get("cosmos_enabled")))
-        return jsonify({"cosmos_enabled": enabled})
-    return jsonify({"cosmos_enabled": db.get_cosmos_enabled(db.DEFAULT_USER_ID)})
+        theme = d.get("entrance_theme")
+        if theme not in db.ENTRANCE_THEMES:
+            return jsonify({"error": f"entrance_theme must be one of {list(db.ENTRANCE_THEMES)}"}), 400
+        saved = db.set_entrance_theme(db.DEFAULT_USER_ID, theme)
+        return jsonify({"success": True, "entrance_theme": saved})
+    return jsonify({"entrance_theme": db.get_entrance_theme(db.DEFAULT_USER_ID)})
 
 
 # ── Settings: Privacy & Account (Phase 2) ───────────────────────────────────────

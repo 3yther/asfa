@@ -282,40 +282,62 @@
     padding:8px 12px;cursor:pointer;font-family:inherit;font-size:13px;`;
 
   // ── Display & Preferences ───────────────────────────────────────────────────
-  // Global toggle for the Cosmos entrance screen (the cinematic black-hole
-  // landing on the command page). Saves immediately on change; the command page
-  // reads the same setting server-side and skips the overlay when it's off.
+  // Entrance theme: what plays on login. Saves immediately on change (the
+  // choice itself is instant); the command page reads the same setting
+  // server-side to gate the Cosmos overlay, and login() reads it to decide
+  // whether to redirect to /samurai-theme — both take effect next login, not
+  // on the running session, so the copy below says so rather than implying
+  // an instant visual change.
   (function initDisplayPrefs() {
     const container = document.getElementById("display-prefs-container");
     if (!container) return;
 
-    function render(enabled) {
+    const THEMES = [
+      ["none", "None", "Skip to dashboard"],
+      ["cosmos", "Cosmos", "Cinematic black-hole entrance"],
+      ["samurai", "Samurai", "Ghost of Tsushima style"],
+    ];
+
+    function render(current) {
       container.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between;
-          gap:12px;padding:7px 0;">
-          <span>
-            <span style="color:#cfe;font-size:13px;display:block;">Cosmos Entrance Screen</span>
-            <span style="color:${DIM};font-size:12px;">Show welcome animation on login (all devices)</span>
-          </span>
-          <span>${toggle("cosmos-enabled", enabled)}</span>
+        <div style="padding:7px 0;">
+          <span style="color:#cfe;font-size:13px;display:block;">Entrance Theme</span>
+          <span style="color:${DIM};font-size:12px;display:block;margin-bottom:10px;"
+                title="This will apply on your next login">Applies on your next login</span>
+          ${THEMES.map(([value, label, desc]) => `
+            <label style="display:flex;align-items:flex-start;gap:9px;padding:6px 0;cursor:pointer;">
+              <input type="radio" name="entrance-theme" value="${value}"
+                     ${value === current ? "checked" : ""}
+                     style="margin-top:3px;width:16px;height:16px;accent-color:${CYAN};cursor:pointer;">
+              <span>
+                <span style="color:#cfe;font-size:13px;">${esc(label)}</span>
+                <span style="color:${DIM};font-size:12px;"> — ${esc(desc)}</span>
+                ${value === current
+                  ? `<span style="color:${GREEN};font-size:11px;margin-left:6px;">Active (next login)</span>`
+                  : ""}
+              </span>
+            </label>`).join("")}
         </div>`;
 
-      document.getElementById("cosmos-enabled").addEventListener("change", async (e) => {
-        const on = e.target.checked;
-        try {
-          const r = await apiSend("/api/settings/cosmos-enabled", "POST",
-            { cosmos_enabled: on });
-          if (r && typeof r.cosmos_enabled === "boolean") e.target.checked = r.cosmos_enabled;
-          toast("Preference saved", GREEN);
-        } catch (err) {
-          e.target.checked = !on;  // revert the visual on failure
-          toast("Could not save: " + esc(err.message || err), RED);
-        }
+      container.querySelectorAll('input[name="entrance-theme"]').forEach((input) => {
+        input.addEventListener("change", async (e) => {
+          const chosen = e.target.value;
+          const label = THEMES.find(([v]) => v === chosen)[1];
+          try {
+            const r = await apiSend("/api/settings/entrance-theme", "POST",
+              { entrance_theme: chosen });
+            render(r.entrance_theme);
+            toast(`Entrance theme updated to ${label}`, GREEN);
+          } catch (err) {
+            render(current);  // revert the visual on failure
+            toast("Could not save: " + esc(err.message || err), RED);
+          }
+        });
       });
     }
 
-    apiGet("/api/settings/cosmos-enabled")
-      .then((r) => render(!!r.cosmos_enabled))
+    apiGet("/api/settings/entrance-theme")
+      .then((r) => render(r.entrance_theme || "cosmos"))
       .catch((e) => {
         container.innerHTML = `<p style="color:${RED};">Error: ${esc(e.message || e)}</p>`;
       });
