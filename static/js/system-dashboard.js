@@ -300,8 +300,8 @@
 
     function render(current) {
       container.innerHTML = `
-        <div style="padding:7px 0;">
-          <span style="color:#cfe;font-size:13px;display:block;">Entrance Theme</span>
+        <fieldset style="border:none;margin:0;padding:7px 0;">
+          <legend style="color:#cfe;font-size:13px;padding:0;margin-bottom:2px;">Entrance Theme</legend>
           <span style="color:${DIM};font-size:12px;display:block;margin-bottom:10px;"
                 title="This will apply on your next login">Applies on your next login</span>
           ${THEMES.map(([value, label, desc]) => `
@@ -317,7 +317,7 @@
                   : ""}
               </span>
             </label>`).join("")}
-        </div>`;
+        </fieldset>`;
 
       container.querySelectorAll('input[name="entrance-theme"]').forEach((input) => {
         input.addEventListener("change", async (e) => {
