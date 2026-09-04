@@ -26,4 +26,29 @@
   --orb-glow:      rgba(34, 211, 238, 0.65);
   --line:          #1B2734;
   --line-bright:   #294057;
+
+  /* Surface tokens. These four back the chrome/raised/inset/scrim fills that
+     style.css previously hardcoded as dark rgba() literals — invisible to the
+     theme system, so a light theme stayed dark no matter what the palette
+     said. Values here reproduce the original literals, so the cyberpunk look
+     is unchanged; samurai.css flips them. */
+  --surface-chrome: rgba(0, 4, 8, 0.94);    /* header, navs, status/mission bars */
+  --surface-raised: rgba(0, 4, 12, 0.97);   /* toasts, notif panel, banners */
+  --surface-inset:  rgba(0, 0, 0, 0.35);    /* terminal, article + draft wells */
+  --surface-scrim:  rgba(0, 4, 8, 0.78);    /* full-screen dim behind modals */
+
+  /* Accent channels as bare "r,g,b" triples, for the ~166 rgba() glows,
+     hairlines and tints in style.css that need a per-call alpha. Same
+     technique the orb already used (--orb-rgb). These reproduce the exact
+     literals they replaced, so cyberpunk renders identically to before. */
+  --primary-rgb:   0, 217, 255;
+  --cyan-rgb:      34, 211, 238;
+  --purple-rgb:    124, 58, 237;
+  --magenta-rgb:   255, 0, 110;
+  /* Cool slate neutral used for hairlines/labels in the page-specific sheets. */
+  --neutral-rgb:   140, 170, 200;
+  /* Foreground ink channel. On the dark themes this is white — the page sheets
+     wrote rgba(255,255,255,a) directly for card text, which turns invisible on
+     a light ground, so it has to be theme-driven. */
+  --fg-rgb:        255, 255, 255;
 }

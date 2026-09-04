@@ -6,8 +6,8 @@
 (function () {
   "use strict";
 
-  const COLORS = { healthy: "#00ff88", warning: "#ffcc00", critical: "#ff4455" };
-  function colorFor(status) { return COLORS[status] || "#88aaff"; }
+  const COLORS = { healthy: "var(--green)", warning: "var(--amber)", critical: "var(--red)" };
+  function colorFor(status) { return COLORS[status] || "var(--muted)"; }
 
   // Server strings here include raw exception text — escape everything.
   function esc(s) {
@@ -28,16 +28,16 @@
     const dbColor = colorFor(db.status);
     document.getElementById("system-health-container").innerHTML = `
       <div style="font-size:24px;font-weight:700;color:${statusColor};">● ${esc(String(health.status).toUpperCase())}</div>
-      <p style="font-size:12px;color:#88a;">Last checked: ${new Date(health.timestamp).toLocaleTimeString()}</p>
+      <p style="font-size:12px;color:var(--muted);">Last checked: ${new Date(health.timestamp).toLocaleTimeString()}</p>
       <p style="color:${dbColor};">Database: ${esc(db.status || "?")}${db.error ? " — " + esc(db.error) : ""}</p>
-      <p style="font-size:12px;color:#88a;">${db.agents_tracked != null ? esc(db.agents_tracked) + " agents tracked" : ""}</p>
+      <p style="font-size:12px;color:var(--muted);">${db.agents_tracked != null ? esc(db.agents_tracked) + " agents tracked" : ""}</p>
     `;
 
     // ── Backups ──────────────────────────────────────────────────────────
     const bk = health.backups || {};
     document.getElementById("backup-status").innerHTML = `
       <p style="color:${colorFor(bk.status)};">${esc(bk.message || bk.status || "unknown")}</p>
-      <p style="font-size:12px;color:#88a;">Last: ${esc(bk.last_backup || "Never")}</p>
+      <p style="font-size:12px;color:var(--muted);">Last: ${esc(bk.last_backup || "Never")}</p>
     `;
 
     // ── Scheduled jobs ───────────────────────────────────────────────────
@@ -46,7 +46,7 @@
       ? `<p style="font-size:12px;color:${COLORS.critical};">Missing: ${esc(jobs.missing.join(", "))}</p>` : "";
     document.getElementById("scheduled-jobs").innerHTML = `
       <p style="color:${colorFor(jobs.status)};">${Number(jobs.total_jobs) || 0} jobs scheduled</p>
-      <p style="font-size:12px;color:#88a;">${esc(jobs.message || "")}</p>
+      <p style="font-size:12px;color:var(--muted);">${esc(jobs.message || "")}</p>
       ${missing}
     `;
 
@@ -90,7 +90,7 @@
 (function () {
   "use strict";
 
-  const GREEN = "#00ff88", AMBER = "#ffcc00", DIM = "#88aaff";
+  const GREEN = "var(--green)", AMBER = "var(--amber)", DIM = "var(--muted)";
   const container = document.getElementById("system-clock-container");
   if (!container) return;
 
@@ -150,12 +150,12 @@
       <div id="clk-real" style="font-size:20px;font-weight:700;color:${GREEN};margin:2px 0 10px;">—</div>
       <p style="font-weight:600;color:${statusColor};margin:0 0 10px;">${sim ? "◉" : "●"} ${statusText}</p>
       <input type="datetime-local" id="clk-input" value="${inputValue(state.simulated_time)}"
-        style="width:100%;box-sizing:border-box;background:#0a0f1a;color:#cfe;border:1px solid #244;
+        style="width:100%;box-sizing:border-box;background:var(--panel-2);color:var(--text);border:1px solid var(--line-bright);
                border-radius:6px;padding:8px;font-family:inherit;margin-bottom:10px;">
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button id="clk-set" style="flex:1;min-width:110px;background:#123;color:${AMBER};
+        <button id="clk-set" style="flex:1;min-width:110px;background:var(--surface-inset);color:${AMBER};
           border:1px solid ${AMBER};border-radius:6px;padding:8px;cursor:pointer;font-family:inherit;">Set Clock</button>
-        <button id="clk-reset" style="flex:1;min-width:110px;background:#123;color:${GREEN};
+        <button id="clk-reset" style="flex:1;min-width:110px;background:var(--surface-inset);color:${GREEN};
           border:1px solid ${GREEN};border-radius:6px;padding:8px;cursor:pointer;font-family:inherit;">Reset to Now</button>
       </div>
       <p id="clk-msg" style="font-size:12px;color:${DIM};min-height:1em;margin:8px 0 0;"></p>
@@ -189,7 +189,7 @@
       // Nudge the shared nav clock (nav.html) to re-read the override now.
       window.dispatchEvent(new CustomEvent("asfa:clock-changed"));
       msg("Clock set — new logs will backfill here.", AMBER);
-    } catch (e) { msg("Failed: " + esc(e.message || e), "#ff4455"); }
+    } catch (e) { msg("Failed: " + esc(e.message || e), "var(--red)"); }
   }
 
   async function onReset() {
@@ -200,13 +200,13 @@
       render();
       window.dispatchEvent(new CustomEvent("asfa:clock-changed"));
       msg("Back on real time.", GREEN);
-    } catch (e) { msg("Failed: " + esc(e.message || e), "#ff4455"); }
+    } catch (e) { msg("Failed: " + esc(e.message || e), "var(--red)"); }
   }
 
   apiGet("/api/settings/current-time")
     .then((r) => { state = r; render(); })
     .catch((e) => {
-      container.innerHTML = `<p style="color:#ff4455;">Error: ${esc(e.message || e)}</p>`;
+      container.innerHTML = `<p style="color:var(--red);">Error: ${esc(e.message || e)}</p>`;
     });
 })();
 
@@ -219,8 +219,11 @@
 (function () {
   "use strict";
 
-  const CYAN = "#00d9ff", GREEN = "#00ff88", AMBER = "#ffcc00",
-        RED = "#ff4455", DIM = "#88aaff";
+  // Theme-driven rather than literal: these are interpolated into inline
+  // styles, which are a CSS context, so var() resolves normally. Hardcoding
+  // them left the Settings controls cyan-on-near-black under every theme.
+  const CYAN = "var(--primary)", GREEN = "var(--green)", AMBER = "var(--amber)",
+        RED = "var(--red)", DIM = "var(--muted)";
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g,
@@ -255,7 +258,7 @@
     if (!el) return;
     el.textContent = text;
     el.style.borderColor = color || CYAN;
-    el.style.color = "#e6f6ff";
+    el.style.color = "var(--text)";
     el.style.opacity = "1";
     el.style.transform = "translateX(-50%) translateY(0)";
     if (toastTimer) clearTimeout(toastTimer);
@@ -268,17 +271,17 @@
   // Small reusable controls ---------------------------------------------------
   function row(label, controlHtml) {
     return `<div style="display:flex;align-items:center;justify-content:space-between;
-      gap:12px;padding:7px 0;border-bottom:1px solid #14202e;">
-      <span style="color:#cfe;font-size:13px;">${esc(label)}</span>
+      gap:12px;padding:7px 0;border-bottom:1px solid var(--line);">
+      <span style="color:var(--text);font-size:13px;">${esc(label)}</span>
       <span>${controlHtml}</span></div>`;
   }
   function toggle(id, on) {
     return `<input type="checkbox" id="${id}" ${on ? "checked" : ""}
       style="width:18px;height:18px;accent-color:${CYAN};cursor:pointer;">`;
   }
-  const inputStyle = `background:#0a0f1a;color:#cfe;border:1px solid #244;border-radius:6px;
+  const inputStyle = `background:var(--panel-2);color:var(--text);border:1px solid var(--line-bright);border-radius:6px;
     padding:6px 8px;font-family:inherit;font-size:13px;`;
-  const btnStyle = (c) => `background:#123;color:${c};border:1px solid ${c};border-radius:6px;
+  const btnStyle = (c) => `background:var(--surface-inset);color:${c};border:1px solid ${c};border-radius:6px;
     padding:8px 12px;cursor:pointer;font-family:inherit;font-size:13px;`;
 
   // ── Display & Preferences ───────────────────────────────────────────────────
@@ -301,7 +304,7 @@
     function render(current) {
       container.innerHTML = `
         <fieldset style="border:none;margin:0;padding:7px 0;">
-          <legend style="color:#cfe;font-size:13px;padding:0;margin-bottom:2px;">Entrance Theme</legend>
+          <legend style="color:var(--text);font-size:13px;padding:0;margin-bottom:2px;">Entrance Theme</legend>
           <span style="color:${DIM};font-size:12px;display:block;margin-bottom:10px;"
                 title="This will apply on your next login">Applies on your next login</span>
           ${THEMES.map(([value, label, desc]) => `
@@ -310,7 +313,7 @@
                      ${value === current ? "checked" : ""}
                      style="margin-top:3px;width:16px;height:16px;accent-color:${CYAN};cursor:pointer;">
               <span>
-                <span style="color:#cfe;font-size:13px;">${esc(label)}</span>
+                <span style="color:var(--text);font-size:13px;">${esc(label)}</span>
                 <span style="color:${DIM};font-size:12px;"> — ${esc(desc)}</span>
                 ${value === current
                   ? `<span style="color:${GREEN};font-size:11px;margin-left:6px;">Active (next login)</span>`
@@ -375,7 +378,7 @@
           </select>`)}
         ${row("Quiet hours", toggle("ntf-quiet-enabled", p.quiet_hours_enabled))}
         <div id="ntf-quiet-times" style="display:${p.quiet_hours_enabled ? "flex" : "none"};
-          gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid #14202e;">
+          gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);">
           <span style="color:${DIM};font-size:12px;">From</span>
           <input type="time" id="ntf-quiet-start" value="${esc(p.quiet_hours_start)}" style="${inputStyle}">
           <span style="color:${DIM};font-size:12px;">to</span>
@@ -446,9 +449,9 @@
         return;
       }
       container.innerHTML = sessions.map((s) => `
-        <div style="padding:9px 0;border-bottom:1px solid #14202e;">
+        <div style="padding:9px 0;border-bottom:1px solid var(--line);">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-            <span style="color:#cfe;font-size:13px;font-weight:600;">${esc(s.ip)}</span>
+            <span style="color:var(--text);font-size:13px;font-weight:600;">${esc(s.ip)}</span>
             ${s.is_current
               ? `<span style="color:${GREEN};border:1px solid ${GREEN};border-radius:4px;
                    padding:2px 7px;font-size:11px;">This device</span>`
