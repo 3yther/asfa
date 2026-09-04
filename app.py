@@ -795,6 +795,16 @@ def system():
     return render_template("system.html", active="system")
 
 
+# ── Samurai entrance screen ────────────────────────────────────────────────────
+# Standalone cinematic landing (Three.js grass field + katana). Session-gated
+# like every other page; it renders its own full-screen layout rather than the
+# shared nav, so it deliberately skips nav.html.
+
+@app.route("/samurai-theme")
+def samurai_theme():
+    return render_template("samurai.html", active="samurai")
+
+
 @app.route("/gym")
 def gym():
     return render_template("gym.html", active="gym", active_tab="gym")
