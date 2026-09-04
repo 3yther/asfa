@@ -327,6 +327,14 @@
             const r = await apiSend("/api/settings/entrance-theme", "POST",
               { entrance_theme: chosen });
             render(r.entrance_theme);
+            // Instant color-scheme preview on THIS page, no reload — every
+            // other page picks up the right palette server-side on its own
+            // next render (see the ui_theme context processor in app.py),
+            // this just avoids making the user leave Settings to see it.
+            const themeLink = document.getElementById("theme-css");
+            if (themeLink) {
+              themeLink.href = `/static/css/themes/${r.entrance_theme === "samurai" ? "samurai" : "cyberpunk"}.css`;
+            }
             toast(`Entrance theme updated to ${label}`, GREEN);
           } catch (err) {
             render(current);  // revert the visual on failure

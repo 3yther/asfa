@@ -1,0 +1,28 @@
+/* ── Samurai theme ─────────────────────────────────────────────────────────
+   Cream/gold/silver identity over a warm charcoal base — not a light-mode
+   flip. The whole HUD is built on glass panels, glows, and shadows tuned for
+   a dark ground (see style.css); swapping to a literal white background
+   would fight that design everywhere, not just the accent colors. Same
+   surface-first idea the brief's own example used (--bg-dark: #1a1a1a, dark
+   gray, not white). Semantic status colors are intentionally NOT overridden
+   here — see cyberpunk.css. */
+:root {
+  --bg:            #14120f;
+  --card-bg:       rgba(26, 24, 20, 0.55);
+  --card-bg-solid: rgba(26, 24, 20, 0.65);
+  --primary:       #f5f5f0;
+  --primary-hi:    #ffffff;
+  --cyan:          #d4af37;
+  --cyan-hi:       #e8c766;
+  --cyan-glow:     rgba(212, 175, 55, .30);
+  --magenta:       #c0c0c0;
+  --purple:        #8a7a5c;
+  --gold:          #d4af37;
+  --text:          #f0ece0;
+  --text-sec:      #d8d0bd;
+  --muted:         #8a8478;
+  --grad:          linear-gradient(135deg, #8a7a5c, #d4af37);
+  --orb-glow:      rgba(212, 175, 55, 0.55);
+  --line:          #2a2620;
+  --line-bright:   #453f34;
+}

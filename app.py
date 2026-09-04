@@ -523,6 +523,22 @@ def _inject_csrf_token():
     return {"csrf_token": session.get("csrf_token", "")}
 
 
+# ── Global UI theme ──────────────────────────────────────────────────────────
+# The entrance-theme setting also drives the app-wide colour palette (see
+# static/css/themes/): 'samurai' gets cream/gold, everything else ('none',
+# 'cosmos' — and guests/anonymous visitors, who have no setting) gets the
+# default 'cyberpunk' palette. Computed here rather than per-route so every
+# template that links css/style.css picks it up automatically. Guarded on
+# `authed` to skip the DB lookup on public/guest pages, where it's always
+# 'cyberpunk' anyway.
+@app.context_processor
+def _inject_ui_theme():
+    theme = "cyberpunk"
+    if session.get("authed"):
+        theme = "samurai" if db.get_entrance_theme(db.DEFAULT_USER_ID) == "samurai" else "cyberpunk"
+    return {"ui_theme": theme}
+
+
 # ── Login brute-force lockout ──────────────────────────────────────────────────
 # Persistent (DB-backed) failure tracking on top of the 5/min limiter — the
 # limiter's in-memory counters die on every Railway restart. 10 failures from

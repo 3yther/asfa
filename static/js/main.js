@@ -175,6 +175,17 @@ function setStatusDate() {
   el.textContent = d.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
 }
 
+// Reads the active theme's --primary/--purple (set by static/css/themes/*.css)
+// as "r,g,b" triples so the orb's canvas-drawn particles/glow retint with the
+// rest of the UI — canvas fillStyle/strokeStyle can't reference CSS custom
+// properties directly, unlike everything else themed via style.css.
+function themedRgb(varName, fallbackHex) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  const hex = /^#[0-9a-fA-F]{6}$/.test(v) ? v : fallbackHex;
+  const n = parseInt(hex.slice(1), 16);
+  return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+}
+
 // ── Orb canvas particle field ──────────────────────────────────────────────────
 function initOrbCanvas() {
   const canvas = document.getElementById("orb-canvas");
@@ -183,6 +194,8 @@ function initOrbCanvas() {
   const W = canvas.width;
   const H = canvas.height;
   const CX = W / 2, CY = H / 2, R = W / 2;
+  const PRIMARY = themedRgb("--primary", "#00d9ff");
+  const ACCENT2 = themedRgb("--purple", "#7C3AED");
 
   const NODES = 24;
   const nodes = Array.from({ length: NODES }, () => randomNode(CX, CY, R));
@@ -218,9 +231,9 @@ function initOrbCanvas() {
 
     // Orb background
     const grad = ctx.createRadialGradient(CX, CY, 0, CX, CY, R);
-    grad.addColorStop(0,   "rgba(34,211,238,0.32)");
-    grad.addColorStop(0.5, "rgba(79,70,229,0.18)");
-    grad.addColorStop(1,   "rgba(6,182,212,0.08)");
+    grad.addColorStop(0,   `rgba(${PRIMARY},0.32)`);
+    grad.addColorStop(0.5, `rgba(${ACCENT2},0.18)`);
+    grad.addColorStop(1,   `rgba(${PRIMARY},0.08)`);
     ctx.save();
     ctx.beginPath();
     ctx.arc(CX, CY, R, 0, Math.PI * 2);
@@ -249,7 +262,7 @@ function initOrbCanvas() {
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
-      ctx.strokeStyle = `rgba(6,182,212,${alpha * pulse})`;
+      ctx.strokeStyle = `rgba(${PRIMARY},${alpha * pulse})`;
       ctx.lineWidth = 0.6;
       ctx.stroke();
     }
@@ -260,7 +273,7 @@ function initOrbCanvas() {
       const pulse = 0.5 + 0.5 * Math.sin(frame * 0.04 + i * 0.7);
       ctx.beginPath();
       ctx.arc(n.x, n.y, 1.2 + pulse * 0.6, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(103,232,249,${0.55 + pulse * 0.4})`;
+      ctx.fillStyle = `rgba(${PRIMARY},${0.55 + pulse * 0.4})`;
       ctx.fill();
     }
 
@@ -270,7 +283,7 @@ function initOrbCanvas() {
       const rippleA = 0.35 * (1 - rippleR / 80);
       ctx.beginPath();
       ctx.arc(CX, CY, rippleR, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(124,58,237,${rippleA})`;
+      ctx.strokeStyle = `rgba(${ACCENT2},${rippleA})`;
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
@@ -288,6 +301,7 @@ function initOrbDust() {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   const W = canvas.width, H = canvas.height;
+  const PRIMARY = themedRgb("--primary", "#00d9ff");
   const N = 34;
   const motes = Array.from({ length: N }, () => ({
     x: Math.random() * W,
@@ -308,7 +322,7 @@ function initOrbDust() {
       const alpha = m.a * (0.6 + 0.4 * Math.sin(m.tw));
       ctx.beginPath();
       ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(103,232,249,${alpha})`;
+      ctx.fillStyle = `rgba(${PRIMARY},${alpha})`;
       ctx.fill();
     }
     requestAnimationFrame(draw);

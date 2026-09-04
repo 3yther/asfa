@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<link id="theme-css" rel="stylesheet" href="{{ url_for('static', filename='css/themes/' + ui_theme + '.css') }}">
 <script src="{{ url_for('static', filename='js/decode.js') }}" defer></script>
 <style>
   .gp-screen { max-width: 1100px; margin: 0 auto; padding: 20px 16px 120px; }

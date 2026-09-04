@@ -1,0 +1,29 @@
+/* ── Cyberpunk theme (default) ────────────────────────────────────────────
+   Restates style.css's own baseline values explicitly, rather than relying
+   on "whatever's undefined" — this file is the canonical definition of what
+   "cyberpunk" means, symmetrical with samurai.css. Loaded after style.css,
+   so an identical :root here is a no-op today but stays authoritative if
+   style.css's defaults ever drift. Only brand/identity + surface colors are
+   themed; semantic status colors (--green/--red/--warn/--online/--alert)
+   are deliberately left alone in both theme files — "error" should still
+   read as an error regardless of theme. See samurai.css for the pairing. */
+:root {
+  --bg:            #000408;
+  --card-bg:       rgba(9, 15, 24, 0.55);
+  --card-bg-solid: rgba(9, 15, 24, 0.6);
+  --primary:       #00d9ff;
+  --primary-hi:    #5fe6ff;
+  --cyan:          #3DE1F0;
+  --cyan-hi:       #67e8f9;
+  --cyan-glow:     rgba(61, 225, 240, .30);
+  --magenta:       #ff006e;
+  --purple:        #7C3AED;
+  --gold:          #d4af37;
+  --text:          #b0d9f5;
+  --text-sec:      #b0d9f5;
+  --muted:         #5b6b7a;
+  --grad:          linear-gradient(135deg, #1f6f88, #00d9ff);
+  --orb-glow:      rgba(34, 211, 238, 0.65);
+  --line:          #1B2734;
+  --line-bright:   #294057;
+}
