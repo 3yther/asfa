@@ -18,7 +18,6 @@ function supportsWebGL() {
 }
 
 function reveal() {
-  clearTimeout(window.__samuraiSafety);
   loader.classList.add('hidden');
   loader.addEventListener('transitionend', () => loader.remove(), { once: true });
 }
@@ -28,6 +27,16 @@ if (!supportsWebGL()) {
   fallback.classList.add('show');
   loader.classList.add('hidden');
 } else {
+  // Cancel the fallback safety net as soon as WebGL init has structurally
+  // succeeded — not inside reveal()'s rAF chain below. rAF is suspended
+  // outright in a backgrounded/inactive tab (e.g. a link opened without
+  // switching to it), so a tab that isn't focused within the first 9s of
+  // load would otherwise never clear the timeout in time: the static
+  // fallback (z-index 20) would then land on top of a scene that in fact
+  // rendered fine, permanently covering the menu (z-index 10) once the tab
+  // does come to the front. The loader's own reveal still waits for a real
+  // frame (below) — only the safety-net cancellation needed decoupling.
+  clearTimeout(window.__samuraiSafety);
   const app = new SamuraiScene(canvas).init();
 
   // Clouds: transparent, so Three's own opaque-then-transparent pass with
