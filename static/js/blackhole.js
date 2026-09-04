@@ -179,7 +179,12 @@
 
   // ── Weak-GPU / mobile detection → CSS fallback ──────────────────────────────
   function weakGPU() {
-    if (window.innerWidth < 768) return true;
+    // A zero width means layout hasn't run yet (this module can execute before
+    // first layout, and does when the tab starts hidden). That is not evidence
+    // of a weak GPU — treating it as one silently forced the CSS fallback on
+    // every load, so the lensing shader effectively never rendered.
+    const w = window.innerWidth || document.documentElement.clientWidth || 0;
+    if (w > 0 && w < 768) return true;
     if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "")) return true;
     try {
       const c = document.createElement("canvas");
@@ -210,186 +215,22 @@
     };
   }
 
-  // ── WebGL black hole (Three.js + raymarched lensing shader + bloom) ─────────
-  const VERT = "void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }";
-
-  const FRAG = [
-    "precision highp float;",
-    "uniform vec2 uRes; uniform float uTime; uniform float uCamDist;",
-    "uniform float uPulse; uniform float uFlash;",
-    "",
-    "float hash21(vec2 p){ p=fract(p*vec2(123.34,345.45)); p+=dot(p,p+34.345); return fract(p.x*p.y); }",
-    "float hash31(vec3 p){ p=fract(p*0.1031); p+=dot(p,p.yzx+33.33); return fract((p.x+p.y)*p.z); }",
-    "float vnoise(vec2 p){ vec2 i=floor(p), f=fract(p); float a=hash21(i),b=hash21(i+vec2(1.0,0.0)),",
-    "  c=hash21(i+vec2(0.0,1.0)),d=hash21(i+vec2(1.0,1.0)); vec2 u=f*f*(3.0-2.0*f);",
-    "  return mix(mix(a,b,u.x),mix(c,d,u.x),u.y); }",
-    "float fbm(vec2 p){ float s=0.0, a=0.5; for(int i=0;i<6;i++){ s+=a*vnoise(p); p=p*2.04+1.7; a*=0.5; } return s; }",
-    "",
-    // Thermal accretion disk: blackbody gradient + high-frequency turbulence.
-    "vec3 diskEmission(vec3 hit, float rr){",
-    "  float innerR=2.0, outerR=9.0;",
-    "  float tN=clamp((rr-innerR)/(outerR-innerR),0.0,1.0);",
-    "  vec3 hot=vec3(1.0,1.0,0.6);",        // inner ~10000K  #ffff99
-    "  vec3 mid=vec3(1.0,0.667,0.267);",    // mid   ~5000K   #ffaa44
-    "  vec3 cool=vec3(0.867,0.333,0.2);",   // outer ~3000K   #dd5533
-    "  vec3 c=mix(hot,mid,smoothstep(0.0,0.4,tN));",
-    "  c=mix(c,cool,smoothstep(0.4,1.0,tN));",
-    "  float ang=atan(hit.z,hit.x);",
-    "  float rot=uTime*0.45*(3.0/pow(rr,1.3));",          // differential (Keplerian) rotation
-    "  float sw=ang+rot;",
-    "  float warp=fbm(vec2(sw*1.5, rr*0.7));",            // domain-warped turbulence
-    "  float n1=fbm(vec2(sw*3.0+warp, rr*1.5));",
-    "  float n2=fbm(vec2(sw*9.0-rot, rr*4.0+warp*2.0));", // high-frequency filaments
-    "  float turb=pow(mix(n1,n2,0.5),1.4);",              // sharpen → filaments + dark gaps
-    "  float density=0.22+1.6*turb;",
-    "  float innerEdge=smoothstep(innerR+0.5, innerR+0.04, rr);",
-    "  float outerFade=smoothstep(outerR, outerR-3.0, rr);",
-    "  float temp=1.0-tN;",
-    "  float bright=(0.4+2.3*temp)*density*outerFade + innerEdge*2.0*temp;",
-    "  float dop=0.65+0.95*smoothstep(-1.0,1.0,sin(ang));", // Doppler beaming asymmetry
-    "  c=mix(c, vec3(1.0,0.96,0.82), 0.22*smoothstep(0.2,1.0,sin(ang)));",
-    "  return c*bright*dop;",
-    "}",
-    "",
-    // Dark space: sparse dim stars on a near-black background.
-    "vec3 starField(vec3 d){",
-    "  vec3 col=vec3(0.004,0.006,0.011);",
-    "  vec3 p=d*48.0; vec3 ip=floor(p); float h=hash31(ip);",
-    "  if(h>0.984){ float tw=0.5+0.5*sin(uTime*2.2+h*120.0); col+=vec3(0.6,0.72,0.95)*((h-0.984)/0.016)*tw*0.45; }",
-    "  return col;",
-    "}",
-    "",
-    "void main(){",
-    "  vec2 uv=(gl_FragCoord.xy-0.5*uRes)/uRes.y;",
-    "  vec3 ro=vec3(0.0,0.30,-uCamDist);",                 // near edge-on → dramatic lensing
-    "  vec3 fwd=normalize(-ro);",
-    "  vec3 rgt=normalize(cross(vec3(0.0,1.0,0.0),fwd));",
-    "  vec3 up=cross(fwd,rgt);",
-    "  vec3 dir=normalize(fwd + (uv.x*rgt + uv.y*up)*1.3);",
-    "  vec3 pos=ro;",
-    "  vec3 col=vec3(0.0);",
-    "  float minR=1e9; bool captured=false;",
-    "  const int STEPS=220; float rs=1.0; float G=1.5;",   // stronger bending, finer steps
-    "  for(int i=0;i<STEPS;i++){",
-    "    float r=length(pos); minR=min(minR,r);",
-    "    if(r<rs){ captured=true; break; }",                // fell past event horizon → stays black
-    "    if(r>24.0){ break; }",
-    "    float dt=clamp(r*0.08,0.02,0.40);",
-    "    vec3 toC=-pos/max(r,1e-3);",
-    "    dir=normalize(dir + toC*(G/(r*r))*dt);",            // gravitational deflection
-    "    vec3 npos=pos+dir*dt;",
-    "    if(pos.y*npos.y<0.0){",                             // disk-plane crossings (front + lensed far side over the top)
-    "      float h=pos.y/(pos.y-npos.y);",
-    "      vec3 hit=mix(pos,npos,h); float rr=length(hit.xz);",
-    "      if(rr>2.0 && rr<9.0){ col+=diskEmission(hit,rr); }",
-    "    }",
-    "    float axial=length(pos.xz);",                       // sharp cyan jets along the Y axis
-    "    if(abs(pos.y)>1.3 && axial<0.9){",
-    "      float jetR=0.16+0.05*abs(pos.y);",
-    "      float core=smoothstep(jetR, jetR*0.35, axial);",  // hard beam edge (not a halo)
-    "      float gate=smoothstep(1.3,1.7,abs(pos.y));",
-    "      float far=smoothstep(16.0,13.0,abs(pos.y));",      // extend far, fade the tip
-    "      float flick=0.55+0.5*vnoise(vec2(pos.y*1.5-uTime*5.0, axial*8.0));",
-    "      float side= pos.y>0.0 ? 1.0 : 0.82;",
-    "      col+=vec3(0.0,0.85,1.0)*core*gate*far*flick*side*dt*2.2;",
-    "    }",
-    "    pos=npos;",
-    "  }",
-    "  if(!captured){ col+=starField(dir); }",
-    "  float ring=pow(smoothstep(0.10,0.0,abs(minR-1.5)),1.5);", // thin sharp cyan photon ring
-    "  col+=vec3(0.25,0.9,1.0)*ring*2.0;",
-    "  col*=uPulse;",
-    "  col=mix(col,vec3(1.0),clamp(uFlash,0.0,1.0));",       // entry flash
-    "  gl_FragColor=vec4(max(col,vec3(0.0)),1.0);",          // linear HDR → OutputPass tonemaps/encodes
-    "}",
-  ].join("\n");
-
+  // ── WebGL black hole ────────────────────────────────────────────────────────
+  // The shader, framing and fall-in live in gargantua.js, shared with the
+  // /cosmos-theme menu screen so the two can't drift. Centred and framed at
+  // camDist 11 here (11.0 sits outside the disk's outer edge, so the whole
+  // silhouette plus the lensed far side fits; 6.0 put the camera inside the
+  // disk and blew out the framing).
   async function buildWebGL() {
-    const THREE = await import("three");
-    const { EffectComposer } = await import("three/addons/postprocessing/EffectComposer.js");
-    const { RenderPass } = await import("three/addons/postprocessing/RenderPass.js");
-    const { UnrealBloomPass } = await import("three/addons/postprocessing/UnrealBloomPass.js");
-    const { OutputPass } = await import("three/addons/postprocessing/OutputPass.js");
-
-    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    // ACES filmic tone mapping (applied by OutputPass) keeps the void dark and
-    // the disk contrasty instead of washing out. Modest exposure.
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.85;
-
-    // Trip the CSS fallback if the lensing shader fails to compile/link.
-    let shaderFailed = false;
-    renderer.debug.checkShaderErrors = true;
-    renderer.debug.onShaderError = function () { shaderFailed = true; };
-
-    const scene = new THREE.Scene();
-    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-    const buf = renderer.getDrawingBufferSize(new THREE.Vector2());
-    const uniforms = {
-      uRes: { value: new THREE.Vector2(buf.x, buf.y) },
-      uTime: { value: 0 },
-      uCamDist: { value: 12.0 },     // start far; arrival eases to 6
-      uPulse: { value: 1.0 },
-      uFlash: { value: 0.0 },
-    };
-    const mat = new THREE.ShaderMaterial({ uniforms, vertexShader: VERT, fragmentShader: FRAG });
-    scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
-
-    const composer = new EffectComposer(renderer);
-    composer.addPass(new RenderPass(scene, camera));
-    // Subtle bloom — only the hottest inner disk / photon ring / jet cores
-    // glow. (strength 0.35, radius 0.4, threshold 0.8.)
-    composer.addPass(new UnrealBloomPass(
-      new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.4, 0.8));
-    composer.addPass(new OutputPass());   // ACES tone map + linear→sRGB
-
-    renderer.compile(scene, camera);
-    if (shaderFailed) { try { renderer.dispose(); } catch (e) {} throw new Error("lensing shader compile failed"); }
-
-    stage.appendChild(renderer.domElement);
-
-    function resize() {
-      const w = window.innerWidth, h = window.innerHeight;
-      renderer.setSize(w, h); composer.setSize(w, h);
-      const b = renderer.getDrawingBufferSize(new THREE.Vector2());
-      uniforms.uRes.value.set(b.x, b.y);
-    }
-    window.addEventListener("resize", resize);
-
-    let running = true;
-    const clock = new THREE.Clock();
-    function frame() {
-      if (!running) return;
-      requestAnimationFrame(frame);
-      const t = clock.getElapsedTime();
-      uniforms.uTime.value = t;
-      uniforms.uPulse.value = 1.0 + 0.03 * Math.sin(t * (2.0 * Math.PI / 4.0)); // ~3% breathe / 4s
-      composer.render();
-    }
-    frame();
-
-    return {
-      type: "webgl",
-      arrival() {
-        // 11.0 sits outside the disk's outer edge (rr < 9.0 in diskEmission), so the
-        // whole Gargantua silhouette + lensed far side frames up. 6.0 put the camera
-        // inside the disk and blew out the framing.
-        if (reduce) { uniforms.uCamDist.value = 11.0; return; }
-        tween(uniforms.uCamDist.value, 11.0, 1300, easeOutBack, (v) => { uniforms.uCamDist.value = v; });
-      },
-      fallIn(cb) {
-        if (reduce) { uniforms.uFlash.value = 1.0; cb(); return; }
-        tween(uniforms.uCamDist.value, 1.3, 1500, easeInCubic, (v) => { uniforms.uCamDist.value = v; }, cb);
-        setTimeout(() => tween(0, 1, 260, (t) => t, (v) => { uniforms.uFlash.value = v; }), 1240);
-      },
-      stop() {
-        running = false;
-        window.removeEventListener("resize", resize);
-        try { renderer.dispose(); renderer.forceContextLoss(); } catch (e) {}
-      },
-    };
+    const { createGargantua } = await import("./gargantua.js");
+    return createGargantua({
+      container: stage,
+      centerX: 0.5,
+      camDist: 11.0,
+      reduce,
+      parallax: false,
+      bloom: [0.28, 0.34, 1.05],
+    });
   }
 
   // ── Build the black hole ASAP, in parallel with the warp ────────────────────

@@ -1,0 +1,158 @@
+/* ── Cosmos menu screen ──────────────────────────────────────────────────────
+   Sibling of samurai-theme.css: same spatial logic (centrepiece on one side,
+   menu on the other, brand top-left, caption bottom), different soul. The
+   black hole is pushed right-of-centre by the shader, so the menu column owns
+   the left third. */
+
+.cosmos-root {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+  background: #04060a;
+  color: #dfe7f5;
+  font-family: 'Orbitron', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* WebGL canvas host */
+.cosmos-stage { position: fixed; inset: 0; z-index: 0; }
+.cosmos-stage canvas { display: block; width: 100%; height: 100%; }
+
+/* Static stand-in when WebGL is unavailable — a plausible off-centre hole so
+   the composition survives even without the shader. */
+.cosmos-fallback {
+  position: fixed; inset: 0; z-index: 0; opacity: 0;
+  transition: opacity .6s ease;
+  background:
+    radial-gradient(circle at 62% 50%, #000 0 16%,
+      rgba(255,190,120,.85) 16.6%, rgba(255,225,190,.55) 18.5%,
+      rgba(210,140,70,.18) 24%, transparent 42%),
+    radial-gradient(ellipse 70% 3% at 62% 50%, rgba(255,205,150,.55), transparent 70%),
+    #04060a;
+}
+.cosmos-fallback.show { opacity: 1; }
+
+.cosmos-vignette {
+  position: fixed; inset: 0; z-index: 1; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, transparent 45%, rgba(0,0,0,.55) 100%);
+}
+
+/* Brand — matches the samurai mark's position and bracket treatment. */
+.cosmos-brand {
+  position: fixed;
+  top: clamp(18px, 3.4vw, 38px);
+  left: clamp(20px, 5vw, 64px);
+  z-index: 12;
+}
+.cosmos-logo {
+  font-family: 'Orbitron', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: clamp(13px, 1.5vw, 16px);
+  letter-spacing: .32em;
+  color: #e8eefb;
+  text-decoration: none;
+  text-shadow: 0 0 18px rgba(150,190,255,.35);
+}
+.cosmos-logo .br { color: rgba(190,215,255,.45); margin: 0 .18em; }
+.cosmos-logo:hover { color: #fff; text-shadow: 0 0 26px rgba(180,215,255,.6); }
+
+/* Menu column — left third, vertically centred, clear of the off-centre hole. */
+.cosmos-ui {
+  position: fixed; inset: 0; z-index: 10;
+  pointer-events: none;
+  display: flex; flex-direction: column; justify-content: center;
+  padding: clamp(20px, 5vw, 64px);
+}
+.cosmos-menu {
+  pointer-events: auto;
+  display: flex; flex-direction: column;
+  gap: clamp(6px, 1.5vh, 14px);
+  max-width: min(42vw, 420px);
+}
+.cosmos-menu a {
+  position: relative;
+  display: inline-block;
+  width: fit-content;
+  padding: 2px 0;
+  font-family: 'Orbitron', system-ui, sans-serif;
+  font-weight: 500;
+  font-size: clamp(15px, 1.55vw, 21px);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  text-decoration: none;
+  /* Resting state is deliberately dim — the particle accretion is what lights
+     it, so there has to be somewhere to travel from. */
+  color: rgba(196, 212, 238, .52);
+  /* No CSS transition here on purpose: cosmos-menu.js writes colour and glow
+     every frame, and a transition on top of that just lags the particle
+     stream it is supposed to be synchronised with. */
+}
+.cosmos-menu a .lbl { position: relative; z-index: 2; }
+
+/* The hot state (colour + glow) is written directly by cosmos-menu.js each
+   frame, in step with the arriving particles, so the ramp and the stream peak
+   together. It deliberately is NOT expressed here as calc() over a custom
+   property: that form was invalid at computed-value time in this context, so
+   the declaration got dropped and the label never lit. */
+.cosmos-menu a:focus-visible {
+  outline: 1px solid rgba(170, 205, 255, .7);
+  outline-offset: 6px;
+}
+
+/* Per-item particle canvas, positioned over the item by the JS. */
+.cosmos-particles {
+  position: absolute; inset: 0; z-index: 1;
+  pointer-events: none;
+}
+
+/* Caption, bottom corner — deadpan mission readout. */
+.cosmos-caption {
+  position: fixed;
+  left: clamp(20px, 5vw, 64px);
+  bottom: clamp(18px, 3.2vh, 34px);
+  z-index: 12;
+  font-family: 'Orbitron', system-ui, sans-serif;
+  font-weight: 400;
+  font-size: clamp(9px, .78vw, 11px);
+  letter-spacing: .30em;
+  color: rgba(168, 190, 224, .40);
+}
+.cosmos-caption .sep { color: rgba(168, 190, 224, .25); }
+
+/* Loader */
+.cosmos-loader {
+  position: fixed; inset: 0; z-index: 20;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px; background: #04060a;
+  transition: opacity .7s ease, visibility .7s ease;
+}
+.cosmos-loader.hidden { opacity: 0; visibility: hidden; }
+.cosmos-loader-mark {
+  font-family: 'Orbitron', system-ui, sans-serif;
+  font-weight: 700; font-size: 15px; letter-spacing: .5em;
+  color: rgba(210, 228, 255, .75);
+}
+.cosmos-loader-bar {
+  width: 132px; height: 1px; background: rgba(150, 190, 255, .18); position: relative; overflow: hidden;
+}
+.cosmos-loader-bar::after {
+  content: ""; position: absolute; inset: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(190, 220, 255, .9), transparent);
+  animation: cosmos-sweep 1.15s ease-in-out infinite;
+}
+@keyframes cosmos-sweep { 0% { transform: translateX(-120%); } 100% { transform: translateX(320%); } }
+
+/* Narrow viewports: the hole recentres (shader drops centerX toward 0.5) and
+   the menu moves to the lower third so the two stop competing for the middle. */
+@media (max-width: 820px) {
+  .cosmos-ui { justify-content: flex-end; padding-bottom: clamp(26px, 8vh, 64px); }
+  .cosmos-menu { max-width: 100%; gap: clamp(4px, 1.2vh, 10px); }
+  .cosmos-menu a { font-size: clamp(14px, 4.2vw, 19px); letter-spacing: .12em; }
+  .cosmos-caption { font-size: 9px; letter-spacing: .22em; }
+}
+
+/* Reduced motion: no loader sweep, and the resting state is already the full
+   focus state — the JS additionally skips particles and jumps --heat. */
+@media (prefers-reduced-motion: reduce) {
+  .cosmos-loader-bar::after { animation: none; }
+}

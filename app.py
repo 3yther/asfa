@@ -537,9 +537,20 @@ def _inject_csrf_token():
 @app.context_processor
 def _inject_ui_theme():
     theme = "cyberpunk"
+    # `menu_url` is where the ASFA logo points in nav.html. Each entrance theme
+    # owns a full-screen menu screen, and the logo is how you get back to it
+    # from anywhere in the app — the top nav stays independent and always
+    # works, so the menu is an alternative route, never a required one.
+    # 'none' has no menu screen, so its logo keeps the old behaviour (/command).
+    menu_url = "/"
     if session.get("authed"):
-        theme = "samurai" if db.get_entrance_theme(db.DEFAULT_USER_ID) == "samurai" else "cyberpunk"
-    return {"ui_theme": theme}
+        entrance = db.get_entrance_theme(db.DEFAULT_USER_ID)
+        theme = "samurai" if entrance == "samurai" else "cyberpunk"
+        if entrance == "samurai":
+            menu_url = url_for("samurai_theme")
+        elif entrance == "cosmos":
+            menu_url = url_for("cosmos_theme")
+    return {"ui_theme": theme, "menu_url": menu_url}
 
 
 # ── Login brute-force lockout ──────────────────────────────────────────────────
@@ -920,6 +931,16 @@ def system():
 @app.route("/samurai-theme")
 def samurai_theme():
     return render_template("samurai.html", active="samurai")
+
+
+# Cosmos's sibling of /samurai-theme: the same nine-item menu and navigation
+# contract, rendered over the Gargantua lensing shader instead of the grass
+# field. Persistent (you can come back to it from the logo), not a one-shot
+# entrance — the pre-dashboard black-hole animation on /command is separate and
+# unchanged.
+@app.route("/cosmos-theme")
+def cosmos_theme():
+    return render_template("cosmos.html", active="cosmos")
 
 
 @app.route("/gym")
