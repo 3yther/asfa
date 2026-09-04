@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#2b3a3e">
+<title>ASFA // SAMURAI</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Yuji+Boku&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/samurai-theme.css') }}">
+<style>
+  .samurai-login-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 0;
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+  }
+  .samurai-login-card {
+    position: relative;
+    z-index: 1001;
+    width: min(420px, 90vw);
+    padding: 48px 40px 40px;
+    border: 1px solid rgba(212, 175, 55, 0.25);
+    border-radius: 8px;
+    background: rgba(20, 18, 15, 0.88);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 50px rgba(212, 175, 55, 0.08);
+    text-align: center;
+    font-family: 'Inter', -apple-system, sans-serif;
+  }
+  .samurai-login-title {
+    font-family: 'Yuji Boku', serif;
+    font-size: 32px;
+    font-weight: 400;
+    letter-spacing: 3px;
+    color: #f5f5f0;
+    margin-bottom: 8px;
+    text-shadow: 0 0 16px rgba(212, 175, 55, 0.3);
+  }
+  .samurai-login-sub {
+    font-size: 12px;
+    letter-spacing: 0.2em;
+    color: #8a8478;
+    margin-bottom: 28px;
+    text-transform: uppercase;
+  }
+  .samurai-login-card input[type="password"] {
+    width: 100%;
+    padding: 14px 16px;
+    margin-bottom: 18px;
+    background: rgba(10, 9, 7, 0.6);
+    border: 1px solid rgba(212, 175, 55, 0.2);
+    border-radius: 6px;
+    color: #f0ece0;
+    font-family: inherit;
+    font-size: 14px;
+    letter-spacing: 0.05em;
+    outline: none;
+    transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+  }
+  .samurai-login-card input[type="password"]::placeholder {
+    color: #6b6559;
+    letter-spacing: 0.1em;
+  }
+  .samurai-login-card input[type="password"]:focus {
+    border-color: #d4af37;
+    background: rgba(20, 18, 15, 0.8);
+    box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.12), 0 0 20px rgba(212, 175, 55, 0.14);
+  }
+  .samurai-login-card button {
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(180deg, rgba(212, 175, 55, 0.92), rgba(180, 140, 40, 0.92));
+    border: 1px solid rgba(212, 175, 55, 0.4);
+    border-radius: 6px;
+    color: #0a0905;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    font-size: 13px;
+    cursor: pointer;
+    text-transform: uppercase;
+    box-shadow: 0 0 18px rgba(212, 175, 55, 0.16);
+    transition: filter 0.2s, box-shadow 0.2s;
+  }
+  .samurai-login-card button:hover {
+    filter: brightness(1.1);
+    box-shadow: 0 0 28px rgba(212, 175, 55, 0.24);
+  }
+  .samurai-login-err {
+    color: #e0625c;
+    font-size: 12px;
+    letter-spacing: 0.05em;
+    margin-bottom: 14px;
+    min-height: 16px;
+    line-height: 1.4;
+  }
+  .samurai-login-or {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 24px 0 18px;
+    color: #6b6559;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+  .samurai-login-or::before,
+  .samurai-login-or::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: rgba(212, 175, 55, 0.15);
+  }
+  .samurai-login-ghost {
+    background: transparent !important;
+    border: 1px solid rgba(212, 175, 55, 0.3) !important;
+    color: #d4af37 !important;
+    box-shadow: none !important;
+    letter-spacing: 0.14em !important;
+  }
+  .samurai-login-ghost:hover {
+    background: rgba(212, 175, 55, 0.06) !important;
+    border-color: #d4af37 !important;
+    box-shadow: 0 0 16px rgba(212, 175, 55, 0.12) !important;
+    filter: none !important;
+  }
+  .samurai-login-note {
+    margin-top: 14px;
+    font-size: 10px;
+    line-height: 1.6;
+    color: #7b7166;
+    letter-spacing: 0.03em;
+  }
+  .samurai-login-note a {
+    color: #9d9174;
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(212, 175, 55, 0.2);
+  }
+  .samurai-login-note a:hover {
+    color: #d4af37;
+  }
+</style>
+</head>
+<body class="samurai-root">
+
+<canvas id="samurai-canvas"></canvas>
+
+<div id="samurai-fallback" aria-hidden="true"></div>
+<div id="samurai-vignette" aria-hidden="true"></div>
+
+<header class="samurai-brand">
+  <a class="samurai-logo" href="/" aria-label="ASFA — dashboard"><span class="br">[</span>ASFA<span class="br">]</span></a>
+</header>
+
+<!-- Login overlay centered on the 3D scene -->
+<div class="samurai-login-overlay">
+  <div>
+    <form class="samurai-login-card" method="POST" action="{{ url_for('login', next=next_url) }}">
+      <div class="samurai-login-title">ASFA</div>
+      <div class="samurai-login-sub">Enter the dojo</div>
+      {% if error %}<div class="samurai-login-err">{{ error }}</div>{% endif %}
+      <input type="password" name="password" placeholder="passphrase" autofocus autocomplete="current-password">
+      <button type="submit">Engage</button>
+    </form>
+
+    <form class="samurai-login-card" method="POST" action="{{ url_for('login_guest') }}"
+          style="margin-top: 16px; padding: 24px 40px 28px;">
+      <div class="samurai-login-or">Demo</div>
+      <button type="submit" class="samurai-login-ghost">Login as Guest</button>
+      <div class="samurai-login-note">
+        Read-only tour: the full interface with every personal number removed.<br>
+        Or jump straight to the <a href="{{ url_for('portfolio') }}">portfolio</a>.
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Samurai 3D scene scripts (same as samurai.html) -->
+<script src="{{ url_for('static', filename='js/samurai-slash.js') }}"></script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+  }
+}
+</script>
+
+<script>
+  window.__samuraiSafety = setTimeout(function () {
+    document.getElementById("samurai-fallback").classList.add("show");
+    document.getElementById("samurai-canvas").style.display = "none";
+  }, 9000);
+</script>
+
+<script src="{{ url_for('static', filename='js/samurai-menu.js') }}" defer></script>
+<script type="module" src="{{ url_for('static', filename='js/samurai-boot.js') }}"></script>
+</body>
+</html>

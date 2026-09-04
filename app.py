@@ -563,6 +563,10 @@ def login():
             logger.error("auth failure lookup failed: %s", e)
             locked = False  # fail open on DB trouble; the 5/min limiter still applies
         if locked:
+            entrance_theme = db.get_entrance_theme(db.DEFAULT_USER_ID)
+            if entrance_theme == "samurai":
+                return render_template("samurai-login.html", error="Too many attempts. Try again later.",
+                                       next_url=next_url), 429
             return render_template("login.html", error="Too many attempts. Try again later.",
                                    next_url=next_url), 429
         pw = request.form.get("password") or ""
@@ -602,7 +606,13 @@ def login():
                     f"Locked out IP {ip} after {_LOCKOUT_THRESHOLD} failed logins within an hour")
         except Exception as e:
             logger.error("auth failure tracking failed: %s", e)
+        entrance_theme = db.get_entrance_theme(db.DEFAULT_USER_ID)
+        if entrance_theme == "samurai":
+            return render_template("samurai-login.html", error="Incorrect passphrase.", next_url=next_url), 401
         return render_template("login.html", error="Incorrect passphrase.", next_url=next_url), 401
+    entrance_theme = db.get_entrance_theme(db.DEFAULT_USER_ID)
+    if entrance_theme == "samurai":
+        return render_template("samurai-login.html", error=None, next_url=next_url)
     return render_template("login.html", error=None, next_url=next_url)
 
 
