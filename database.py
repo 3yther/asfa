@@ -7599,6 +7599,82 @@ def revoke_api_key(key_id: int) -> bool:
         return cur.rowcount > 0
 
 
+# ── Magic-link sign-in tokens ───────────────────────────────────────────────────
+# Passwordless login: a one-time link emailed on request. Same hash-only pattern
+# as api_keys above — only the SHA-256 of the token is stored, so a DB leak alone
+# can't be used to log in. Single-use (used_at) and short-lived (expires_at);
+# expired/used rows are pruned opportunistically on each create, same as
+# auth_failures. Which email is even allowed to request one is an app.py concern
+# (this layer just stores/validates tokens, it doesn't gate by address).
+
+_MAGIC_LINK_READY = False
+
+
+def _ensure_magic_link_table():
+    global _MAGIC_LINK_READY
+    if _MAGIC_LINK_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS magic_link_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_hash TEXT NOT NULL UNIQUE,
+        email TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used_at TEXT
+    )"""
+    if USE_POSTGRES:
+        stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    with get_db() as conn:
+        conn.cursor().execute(stmt)
+    _MAGIC_LINK_READY = True
+
+
+def create_magic_link_token(token_hash: str, email: str, ttl_minutes: int = 15):
+    """Store a new magic-link token by its SHA-256 hash. The raw token is never
+    persisted — only what came back from the emailed link can match it."""
+    _ensure_magic_link_table()
+    now = datetime.utcnow()
+    expires_at = now + timedelta(minutes=ttl_minutes)
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        # Opportunistic cleanup — same pattern as auth_failures pruning.
+        cur.execute(
+            f"DELETE FROM magic_link_tokens WHERE expires_at < {ph} OR used_at IS NOT NULL",
+            (now.isoformat(sep=" "),))
+        cur.execute(
+            f"INSERT INTO magic_link_tokens (token_hash, email, created_at, expires_at) "
+            f"VALUES ({ph}, {ph}, {ph}, {ph})",
+            (token_hash, email, now.isoformat(sep=" "), expires_at.isoformat(sep=" ")))
+
+
+def consume_magic_link_token(token_hash: str):
+    """Validate + burn a token in one call: returns the email it was issued to if
+    it exists, is unused, and hasn't expired — else None. Marks it used either
+    way it's found (so a second click on the same link always fails), which
+    makes each token strictly single-use."""
+    _ensure_magic_link_table()
+    now = datetime.utcnow().isoformat(sep=" ")
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        cur.execute(
+            f"SELECT email, expires_at, used_at FROM magic_link_tokens "
+            f"WHERE token_hash = {ph}",
+            (token_hash,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        row = dict(row)
+        cur.execute(
+            f"UPDATE magic_link_tokens SET used_at = {ph} "
+            f"WHERE token_hash = {ph} AND used_at IS NULL",
+            (now, token_hash))
+        if row["used_at"] is not None or row["expires_at"] < now:
+            return None
+        return row["email"]
+
+
 # ── Notification & alert preferences ───────────────────────────────────────────
 # Read/write the Settings → Notifications & Alerts row. The columns live on
 # user_settings (added idempotently in init_db); this layer just centralises the

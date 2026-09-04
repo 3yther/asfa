@@ -173,7 +173,10 @@ _PUBLIC_ENDPOINTS = {"login", "static", "mission_control_health", "api_system_he
                      # Guest/demo entry + the public portfolio page. The portfolio
                      # is a CV showcase meant to be linkable by recruiters, so it
                      # renders without any session; it reads no personal data.
-                     "login_guest", "portfolio", "cv_download"}
+                     "login_guest", "portfolio", "cv_download",
+                     # Magic-link sign-in: both legs happen before a session
+                     # exists, same as /login itself.
+                     "login_email_request", "login_magic"}
 
 # Read-only API keys let external clients (the MCP server) reach the endpoints
 # below without the session passphrase — but ONLY these, and only via GET/HEAD.
@@ -548,13 +551,52 @@ _LOCKOUT_THRESHOLD = 10
 _LOCKOUT_WINDOW_HOURS = 1
 
 
+def _login_next_url():
+    """The post-login redirect target from ?next=, constrained to a same-site
+    relative path (never an absolute/external URL — open-redirect guard)."""
+    next_url = request.args.get("next") or request.form.get("next") or "/"
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/"
+    return next_url
+
+
+def _render_login(error=None, next_url="/", status=200, notice=None):
+    """Render the login page in whichever entrance theme is active. `notice` is
+    a non-error informational message (e.g. "check your email") — kept separate
+    from `error` so the templates can style them differently if needed."""
+    entrance_theme = db.get_entrance_theme(db.DEFAULT_USER_ID)
+    template = "samurai-login.html" if entrance_theme == "samurai" else "login.html"
+    return render_template(template, error=error, next_url=next_url, notice=notice), status
+
+
+def _start_session():
+    """Common session setup for every successful sign-in path (passphrase or
+    magic link): rotate the session, mark authed, mint the CSRF token, register
+    it in the Active Sessions list."""
+    session.clear()
+    session["authed"] = True
+    session.permanent = True
+    session["csrf_token"] = secrets.token_hex(32)
+    _register_session()
+
+
+def _post_login_redirect(next_url):
+    # Only the default landing (no deep link the user was trying to reach) is
+    # subject to the entrance-theme choice — a bookmarked or shared link
+    # (?next=/gym) always wins. Cosmos plays inline on /command itself
+    # (unchanged, gated by entrance_theme there); only 'samurai' needs an
+    # actual redirect, to its own full-page route. The entry=1 flag marks this
+    # as a login-originated visit so the samurai page knows to play its slash
+    # transition — it never fires on a plain navigation to /samurai-theme.
+    if next_url == "/" and db.get_entrance_theme(db.DEFAULT_USER_ID) == "samurai":
+        return redirect(url_for("samurai_theme", entry=1))
+    return redirect(next_url)
+
+
 @app.route("/login", methods=["GET", "POST"])
 @limiter.limit("5 per minute")
 def login():
-    next_url = request.args.get("next") or "/"
-    # Only allow same-site relative paths as the post-login redirect target.
-    if not next_url.startswith("/") or next_url.startswith("//"):
-        next_url = "/"
+    next_url = _login_next_url()
     if request.method == "POST":
         ip = get_remote_address()
         try:
@@ -563,38 +605,15 @@ def login():
             logger.error("auth failure lookup failed: %s", e)
             locked = False  # fail open on DB trouble; the 5/min limiter still applies
         if locked:
-            entrance_theme = db.get_entrance_theme(db.DEFAULT_USER_ID)
-            if entrance_theme == "samurai":
-                return render_template("samurai-login.html", error="Too many attempts. Try again later.",
-                                       next_url=next_url), 429
-            return render_template("login.html", error="Too many attempts. Try again later.",
-                                   next_url=next_url), 429
+            return _render_login("Too many attempts. Try again later.", next_url, 429)
         pw = request.form.get("password") or ""
         if _verify_password(pw):
             try:
                 db.clear_auth_failures(ip)
             except Exception as e:
                 logger.error("auth failure clear failed: %s", e)
-            # Rotate the session on login (anti-fixation) and mint the CSRF
-            # token the frontend echoes back on every write.
-            session.clear()
-            session["authed"] = True
-            session.permanent = True
-            session["csrf_token"] = secrets.token_hex(32)
-            # Record this login in the server-side session registry so it shows
-            # up under Active Sessions and can be revoked from another device.
-            _register_session()
-            # Only the default landing (no deep link the user was trying to
-            # reach) is subject to the entrance-theme choice — a bookmarked
-            # or shared link (?next=/gym) always wins. Cosmos plays inline on
-            # /command itself (unchanged, gated by entrance_theme there); only
-            # 'samurai' needs an actual redirect, to its own full-page route.
-            # The entry=1 flag marks this as a login-originated visit so the
-            # samurai page knows to play its slash transition — it never
-            # fires on a plain navigation to /samurai-theme.
-            if next_url == "/" and db.get_entrance_theme(db.DEFAULT_USER_ID) == "samurai":
-                return redirect(url_for("samurai_theme", entry=1))
-            return redirect(next_url)
+            _start_session()
+            return _post_login_redirect(next_url)
         try:
             failures = db.record_auth_failure(ip)
             if failures == _LOCKOUT_THRESHOLD:
@@ -606,14 +625,73 @@ def login():
                     f"Locked out IP {ip} after {_LOCKOUT_THRESHOLD} failed logins within an hour")
         except Exception as e:
             logger.error("auth failure tracking failed: %s", e)
-        entrance_theme = db.get_entrance_theme(db.DEFAULT_USER_ID)
-        if entrance_theme == "samurai":
-            return render_template("samurai-login.html", error="Incorrect passphrase.", next_url=next_url), 401
-        return render_template("login.html", error="Incorrect passphrase.", next_url=next_url), 401
-    entrance_theme = db.get_entrance_theme(db.DEFAULT_USER_ID)
-    if entrance_theme == "samurai":
-        return render_template("samurai-login.html", error=None, next_url=next_url)
-    return render_template("login.html", error=None, next_url=next_url)
+        return _render_login("Incorrect passphrase.", next_url, 401)
+    return _render_login(None, next_url)
+
+
+# ── Magic-link sign-in ───────────────────────────────────────────────────────────
+# Passwordless alternative to the passphrase: request a one-time link by email,
+# click it, you're in. Single-user app, so exactly one address is ever allowed
+# to request one — OWNER_EMAIL, taken from the same Gmail account already
+# configured for Scout's job alerts (SCOUT_EMAIL_USER). Reusing that address
+# means no new env var is needed and the sender/recipient are the same inbox
+# the owner already checks.
+OWNER_EMAIL = (os.environ.get("SCOUT_EMAIL_USER") or "").strip().lower()
+
+
+@app.route("/login/email", methods=["POST"])
+@limiter.limit("3 per hour")
+def login_email_request():
+    """Request a magic link. Always shows the same generic notice regardless of
+    whether the address matched — a differing response would let an attacker
+    enumerate the one valid email. Public + CSRF-exempt like /login itself:
+    this IS the pre-session request."""
+    next_url = _login_next_url()
+    email = (request.form.get("email") or "").strip().lower()
+    if email and OWNER_EMAIL and email == OWNER_EMAIL:
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        db.create_magic_link_token(token_hash, email, ttl_minutes=15)
+        link = url_for("login_magic", token=raw_token, next=next_url, _external=True)
+        try:
+            from services.magic_link import send_magic_link_email
+            send_magic_link_email(email, link)
+        except Exception as e:
+            logger.error("magic link send failed: %s", e)
+        try:
+            db.log_audit("auth", "magic_link_requested", "success", reason=f"link sent to {email}")
+        except Exception as e:
+            logger.error("magic link audit failed: %s", e)
+    return _render_login(
+        None, next_url,
+        notice="If that address is registered, a sign-in link is on its way — check your email.")
+
+
+@app.route("/login/magic")
+def login_magic():
+    """Consume a magic-link token from the emailed URL. GET (not POST) because
+    it's reached by clicking a link, not submitting a form — CSRF doesn't apply
+    to a GET, and the token itself (single-use, 15-minute TTL, 256 bits of
+    entropy) is the actual protection here, same as an email password-reset
+    link anywhere else."""
+    next_url = _login_next_url()
+    token = request.args.get("token") or ""
+    if not token:
+        return _render_login("Invalid or missing link.", next_url, 400)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    email = db.consume_magic_link_token(token_hash)
+    if not email:
+        try:
+            db.log_audit("auth", "magic_link_login", "failure", reason="invalid/expired/used token")
+        except Exception as e:
+            logger.error("magic link audit failed: %s", e)
+        return _render_login("That link is invalid or has expired. Request a new one.", next_url, 401)
+    _start_session()
+    try:
+        db.log_audit("auth", "magic_link_login", "success", reason=f"login via magic link for {email}")
+    except Exception as e:
+        logger.error("magic link audit failed: %s", e)
+    return _post_login_redirect(next_url)
 
 
 @app.route("/login/guest", methods=["POST"])

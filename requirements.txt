@@ -11,6 +11,7 @@ google-auth-oauthlib==1.2.1
 google-auth-httplib2==0.2.0
 google-api-python-client==2.143.0
 requests==2.32.3
+certifi==2026.5.20
 python-dotenv==1.0.1
 python-telegram-bot==21.5
 apscheduler==3.10.4

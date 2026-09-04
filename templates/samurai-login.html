@@ -147,6 +147,59 @@
   .samurai-login-note a:hover {
     color: #d4af37;
   }
+  .samurai-login-notice {
+    color: #9db88a;
+    font-size: 12px;
+    letter-spacing: 0.03em;
+    margin-bottom: 14px;
+    line-height: 1.5;
+  }
+  .samurai-login-card button.samurai-email-toggle {
+    display: block;
+    width: 100%;
+    text-align: center;
+    margin-top: 18px;
+    padding: 0;
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    text-transform: none;
+    color: #8a8478;
+    background: none;
+    border: none;
+    box-shadow: none;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    font-family: inherit;
+  }
+  .samurai-login-card button.samurai-email-toggle:hover {
+    color: #d4af37;
+    filter: none;
+    box-shadow: none;
+  }
+  .samurai-email-form { margin-top: 16px; display: none; }
+  .samurai-email-form.open { display: block; }
+  .samurai-login-card input[type="email"] {
+    width: 100%;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    background: rgba(10, 9, 7, 0.6);
+    border: 1px solid rgba(212, 175, 55, 0.2);
+    border-radius: 6px;
+    color: #f0ece0;
+    font-family: inherit;
+    font-size: 14px;
+    letter-spacing: 0.03em;
+    outline: none;
+    transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+  }
+  .samurai-login-card input[type="email"]::placeholder { color: #6b6559; }
+  .samurai-login-card input[type="email"]:focus {
+    border-color: #d4af37;
+    background: rgba(20, 18, 15, 0.8);
+    box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.12), 0 0 20px rgba(212, 175, 55, 0.14);
+  }
 </style>
 </head>
 <body class="samurai-root">
@@ -167,8 +220,18 @@
       <div class="samurai-login-title">ASFA</div>
       <div class="samurai-login-sub">Enter the dojo</div>
       {% if error %}<div class="samurai-login-err">{{ error }}</div>{% endif %}
+      {% if notice %}<div class="samurai-login-notice">{{ notice }}</div>{% endif %}
       <input type="password" name="password" placeholder="passphrase" autofocus autocomplete="current-password">
       <button type="submit">Engage</button>
+
+      <button type="button" class="samurai-email-toggle" onclick="document.getElementById('samurai-email-form').classList.toggle('open')">
+        or sign in with email
+      </button>
+    </form>
+    <form class="samurai-email-form{% if notice %} open{% endif %}" id="samurai-email-form"
+          method="POST" action="{{ url_for('login_email_request', next=next_url) }}">
+      <input type="email" name="email" placeholder="email address" autocomplete="email" {% if notice %}autofocus{% endif %}>
+      <button type="submit" class="samurai-login-ghost" style="width:100%;">Send sign-in link</button>
     </form>
 
     <form class="samurai-login-card" method="POST" action="{{ url_for('login_guest') }}"

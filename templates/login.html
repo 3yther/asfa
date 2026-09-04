@@ -95,6 +95,31 @@
   .guest-note { margin-top:12px; font-size:10.5px; line-height:1.5; color:#4d6874; letter-spacing:.04em; }
   .guest-note a { color:#6f97a3; text-decoration:none; border-bottom:1px dotted rgba(0,217,255,.25); }
   .guest-note a:hover { color:var(--cyan-hi); }
+
+  /* Email magic-link toggle — collapsed by default under a plain text link, so
+     the passphrase field stays the primary, un-cluttered action. */
+  .notice { color:#7fe3a8; font-size:12px; letter-spacing:.03em; margin-bottom:14px; line-height:1.5; }
+  .email-toggle {
+    display:block; text-align:center; margin-top:16px;
+    font-size:11px; letter-spacing:.06em; color:#5f7a85;
+    background:none; border:none; cursor:pointer; text-decoration:underline;
+    text-underline-offset:3px; font-family:inherit;
+  }
+  .email-toggle:hover { color:var(--cyan-hi); }
+  .email-form { width:min(380px,90vw); margin-top:14px; display:none; }
+  .email-form.open { display:block; }
+  input[type=email] {
+    width:100%; padding:14px 15px; margin-bottom:12px;
+    background:rgba(2,10,16,.55);
+    border:1px solid rgba(0,217,255,.20); border-radius:10px; color:#e8f7fc;
+    font-family:inherit; font-size:14px; letter-spacing:.03em; outline:none;
+    transition:border-color .25s, box-shadow .25s, background .25s;
+  }
+  input[type=email]::placeholder { color:#3f5963; }
+  input[type=email]:focus {
+    border-color:var(--cyan); background:rgba(4,16,24,.7);
+    box-shadow:0 0 0 2px rgba(0,217,255,.14), 0 0 22px rgba(0,217,255,.16);
+  }
 </style>
 </head>
 <body>
@@ -107,8 +132,17 @@
     <div class="title">INITIALIZE<br>MISSION CONTROL</div>
     <div class="sub">Authentication required</div>
     {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
     <input type="password" name="password" placeholder="passphrase" autofocus autocomplete="current-password">
     <button type="submit">Engage</button>
+  </form>
+
+  <button type="button" class="email-toggle" onclick="document.getElementById('email-form').classList.toggle('open')">
+    or sign in with email
+  </button>
+  <form class="email-form{% if notice %} open{% endif %}" id="email-form" method="POST" action="{{ url_for('login_email_request', next=next_url) }}">
+    <input type="email" name="email" placeholder="email address" autocomplete="email" {% if notice %}autofocus{% endif %}>
+    <button type="submit" class="ghost" style="background:transparent;border:1px solid rgba(0,217,255,.30);color:var(--cyan-hi);box-shadow:none;letter-spacing:.16em;width:100%;padding:14px;border-radius:10px;font-family:inherit;font-weight:700;font-size:13px;cursor:pointer;text-transform:uppercase;">Send sign-in link</button>
   </form>
 
   <form class="lock" method="POST" action="{{ url_for('login_guest') }}"
