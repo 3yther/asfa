@@ -25,6 +25,9 @@ const FRAG = [
   "uniform vec2 uParallax;",    // star-layer drift from pointer / device tilt
   "uniform float uRedshift;",   // 0 = neutral, 1 = fully cooled idle grade
   "uniform float uStarBright;", // 0 kills twinkle for prefers-reduced-motion
+  "uniform float uNebula;",     // 0/1: faint background dust wash (optional)
+  "uniform float uTurb;",       // 0/1: fine disk turbulence layer
+  "uniform float uStarLayers;", // 3 or 4: number of starfield depth layers
   "",
   "float hash21(vec2 p){ p=fract(p*vec2(123.34,345.45)); p+=dot(p,p+34.345); return fract(p.x*p.y); }",
   "float hash31(vec3 p){ p=fract(p*0.1031); p+=dot(p,p.yzx+33.33); return fract((p.x+p.y)*p.z); }",
@@ -32,6 +35,7 @@ const FRAG = [
   "  c=hash21(i+vec2(0.0,1.0)),d=hash21(i+vec2(1.0,1.0)); vec2 u=f*f*(3.0-2.0*f);",
   "  return mix(mix(a,b,u.x),mix(c,d,u.x),u.y); }",
   "float fbm(vec2 p){ float s=0.0, a=0.5; for(int i=0;i<6;i++){ s+=a*vnoise(p); p=p*2.04+1.7; a*=0.5; } return s; }",
+  "float fbm3(vec2 p){ float s=0.0, a=0.5; for(int i=0;i<3;i++){ s+=a*vnoise(p); p=p*2.11+1.3; a*=0.5; } return s; }",
   "",
   // ── Accretion disk ─────────────────────────────────────────────────────────
   // Blackbody ramp + domain-warped turbulence, with relativistic beaming split
@@ -59,6 +63,21 @@ const FRAG = [
   "  float outerFade=smoothstep(outerR, outerR-3.0, rr);",
   "  float temp=1.0-tN;",
   "  float bright=(0.22+1.15*temp)*density*outerFade + innerEdge*0.85*temp;",
+  // Fine-grained structure: filaments and knots riding on the base ramp. A
+  // multiplicative +/-13% so it textures the disk without overriding the
+  // blackbody gradient or the beaming grade applied below.
+  // fbm3 only spans ~0.25-0.75 (octave weights 0.5/0.25/0.125), so feeding
+  // it straight into the 0.87+0.26*x ramp gave +/-6.5%, not the +/-13%
+  // intended, and the base turbulence swamped it (measured +0.4pp). The
+  // smoothstep remaps to a true 0-1 with a hard-ish edge, which is also what
+  // turns soft wobble into filaments and knots.
+  // Anisotropic on purpose: high angular frequency, low radial. Keplerian
+  // shear already smears the base turbulence into stripes that run along
+  // the disk, so an isotropic fine layer just rides those stripes and
+  // vanishes. Stretching the noise along rr makes its features cut across
+  // the bands, which is what reads as filaments and knots.
+  "  float fine=smoothstep(0.30, 0.62, fbm3(vec2(sw*24.0-rot*1.4, rr*2.2)));",
+  "  bright*=mix(1.0, 0.86+0.28*fine, uTurb);",
   "  float beam=cos(ang);",                              // approaching/receding limb
   // Beaming runs along x, not z: for a circular orbit at (x,0,z) the velocity
   // is tangential (-z,0,x), so its line-of-sight component (camera on -z)
@@ -104,7 +123,9 @@ const FRAG = [
   "    float sp=0.5+2.2*hash21(ip+63.4);",
   "    tw=0.72+0.28*sin(uTime*sp+ph);",
   "  }",
-  "  vec3 acc=col*core*dim*tw*(0.35+1.5*m);",
+  // Cubic in rank: the field is dominated by faint stars with a sparse bright
+  // tail, which is what a real sky looks like and what sells distance.
+  "  vec3 acc=col*core*dim*tw*(0.16+1.7*m*m*m);",
   // Hero stars: the brightest few get a four-point diffraction glint.
   "  if(m>0.90){",
   "    float g=(m-0.90)/0.10;",
@@ -121,9 +142,17 @@ const FRAG = [
   "vec3 starField(vec3 d, float shear){",
   "  vec2 sph=vec2(atan(d.z,d.x), asin(clamp(d.y,-1.0,1.0)));",
   "  vec3 col=vec3(0.004,0.005,0.010);",                  // deep-space floor
-  "  col+=starLayer(sph+uParallax*0.25,  34.0, 0.947, 0.95, 0.70, shear);", // near
-  "  col+=starLayer(sph+uParallax*0.11,  74.0, 0.962, 0.68, 0.46, shear);", // mid
-  "  col+=starLayer(sph+uParallax*0.04, 150.0, 0.972, 0.48, 0.28, shear);", // far
+  "  if(uNebula>0.5){",
+  "    float nb=fbm3(sph*1.6+vec2(3.1,7.7));",
+  "    float nb2=fbm3(sph*3.3-vec2(5.2,1.9));",
+  "    vec3 tint=mix(vec3(0.30,0.36,0.62), vec3(0.46,0.32,0.58), smoothstep(0.35,0.65,nb2));",
+  "    tint=mix(tint, vec3(0.60,0.44,0.28), smoothstep(0.72,0.95,nb2));",
+  "    col+=tint*smoothstep(0.46,0.86,nb)*0.034;",
+  "  }",
+  "  col+=starLayer(sph+uParallax*0.25,  34.0, 0.935, 0.90, 0.70, shear);", // near
+  "  col+=starLayer(sph+uParallax*0.11,  74.0, 0.940, 0.62, 0.46, shear);", // mid
+  "  col+=starLayer(sph+uParallax*0.06, 150.0, 0.935, 0.42, 0.28, shear);", // far
+  "  if(uStarLayers>3.5) col+=starLayer(sph+uParallax*0.02, 260.0, 0.930, 0.30, 0.16, shear);", // deep: tiny, dim, many
   "  return col;",
   "}",
   "",
@@ -140,10 +169,11 @@ const FRAG = [
   "  vec3 col=vec3(0.0);",
   "  float minR=1e9; bool captured=false;",
   "  const int STEPS=220; float rs=1.0; float G=1.5;",
+  "  float far=max(24.0, uCamDist+14.0);",
   "  for(int i=0;i<STEPS;i++){",
   "    float r=length(pos); minR=min(minR,r);",
   "    if(r<rs){ captured=true; break; }",                 // event horizon: nothing escapes
-  "    if(r>24.0){ break; }",
+  "    if(r>far){ break; }",
   "    float dt=clamp(r*0.08,0.02,0.40);",
   "    vec3 toC=-pos/max(r,1e-3);",
   "    dir=normalize(dir + toC*(G/(r*r))*dt);",
@@ -158,13 +188,13 @@ const FRAG = [
   // Total angular deflection drives the star shear, so the streaking is the
   // same quantity the lensing already computed rather than a fudge.
   "  float bend=1.0-clamp(dot(dir,dir0),-1.0,1.0);",
-  "  float shear=smoothstep(0.02,0.45,bend);",
+  "  float shear=smoothstep(0.014,0.40,bend);",
   // Only stars whose rays were meaningfully bent get smeared. Feeding raw
   // `bend` in stretched every star in the sky, so the whole field read as
   // scratches rather than points with a lensed arc near the hole.
 "  if(!captured){ col+=starField(dir, shear); }",
-  "  float ring=pow(smoothstep(0.10,0.0,abs(minR-1.5)),1.5);",
-  "  col+=vec3(1.0,0.88,0.68)*ring*1.15;",                 // photon ring: warm, not cyan
+  "  float ring=pow(smoothstep(0.065,0.0,abs(minR-1.5)),1.5);",
+  "  col+=vec3(1.0,0.88,0.68)*ring*1.35;",                 // photon ring: warm, not cyan
   "  col*=uPulse;",
   // Idle redshift: a few percent toward blue, reversed on any interaction.
   "  col=mix(col, col*vec3(0.88,0.95,1.12), clamp(uRedshift,0.0,1.0));",
@@ -190,19 +220,21 @@ export function tween(from, to, dur, ease, onUpdate, onDone) {
  * Build the renderer. `opts`:
  *   container   element to append the canvas to
  *   centerX     0.5 = centred; 0.62 pushes the hole right of centre
+ *   centerY     0 = centred; fraction of height, positive lifts the hole
  *   camDist     initial camera distance (11 frames the whole silhouette)
- *   reduce      prefers-reduced-motion: no twinkle, no idle drift
+ *   reduce      prefers-reduced-motion: static frame — no disk flow, pulse,
+ *               twinkle or parallax
  *   parallax    enable pointer parallax on the star layers
  *   bloom       [strength, radius, threshold]
  * Throws if the shader fails to compile, so callers can fall back.
  */
 export async function createGargantua(opts) {
   const {
-    container, centerX = 0.5, camDist = 11.0, reduce = false,
+    container, centerX = 0.5, centerY = 0.0, camDist = 11.0, reduce = false,
     // Bloom threshold sits above the tone-mapped disk's mid-tones so only
     // genuinely hot pixels bloom. At 0.8 the entire disk qualified and the
     // halo bled across the shadow, lifting the event horizon off pure black.
-    parallax = false, bloom = [0.28, 0.34, 1.05],
+    parallax = false, bloom = [0.28, 0.34, 1.05], nebula = false,
   } = opts;
 
   const THREE = await import("three");
@@ -239,7 +271,9 @@ export async function createGargantua(opts) {
   // centerX is a fraction of viewport width; the shader works in uv units
   // normalised by height, so convert through the aspect ratio.
   const aspect = () => { const v = viewport(); return v.w / v.h; };
-  const centerUv = () => new THREE.Vector2((centerX - 0.5) * aspect(), 0.0);
+  // centerY is a fraction of viewport height, positive = up. uv is already
+  // normalised by height, so it maps straight through with no aspect term.
+  const centerUv = () => new THREE.Vector2((centerX - 0.5) * aspect(), centerY);
 
   const uniforms = {
     uRes: { value: new THREE.Vector2(buf.x, buf.y) },
@@ -251,6 +285,9 @@ export async function createGargantua(opts) {
     uParallax: { value: new THREE.Vector2(0, 0) },
     uRedshift: { value: 0.0 },
     uStarBright: { value: reduce ? 0.0 : 1.0 },
+    uNebula: { value: nebula ? 1.0 : 0.0 },
+    uTurb: { value: 1.0 },
+    uStarLayers: { value: 4.0 },
   };
   const mat = new THREE.ShaderMaterial({ uniforms, vertexShader: VERT, fragmentShader: FRAG });
   scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
@@ -307,8 +344,15 @@ export async function createGargantua(opts) {
       if (w !== lastW || h !== lastH) { lastW = w; lastH = h; resize(); }
       syncFrames--;
     }
-    uniforms.uTime.value = t;
-    uniforms.uPulse.value = 1.0 + 0.03 * Math.sin(t * (2.0 * Math.PI / 4.0));
+    // Under prefers-reduced-motion the clock is held, which freezes the disk
+    // flow and the bloom pulse as well as the twinkle already gated by
+    // uStarBright. Previously only twinkle/parallax/tweens were disabled and
+    // uTime advanced regardless, so the disk kept streaming — the one piece of
+    // motion most likely to bother a motion-sensitive viewer. Held at a
+    // non-zero instant so the turbulence sits in a developed state rather than
+    // its t=0 pattern.
+    uniforms.uTime.value = reduce ? 6.0 : t;
+    uniforms.uPulse.value = reduce ? 1.0 : 1.0 + 0.03 * Math.sin(t * (2.0 * Math.PI / 4.0));
     par.x += (par.tx - par.x) * 0.06;
     par.y += (par.ty - par.y) * 0.06;
     uniforms.uParallax.value.set(par.x, par.y);
@@ -322,6 +366,9 @@ export async function createGargantua(opts) {
     renderer,
     uniforms,
     setRedshift(v) { uniforms.uRedshift.value = v; },
+    setNebula(v) { uniforms.uNebula.value = v ? 1.0 : 0.0; },
+    setTurb(v) { uniforms.uTurb.value = v ? 1.0 : 0.0; },
+    setStarLayers(n) { uniforms.uStarLayers.value = n; },
     bloomPass,
     // Render one frame synchronously at an explicit time. Exists so the scene
     // can be pixel-verified in environments where requestAnimationFrame is

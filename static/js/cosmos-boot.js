@@ -34,10 +34,22 @@ const narrow = (window.innerWidth || document.documentElement.clientWidth || 128
     const g = await createGargantua({
       container: stage,
       centerX: narrow ? 0.5 : 0.62,   // right-of-centre on desktop
-      camDist: 11.0,
+      // Portrait: the menu owns the lower third, and a hole centred at 50%
+      // height overlapped it by ~120px at any size worth looking at. Lifting
+      // it into the upper half clears the menu without shrinking it.
+      centerY: narrow ? 0.17 : 0.0,
+      // Pushed back from the entrance's 11.0 so the hole reads as a distant
+      // object in a field, not something looming at the lens. Perspective does
+      // the shrinking, so the disk's proportions stay physically consistent
+      // rather than being a scaled-down (and softened) 2D render. Mobile
+      // keeps it closer: at 18.5 on a phone the interesting part got too small.
+      camDist: narrow ? 15.0 : 18.5,
       reduce,
       parallax: true,
-      bloom: [0.28, 0.34, 1.05],
+      // Tighter radius + higher threshold than the entrance: concentrates the
+      // glow at the photon-ring edge instead of softening the whole ring.
+      bloom: [0.30, 0.26, 1.28],
+      nebula: true,
     });
 
     // Expose the fall-through for cosmos-menu.js's click handler. Same
