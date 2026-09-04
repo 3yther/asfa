@@ -439,12 +439,38 @@ def init_db():
         _add_column(cursor, "user_settings", "alert_water_intake",
                     "INTEGER DEFAULT 1")
 
-        # Cosmos entrance screen (Settings → Display & Preferences). Global,
-        # single-row toggle for the cinematic black-hole landing on the command
-        # page. Default ON (INTEGER 1) so the animation shows unless disabled,
-        # stored as INTEGER for the same SQLite/Postgres round-trip as above.
-        _add_column(cursor, "user_settings", "cosmos_enabled",
-                    "INTEGER DEFAULT 1")
+        # Entrance theme (Settings → Display & Preferences). Global, single-row
+        # choice of what plays on login: 'none' | 'cosmos' | 'samurai'.
+        # Supersedes the boolean cosmos_enabled column from the previous
+        # migration — three cases, in order:
+        #   1. Fresh DB (neither column exists): add entrance_theme fresh.
+        #   2. cosmos_enabled exists, entrance_theme doesn't: this is the
+        #      upgrade path. Rename in place and fold the old 0/1 into the
+        #      new value so an existing on/off preference survives losslessly.
+        #      SQLite is loosely typed, so the renamed column can hold text
+        #      without a column-type change; Postgres needs an explicit
+        #      ALTER COLUMN TYPE, done as part of the same rename.
+        #   3. entrance_theme already exists: no-op (falls through the outer
+        #      `if`, same idempotency pattern as every _add_column call above).
+        if not _column_exists(cursor, "user_settings", "entrance_theme"):
+            if _column_exists(cursor, "user_settings", "cosmos_enabled"):
+                cursor.execute(
+                    "ALTER TABLE user_settings RENAME COLUMN cosmos_enabled TO entrance_theme")
+                if USE_POSTGRES:
+                    cursor.execute("""
+                        ALTER TABLE user_settings ALTER COLUMN entrance_theme TYPE VARCHAR(32)
+                        USING (CASE WHEN entrance_theme::int = 1 THEN 'cosmos' ELSE 'none' END)
+                    """)
+                    cursor.execute(
+                        "ALTER TABLE user_settings ALTER COLUMN entrance_theme SET DEFAULT 'cosmos'")
+                else:
+                    cursor.execute("""
+                        UPDATE user_settings SET entrance_theme =
+                          CASE WHEN entrance_theme = 1 THEN 'cosmos' ELSE 'none' END
+                    """)
+            else:
+                _add_column(cursor, "user_settings", "entrance_theme",
+                            "VARCHAR(32) DEFAULT 'cosmos'")
 
         # habits predates UNIQUE(date); collapse any duplicate days and enforce
         # it on DBs created before the constraint existed.
@@ -7688,32 +7714,36 @@ def update_notification_prefs(user_id: int = DEFAULT_USER_ID, **fields) -> dict:
     return get_notification_prefs(user_id)
 
 
-def get_cosmos_enabled(user_id: int = DEFAULT_USER_ID) -> bool:
-    """Whether the Cosmos entrance screen (cinematic black-hole landing) is on.
-    Defaults to True on a fresh/empty DB or a NULL column. Never raises."""
+ENTRANCE_THEMES = ("none", "cosmos", "samurai")
+
+
+def get_entrance_theme(user_id: int = DEFAULT_USER_ID) -> str:
+    """Which entrance plays on login: 'none' | 'cosmos' | 'samurai'.
+    Defaults to 'cosmos' on a fresh/empty DB, a NULL column, or an
+    unrecognised stored value. Never raises."""
     ph = "%s" if USE_POSTGRES else "?"
     try:
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute(
-                f"SELECT cosmos_enabled FROM user_settings WHERE user_id = {ph}",
+                f"SELECT entrance_theme FROM user_settings WHERE user_id = {ph}",
                 (user_id,))
             row = cur.fetchone()
     except Exception:
         row = None
     if row is None:
-        return True
-    val = row[0] if not isinstance(row, (dict, sqlite3.Row)) else row["cosmos_enabled"]
-    if val is None:
-        return True
-    return _coerce_bool(val)
+        return "cosmos"
+    val = row[0] if not isinstance(row, (dict, sqlite3.Row)) else row["entrance_theme"]
+    return val if val in ENTRANCE_THEMES else "cosmos"
 
 
-def set_cosmos_enabled(user_id: int = DEFAULT_USER_ID, enabled: bool = True) -> bool:
-    """Upsert the Cosmos entrance toggle and return the stored value. Booleans are
-    stored as 0/1 for the SQLite/Postgres round-trip."""
+def set_entrance_theme(user_id: int = DEFAULT_USER_ID, theme: str = "cosmos") -> str:
+    """Upsert the entrance-theme choice and return the stored value. Caller
+    validates `theme` against ENTRANCE_THEMES; an unrecognised value here
+    falls back to 'cosmos' rather than writing garbage to the column."""
+    if theme not in ENTRANCE_THEMES:
+        theme = "cosmos"
     ph = "%s" if USE_POSTGRES else "?"
-    flag = 1 if _coerce_bool(enabled) else 0
     with get_db() as conn:
         cur = conn.cursor()
         if USE_POSTGRES:
@@ -7724,9 +7754,9 @@ def set_cosmos_enabled(user_id: int = DEFAULT_USER_ID, enabled: bool = True) -> 
             cur.execute(
                 "INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (user_id,))
         cur.execute(
-            f"UPDATE user_settings SET cosmos_enabled = {ph} WHERE user_id = {ph}",
-            (flag, user_id))
-    return bool(flag)
+            f"UPDATE user_settings SET entrance_theme = {ph} WHERE user_id = {ph}",
+            (theme, user_id))
+    return theme
 
 
 def is_within_quiet_hours(prefs: dict = None, now: datetime = None,
