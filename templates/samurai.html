@@ -40,6 +40,13 @@
   <span class="samurai-loader-bar"></span>
 </div>
 
+<!-- Login-entrance slash: fires only when this page was reached via a login
+     redirect (?entry=1, appended by login() in app.py — see samurai-slash.js
+     for why a URL flag rather than a session flag). Independent of the
+     Three.js boot below: its own canvas, its own rAF loop, no GL calls, so it
+     never touches that scene's frame budget and doesn't need to wait for it. -->
+<script src="{{ url_for('static', filename='js/samurai-slash.js') }}"></script>
+
 <script type="importmap">
 {
   "imports": {
