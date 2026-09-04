@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#2b3a3e">
+<title>ASFA // SAMURAI</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Yuji+Boku&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/samurai-theme.css') }}">
+</head>
+<body class="samurai-root">
+
+<canvas id="samurai-canvas"></canvas>
+
+<div id="samurai-fallback" aria-hidden="true"></div>
+<div id="samurai-vignette" aria-hidden="true"></div>
+
+<header class="samurai-brand">
+  <a class="samurai-logo" href="/" aria-label="ASFA — dashboard"><span class="br">[</span>ASFA<span class="br">]</span></a>
+</header>
+
+<div class="samurai-ui">
+  <nav class="samurai-menu" aria-label="Primary">
+    <a href="/"><span class="ink">Command</span></a>
+    <a href="/agents"><span class="ink">Agents</span></a>
+    <a href="/approvals"><span class="ink">Approvals</span></a>
+    <a href="/system"><span class="ink">Systems</span></a>
+    <a href="/gym"><span class="ink">Gym</span></a>
+    <a href="/fragrances"><span class="ink">Scents</span></a>
+    <a href="/interview"><span class="ink">Interview</span></a>
+    <a href="/mission-control"><span class="ink">Mission Control</span></a>
+    <a href="/portfolio"><span class="ink">Portfolio</span></a>
+  </nav>
+</div>
+
+<div id="samurai-loader">
+  <span class="samurai-loader-mark">ASFA</span>
+  <span class="samurai-loader-bar"></span>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+  }
+}
+</script>
+
+<!-- Safety net: if the module never boots (import map unsupported, CDN blocked),
+     swap in the static gradient rather than leaving a dead loader on screen. -->
+<script>
+  window.__samuraiSafety = setTimeout(function () {
+    document.getElementById("samurai-fallback").classList.add("show");
+    document.getElementById("samurai-loader").classList.add("hidden");
+  }, 9000);
+</script>
+
+<script src="{{ url_for('static', filename='js/samurai-menu.js') }}" defer></script>
+<script type="module" src="{{ url_for('static', filename='js/samurai-boot.js') }}"></script>
+</body>
+</html>

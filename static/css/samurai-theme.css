@@ -1,0 +1,245 @@
+/* Samurai entrance screen — full-viewport WebGL takeover.
+   Self-contained: this page deliberately does not load style.css or the top
+   nav, so nothing here can leak into the rest of the app. */
+
+.samurai-root {
+  margin: 0;
+  height: 100dvh;
+  overflow: hidden;
+  background: #43585c;
+  color: #eef2ee;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+#samurai-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+}
+
+/* Fades out once the scene has rendered its first frames. */
+#samurai-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-content: center;
+  gap: 18px;
+  justify-items: center;
+  background: #2b3a3e;
+  transition: opacity 900ms ease;
+}
+#samurai-loader.hidden { opacity: 0; pointer-events: none; }
+
+.samurai-loader-mark {
+  font-size: 12px;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: rgba(238, 242, 238, 0.62);
+}
+.samurai-loader-bar {
+  width: 180px;
+  height: 1px;
+  background: rgba(238, 242, 238, 0.16);
+  overflow: hidden;
+}
+.samurai-loader-bar::after {
+  content: '';
+  display: block;
+  height: 100%;
+  width: 40%;
+  background: rgba(238, 242, 238, 0.75);
+  animation: samurai-sweep 1.5s ease-in-out infinite;
+}
+@keyframes samurai-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+/* Screen-space vignette. Cheaper as one composited layer than as a shader
+   pass, and it sits under the menu so the UI stays at full contrast. */
+#samurai-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: radial-gradient(115% 85% at 50% 46%,
+    rgba(0,0,0,0) 42%, rgba(10,20,22,0.20) 78%, rgba(8,16,18,0.44) 100%);
+}
+
+/* WebGL unavailable — static fallback stands in for the scene. */
+#samurai-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: none;
+  background:
+    radial-gradient(120% 80% at 50% 92%, #93a294 0%, #4a6a68 46%, #1e3138 100%);
+}
+#samurai-fallback.show { display: block; }
+
+@media (prefers-reduced-motion: reduce) {
+  .samurai-loader-bar::after { animation: none; width: 100%; }
+  #samurai-loader { transition: none; }
+}
+
+/* ── UI layer ───────────────────────────────────────────────────────────────
+   Sits above the canvas and the vignette. Everything is pointer-events:none by
+   default so stray overlay boxes never eat a click on the scene; only the
+   actual links opt back in. */
+
+.samurai-ui {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(20px, 5vw, 64px);
+}
+
+.samurai-brand {
+  position: fixed;
+  top: clamp(18px, 3.4vw, 38px);
+  left: clamp(20px, 5vw, 64px);
+  pointer-events: auto;
+}
+.samurai-logo {
+  display: inline-flex;
+  gap: 2px;
+  font-size: clamp(15px, 1.5vw, 19px);
+  font-weight: 600;
+  letter-spacing: 0.36em;
+  text-decoration: none;
+  color: rgba(238, 244, 236, 0.9);
+  text-shadow: 0 1px 14px rgba(8, 18, 20, 0.75);
+  transition: color 260ms ease, letter-spacing 380ms cubic-bezier(.2,.7,.2,1);
+}
+.samurai-logo .br { color: rgba(238, 244, 236, 0.42); transition: color 260ms ease; }
+.samurai-logo:hover { color: #fff; letter-spacing: 0.44em; }
+.samurai-logo:hover .br { color: rgba(238, 244, 236, 0.8); }
+
+.samurai-menu {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 2.2vh, 26px);
+  max-width: min(50vw, 520px);
+}
+
+/* Resting: Japanese ink-brush calligraphy (Yuji Boku), natural case.
+   Deliberately NOT uppercase: Yuji Boku's capital-only Latin forms are far
+   more ornamented than its lowercase, closer to display flourishes than
+   letters, and "MISSION CONTROL" set that way was genuinely hard to read at
+   menu size — tested side by side before choosing. Tracking is tight (not
+   the wide 0.18em the old uppercase sans used) so adjacent letters read as
+   one continuous brush gesture instead of separate stamped glyphs. */
+.samurai-menu a {
+  position: relative;
+  display: inline-block;
+  width: fit-content;
+  padding: 0.22em 0.2em;
+  font-family: 'Yuji Boku', 'Inter', system-ui, sans-serif;
+  font-weight: 400;
+  font-size: clamp(17px, 2.05vw, 27px);
+  line-height: 1.3;
+  letter-spacing: 0.015em;
+  color: rgba(235, 235, 230, 0.82);
+  text-decoration: none;
+  text-shadow: 0 1px 12px rgba(6, 14, 16, 0.55);
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
+
+.samurai-menu .lbl {
+  position: relative;
+  z-index: 1;
+  white-space: nowrap;
+}
+/* The inverted copy: sits exactly over the label and is revealed by the same
+   wipe as the stroke, so dark glyphs only ever appear over white paint. */
+.samurai-menu .lbl.ink {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: inherit;
+  color: #14140f;
+  text-shadow: none;
+  z-index: 2;
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 190ms cubic-bezier(.4, 0, .7, 1) 0ms;
+  will-change: clip-path;
+}
+
+/* The stroke: positioned and sized per item by samurai-menu.js, which also
+   generates its SVG. Everything animated here is compositor-only. */
+.samurai-menu .stroke {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 190ms cubic-bezier(.4, 0, .7, 1) 60ms;
+  will-change: clip-path;
+  filter: drop-shadow(0 1px 6px rgba(8, 16, 18, 0.25));
+}
+.samurai-menu .stroke svg { display: block; width: 100%; height: 100%; }
+
+/* Enter: stroke leads (320ms ease-out), the ink flip trails it by 60ms. */
+.samurai-menu a:hover .stroke,
+.samurai-menu a:focus-visible .stroke,
+.samurai-menu a:active .stroke,
+.samurai-menu a.is-hot .stroke {
+  clip-path: inset(0 0 0 0);
+  transition: clip-path 320ms cubic-bezier(.16, .8, .3, 1) 0ms;
+}
+.samurai-menu a:hover .lbl.ink,
+.samurai-menu a:focus-visible .lbl.ink,
+.samurai-menu a:active .lbl.ink,
+.samurai-menu a.is-hot .lbl.ink {
+  clip-path: inset(0 0 0 0);
+  transition: clip-path 280ms cubic-bezier(.16, .8, .3, 1) 60ms;
+}
+
+/* Leave: wipes out left-to-right, ink first, at ~60% of the enter time. */
+.samurai-menu a.is-leaving .stroke {
+  clip-path: inset(0 0 0 100%);
+  transition: clip-path 190ms cubic-bezier(.4, 0, .7, 1) 60ms;
+}
+.samurai-menu a.is-leaving .lbl.ink {
+  clip-path: inset(0 0 0 100%);
+  transition: clip-path 190ms cubic-bezier(.4, 0, .7, 1) 0ms;
+}
+/* Snap back to the resting clip between leave and the next enter. */
+.samurai-menu a.no-anim .stroke,
+.samurai-menu a.no-anim .lbl.ink { transition: none; }
+
+@media (max-width: 760px) {
+  .samurai-ui { justify-content: flex-end; padding-bottom: clamp(26px, 7vh, 62px); }
+  .samurai-menu { max-width: 100%; gap: clamp(5px, 1.4vh, 12px); }
+  /* Floor raised from the old uppercase sans's 13px — Yuji Boku's brush
+     detail (the flourish on capitals, the stroke taper) starts to mush
+     below ~17px. Tested at 17px against the shortest real menu items. */
+  .samurai-menu a { font-size: clamp(17px, 4.8vw, 22px); }
+}
+
+/* Short landscape phones have no room for a nine-item column, so it wraps. */
+@media (max-height: 520px) and (min-width: 761px) {
+  .samurai-menu {
+    flex-flow: column wrap;
+    max-height: 68vh;
+    max-width: min(78vw, 720px);
+    gap: 0 clamp(20px, 4vw, 52px);
+  }
+  .samurai-menu a { font-size: clamp(16px, 1.8vw, 21px); }
+}
+
+/* Reduced motion: no wipe, the end state applies at once; the effect stays. */
+@media (prefers-reduced-motion: reduce) {
+  .samurai-menu .stroke,
+  .samurai-menu .lbl.ink { transition: none !important; }
+  .samurai-logo { transition: color 260ms ease; }
+}
