@@ -6,7 +6,12 @@
 {% include "_csrf.html" %}
 <nav class="asfa-nav" aria-label="Primary">
   <div class="nav-left">
-    <a class="nav-logo" href="/"><span class="lb">[</span><span data-decode>ASFA</span><span class="rb">]</span></a>
+    {# The logo is the way back to the active entrance theme's full-screen menu
+       (/cosmos-theme or /samurai-theme). menu_url falls back to "/" for guests
+       and for entrance_theme 'none', which has no menu screen. The tabs below
+       are unaffected — the menu is an optional way to navigate, never a
+       required one. #}
+    <a class="nav-logo" href="{{ menu_url | default('/', true) }}"><span class="lb">[</span><span data-decode>ASFA</span><span class="rb">]</span></a>
     <span class="nav-day" id="nav-day" data-decode>DAY --</span>
   </div>
   {# Guests only see the screens the demo covers (_GUEST_PAGES in app.py);

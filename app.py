@@ -561,9 +561,20 @@ def _inject_csrf_token():
 @app.context_processor
 def _inject_ui_theme():
     theme = "cyberpunk"
+    # `menu_url` is where the ASFA logo points in nav.html. Each entrance theme
+    # owns a full-screen menu screen, and the logo is how you get back to it
+    # from anywhere in the app — the top nav stays independent and always
+    # works, so the menu is an alternative route, never a required one.
+    # 'none' has no menu screen, so its logo keeps the old behaviour (/command).
+    menu_url = "/"
     if session.get("authed"):
-        theme = "samurai" if db.get_entrance_theme(db.DEFAULT_USER_ID) == "samurai" else "cyberpunk"
-    return {"ui_theme": theme}
+        entrance = db.get_entrance_theme(db.DEFAULT_USER_ID)
+        theme = "samurai" if entrance == "samurai" else "cyberpunk"
+        if entrance == "samurai":
+            menu_url = url_for("samurai_theme")
+        elif entrance == "cosmos":
+            menu_url = url_for("cosmos_theme")
+    return {"ui_theme": theme, "menu_url": menu_url}
 
 
 # ── Login brute-force lockout ──────────────────────────────────────────────────
