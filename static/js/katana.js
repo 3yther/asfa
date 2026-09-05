@@ -117,6 +117,78 @@ function tsubaGeometry() {
   return g;
 }
 
+// ── Mei: the maker's mark ────────────────────────────────────────────────────
+// "AS", cut into the blade beside the bo-hi. A real mei is chiselled into the
+// nakago, under the wrap where nobody would ever see it; this sits on the blade
+// itself, which is the one liberty taken — placed spine-side of the groove,
+// where a horimono would go, rather than out on the polished ji.
+//
+// Drawn to a canvas rather than built as an SDF: two glyphs at ~5 px on screen
+// do not justify hand-rolling letterforms, and the font's own curves read
+// better at that size than anything a distance field would give.
+const MEI = {
+  text: ['A', 'S'],
+  // Extent on the blade in (along, section) space. `section` 0 is the mune and
+  // 1 the cutting edge, so this straddles the bo-hi channel at 0.14…0.34.
+  along: [0.190, 0.256],
+  section: [0.07, 0.39],
+  // The mark covers ~9×18 screen px, so the 48×96 texture is minified ~5× and
+  // the mip chain averages each stroke down with the ground around it: measured
+  // peak coverage lands near 0.16, not 1.0. A depth of 0.42 therefore darkened
+  // the steel by 6.5% at its strongest, which is not "subtle", it is invisible.
+  // Depth is scaled for that averaging and the result clamped, so a display
+  // where the blade is larger (and coverage closer to 1) cannot drive the cut
+  // to black.
+  depth: 1.15,
+  minBrightness: 0.62,   // floor on the cut, so the glyph never becomes a hole
+  lip: 0.34,             // brightness of the lit edge on the light-facing side
+};
+
+let _meiTexture = null;
+function meiTexture() {
+  if (_meiTexture) return _meiTexture;
+  // Tall and narrow: the texture's height runs down the blade, its width across.
+  // Kept small deliberately — a 256px canvas would only be minified harder and
+  // average the strokes away faster.
+  const W = 48, H = 96;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // A serif face reads as cut-with-a-chisel; the sans in the rest of the UI
+  // reads as printed. Filled *and* stroked: at this size a hairline serif loses
+  // its thin strokes to the mip chain entirely, and only the stems survive.
+  ctx.font = `700 ${Math.round(H * 0.44)}px Georgia, "Times New Roman", serif`;
+  ctx.lineWidth = 2.0;
+  ctx.lineJoin = 'round';
+  MEI.text.forEach((ch, i) => {
+    const y = H * (0.26 + i * 0.47);
+    ctx.strokeText(ch, W / 2, y);
+    ctx.fillText(ch, W / 2, y);
+  });
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  // No mip chain. The mark is ~11×21 px on screen against a 48×96 source, so
+  // trilinear sampling lands several levels down and averages each stroke into
+  // its background — which is what turned the glyphs into a grey smudge rather
+  // than letters. Plain bilinear off level 0 keeps the strokes. Normally that
+  // trade buys shimmer, but neither this camera nor this sword ever moves, so
+  // there is nothing for it to shimmer against.
+  tex.generateMipmaps = false;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  // Three flips textures on upload by default, so v = 0 would sample the bottom
+  // of the canvas. The sword is planted point-down, which makes vAlong = 0 the
+  // top of the screen — with the flip left on, the mark rendered "S" over "A".
+  tex.flipY = false;
+  _meiTexture = tex;
+  return tex;
+}
+
 function steelMaterial(rimColor) {
   const m = new THREE.MeshPhysicalMaterial({
     color: 0xcfdadf,
@@ -127,7 +199,19 @@ function steelMaterial(rimColor) {
     anisotropyRotation: 0,
   });
 
-  const uniforms = { uRim: { value: new THREE.Color(rimColor) } };
+  const uniforms = {
+    uRim: { value: new THREE.Color(rimColor) },
+    uMei: { value: meiTexture() },
+    uMeiAlong: { value: new THREE.Vector2(...MEI.along) },
+    uMeiSection: { value: new THREE.Vector2(...MEI.section) },
+    uMeiDepth: { value: MEI.depth },
+    uMeiFloor: { value: MEI.minBrightness },
+    uMeiLip: { value: MEI.lip },
+  };
+  // Kept on the material so the mark's depth can be measured by differencing a
+  // frame against the same frame with uMeiDepth at 0 — at ~5 px the mei is far
+  // too small to judge by eye, and a diff says exactly which pixels it moved.
+  m.userData.uniforms = uniforms;
 
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -146,6 +230,12 @@ function steelMaterial(rimColor) {
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform vec3 uRim;
+        uniform sampler2D uMei;
+        uniform vec2 uMeiAlong;
+        uniform vec2 uMeiSection;
+        uniform float uMeiDepth;
+        uniform float uMeiFloor;
+        uniform float uMeiLip;
         varying float vSection;
         varying float vEdge;
         varying float vAlong;`)
@@ -171,6 +261,20 @@ function steelMaterial(rimColor) {
         float groove = smoothstep( 0.14, 0.18, vSection ) * ( 1.0 - smoothstep( 0.30, 0.34, vSection ) ) * run;
         float lip = smoothstep( 0.32, 0.34, vSection ) * ( 1.0 - smoothstep( 0.36, 0.40, vSection ) ) * run;
         outgoingLight *= 1.0 - 0.32 * groove + 0.22 * lip;
+        // Mei. Sampled in blade space, so it stays put under the taper and the
+        // sori without needing its own UV set. Cut, not raised: the glyph
+        // darkens the steel, and a one-texel offset toward the light picks out
+        // a bright lip on the far wall of the cut — the shading that makes an
+        // engraving read as engraved rather than as printed ink.
+        vec2 meiUv = vec2(
+          ( vSection - uMeiSection.x ) / ( uMeiSection.y - uMeiSection.x ),
+          ( vAlong  - uMeiAlong.x  ) / ( uMeiAlong.y  - uMeiAlong.x  ) );
+        if ( meiUv.x > 0.0 && meiUv.x < 1.0 && meiUv.y > 0.0 && meiUv.y < 1.0 ) {
+          float ink = texture2D( uMei, meiUv ).a;
+          float shifted = texture2D( uMei, meiUv + vec2( 0.05, 0.03 ) ).a;
+          outgoingLight *= max( 1.0 - uMeiDepth * ink, uMeiFloor );
+          outgoingLight *= 1.0 + uMeiLip * max( shifted - ink, 0.0 );
+        }
         // Yokote: the crease where the point's polish meets the body.
         outgoingLight *= 1.0 + 0.10 * smoothstep( 0.892, 0.900, vAlong ) * ( 1.0 - smoothstep( 0.905, 0.925, vAlong ) );
         #include <opaque_fragment>`);
