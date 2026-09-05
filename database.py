@@ -6722,20 +6722,29 @@ def delete_session(session_id: int) -> bool:
 
 
 def get_active_session() -> dict:
-    """Return today's in-progress session (started, no end_time), with its sets
-    and routine name, so a mid-workout refresh can resume. None if none open."""
+    """Return the most recent in-progress session (started, no end_time), with
+    its sets and routine name, so a mid-workout refresh can resume. None if none
+    open.
+
+    Deliberately NOT scoped to today. It used to be `WHERE s.date = today`, which
+    made a session opened on any previous day invisible here — including one that
+    simply crossed midnight. That mattered because /gym's resume banner is the
+    only path that reconciles the browser's localStorage session against the
+    server: if this returns nothing, the banner never appears, so a stale local
+    session can be neither resumed nor discarded and its FINISH button posts to a
+    session id the server may no longer have. A day-old open session is a session
+    the athlete forgot to close, and the honest answer is to hand it back so they
+    can close or discard it — `date` is on the row for the caller to label it.
+    """
     _ensure_gym_tables()
-    today = date.today().isoformat()
     with get_db() as conn:
         cur = conn.cursor()
-        ph = "%s" if USE_POSTGRES else "?"
         cur.execute(
-            f"""SELECT s.*, r.name AS routine_name, r.day_type
-                FROM gym_sessions s
-                LEFT JOIN gym_routines r ON r.id = s.routine_id
-                WHERE s.date = {ph} AND (s.end_time IS NULL OR s.end_time = '')
-                ORDER BY s.id DESC LIMIT 1""",
-            (today,))
+            """SELECT s.*, r.name AS routine_name, r.day_type
+               FROM gym_sessions s
+               LEFT JOIN gym_routines r ON r.id = s.routine_id
+               WHERE s.end_time IS NULL OR s.end_time = ''
+               ORDER BY s.date DESC, s.id DESC LIMIT 1""")
         row = cur.fetchone()
         if not row:
             return None

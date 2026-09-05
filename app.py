@@ -2198,6 +2198,31 @@ def api_gym_exercises_by_muscle(group):
     return jsonify(db.get_exercises_by_muscle(group))
 
 
+def _minutes_between(start_iso, end_iso) -> int:
+    """Whole minutes from one ISO timestamp to another, 0 if either is unusable.
+
+    Exists because the two sides do not agree on tz-awareness. `start_time` is
+    written by the server as a naive `datetime.now().isoformat()`, while the
+    browser sends `new Date().toISOString()` — which ends in "Z". Python 3.11+
+    parses that into an *aware* datetime, so the subtraction raised
+    `TypeError: can't subtract offset-naive and offset-aware datetimes`. The
+    caller caught that alongside a genuine parse failure and recorded
+    duration_minutes = 0, so every workout finished from the browser was stored
+    as zero minutes — and with it every efficiency figure (volume ÷ duration).
+
+    db.to_local_datetime resolves both onto APP_TZ — a naive value is taken as
+    already local, an aware one is converted — so the "Z" is honoured as UTC
+    rather than dropped. Dropping it would silently lose the BST offset and
+    under-report every summer workout by an hour.
+    """
+    try:
+        start = db.to_local_datetime(datetime.fromisoformat(str(start_iso)))
+        end = db.to_local_datetime(datetime.fromisoformat(str(end_iso)))
+    except (TypeError, ValueError):
+        return 0
+    return max(int((end - start).total_seconds() // 60), 0)
+
+
 @app.route("/api/gym/routines")
 def api_gym_routines():
     return jsonify(db.get_all_routines())
@@ -2230,7 +2255,12 @@ def api_gym_session_start():
 def api_gym_session_end(session_id):
     session = db.get_session(session_id)
     if not session:
-        return jsonify({"error": "session not found"}), 404
+        # `code` so the client can tell "this session is gone" apart from every
+        # other failure and recover instead of retrying forever. The browser
+        # keeps its active session in localStorage; if that id no longer exists
+        # here, FINISH is otherwise a dead button with a generic error.
+        return jsonify({"error": "session not found",
+                        "code": "session_not_found"}), 404
     d = request.get_json(force=True) or {}
     sim = db.get_simulated_time()
     end_time = sim.isoformat() if sim is not None else (
@@ -2244,11 +2274,7 @@ def api_gym_session_end(session_id):
 
     duration = d.get("duration") or d.get("duration_minutes")
     if duration is None:
-        try:
-            start = datetime.fromisoformat(session.get("start_time"))
-            duration = int((datetime.fromisoformat(end_time) - start).total_seconds() // 60)
-        except (TypeError, ValueError):
-            duration = 0
+        duration = _minutes_between(session.get("start_time"), end_time)
 
     # Completion bonus XP + streak update on finishing a workout.
     bonus = db.add_xp(100, "workout completed")
@@ -2297,6 +2323,14 @@ def api_gym_log_set():
     required = ("session_id", "exercise_id", "set_number")
     if any(d.get(k) is None for k in required):
         return jsonify({"error": "session_id, exercise_id and set_number are required"}), 400
+    # A set against a session that does not exist used to insert happily and be
+    # invisible from then on — nothing reads gym_sets except through a session.
+    # That is what let a stale browser session look healthy for days: every set
+    # "saved", and only FINISH (which does check) ever reported a problem. Fail
+    # here instead, with the code the client uses to reset its local session.
+    if not db.get_session(d["session_id"]):
+        return jsonify({"error": "session not found",
+                        "code": "session_not_found"}), 404
     result = db.log_set(
         d["session_id"], d["exercise_id"], d["set_number"],
         d.get("set_type", "working"), d.get("weight_kg", 0), d.get("reps", 0),

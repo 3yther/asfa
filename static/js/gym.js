@@ -12,9 +12,24 @@
 
 /* ── 0. Helpers & config ──────────────────────────────────────────────── */
 const API = "/api/gym";
+
+// A failed call throws an Error carrying `status`, plus `code`/`serverMessage`
+// when the body is our JSON error shape. It used to be `new Error(r.status)`,
+// which kept the status only as a message string and dropped the server's
+// explanation, so no caller could tell a deleted session from an expired login
+// from a CSRF failure — they all surfaced the same unactionable toast.
+async function httpError(r) {
+  const err = new Error(String(r.status));
+  err.status = r.status;
+  try {
+    const body = await r.json();
+    if (body && typeof body === "object") { err.code = body.code; err.serverMessage = body.error; }
+  } catch (e) { /* not JSON — a proxy error page, or the redirect to /login */ }
+  return err;
+}
 async function apiGet(url) {
   const r = await fetch(url, { credentials: "include" });
-  if (!r.ok) throw new Error(r.status);
+  if (!r.ok) throw await httpError(r);
   return r.json();
 }
 async function apiSend(url, method, body) {
@@ -24,7 +39,7 @@ async function apiSend(url, method, body) {
     opts.body = JSON.stringify(body);
   }
   const r = await fetch(url, opts);
-  if (!r.ok) throw new Error(r.status);
+  if (!r.ok) throw await httpError(r);
   return r.json();
 }
 const apiPost = (u, b) => apiSend(u, "POST", b);
@@ -629,9 +644,27 @@ let CURRENT_EX_ID = null;   // last exercise interacted with (AI-trainer context
 function saveLS() { if (S) localStorage.setItem(LS_KEY, JSON.stringify(S)); else localStorage.removeItem(LS_KEY); }
 function clearSession() { S = null; localStorage.removeItem(LS_KEY); stopRestTimer(); stopSessionTimer(); }
 
+/* Does the server still hold this session? Only a definite 404 counts as "no" —
+   a network drop or a 5xx must leave the session alone, or finishing a workout
+   in a gym with bad signal would throw the sets away. */
+async function sessionStillOnServer(id) {
+  if (!id) return false;
+  try { await apiGet(`${API}/sessions/${id}`); return true; }
+  catch (e) { return e.status !== 404; }
+}
+
 async function loadWorkout() {
-  // If a session is live in memory, keep showing it.
-  if (S) { renderActiveSession(); return; }
+  // If a session is live in memory, keep showing it — but only once we know the
+  // server still has it. This used to return unconditionally, which made
+  // localStorage the sole authority over an "active" session for as long as the
+  // browser kept it: if the row was gone, /gym happily rendered the card and ran
+  // the timer for days while every write against that id was refused. Verifying
+  // once per load turns that permanent dead end into a discarded session.
+  if (S) {
+    if (await sessionStillOnServer(S.id)) { renderActiveSession(); return; }
+    clearSession();
+    toast("Your last session was no longer on the server — cleared", 4200);
+  }
   renderRoutinePicker();
   // detect resumable session (server truth)
   try {
@@ -639,8 +672,14 @@ async function loadWorkout() {
     if (active && active.id) {
       const banner = $("#resume-banner");
       $("#resume-name").textContent = active.routine_name || "workout";
+      // The server no longer restricts this to today, so say which day when it
+      // isn't — "(started 19:42)" on a session from Monday reads as this evening.
       const started = active.start_time ? new Date(active.start_time) : null;
-      $("#resume-started").textContent = started ? `(started ${started.toTimeString().slice(0,5)})` : "";
+      const today = new Date().toISOString().slice(0, 10);
+      const stale = active.date && active.date.slice(0, 10) !== today;
+      $("#resume-started").textContent = !started ? ""
+        : stale ? `(left open since ${started.toLocaleDateString(undefined, { weekday: "short" })} ${started.toTimeString().slice(0,5)})`
+                : `(started ${started.toTimeString().slice(0,5)})`;
       banner.hidden = false;
       $("#resume-yes").onclick = () => resumeSession(active);
       $("#resume-discard").onclick = async () => {
@@ -1737,7 +1776,24 @@ async function finishWorkout() {
   }
   let res;
   try { res = await apiPost(`${API}/sessions/${S.id}/end`, { end_time: new Date().toISOString() }); }
-  catch (e) { toast("Could not finish session"); return; }
+  catch (e) {
+    // The server has no such session. Retrying can only fail the same way, and
+    // the old generic toast left the athlete pressing a dead button forever
+    // against a session the server had already lost. Clear the local copy so
+    // /gym goes back to the routine picker and the next workout can start.
+    if (e.status === 404 || e.code === "session_not_found") {
+      clearSession();
+      loadWorkout();
+      toast("This session is no longer on the server — cleared it, start a new one", 4200);
+      return;
+    }
+    if (e.status === 401 || e.status === 403) {
+      toast("Session expired — reload the page and sign in, your sets are saved", 4200);
+      return;
+    }
+    toast(`Could not finish session${e.status ? ` (${e.status})` : ""}`, 3200);
+    return;
+  }
   showSummary(res);
 }
 
