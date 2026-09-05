@@ -25,6 +25,9 @@ const FRAG = [
   "uniform vec2 uParallax;",    // star-layer drift from pointer / device tilt
   "uniform float uRedshift;",   // 0 = neutral, 1 = fully cooled idle grade
   "uniform float uStarBright;", // 0 kills twinkle for prefers-reduced-motion
+  "uniform float uNebula;",     // background dust wash: 0 = off, 1 = nominal
+  "uniform float uTurb;",       // 0/1: fine disk turbulence layer
+  "uniform float uStarLayers;", // 3 or 4: number of starfield depth layers
   "",
   "float hash21(vec2 p){ p=fract(p*vec2(123.34,345.45)); p+=dot(p,p+34.345); return fract(p.x*p.y); }",
   "float hash31(vec3 p){ p=fract(p*0.1031); p+=dot(p,p.yzx+33.33); return fract((p.x+p.y)*p.z); }",
@@ -32,6 +35,13 @@ const FRAG = [
   "  c=hash21(i+vec2(0.0,1.0)),d=hash21(i+vec2(1.0,1.0)); vec2 u=f*f*(3.0-2.0*f);",
   "  return mix(mix(a,b,u.x),mix(c,d,u.x),u.y); }",
   "float fbm(vec2 p){ float s=0.0, a=0.5; for(int i=0;i<6;i++){ s+=a*vnoise(p); p=p*2.04+1.7; a*=0.5; } return s; }",
+  "float fbm3(vec2 p){ float s=0.0, a=0.5; for(int i=0;i<3;i++){ s+=a*vnoise(p); p=p*2.11+1.3; a*=0.5; } return s; }",
+  // Ridged noise: inverting the absolute deviation from mid-grey turns smooth
+  // hills into sharp crests. Summed over octaves this is the standard way to
+  // get thin filaments instead of soft blobs — exactly the hair-like
+  // multi-strand quality the reference disk has and plain fbm cannot produce.
+  "float ridged(vec2 p){ return 1.0-abs(2.0*vnoise(p)-1.0); }",
+  "float strands(vec2 p){ float s=0.0,a=0.55; for(int i=0;i<4;i++){ s+=a*ridged(p); p=p*2.17+1.7; a*=0.55; } return s; }",
   "",
   // ── Accretion disk ─────────────────────────────────────────────────────────
   // Blackbody ramp + domain-warped turbulence, with relativistic beaming split
@@ -58,7 +68,44 @@ const FRAG = [
   "  float innerEdge=smoothstep(innerR+0.5, innerR+0.04, rr);",
   "  float outerFade=smoothstep(outerR, outerR-3.0, rr);",
   "  float temp=1.0-tN;",
-  "  float bright=(0.22+1.15*temp)*density*outerFade + innerEdge*0.85*temp;",
+  // Scaled back ~15%. The added stars, nebula and halo raised total scene
+  // energy, so ACES + bloom pushed the approaching limb to [243,236,217] —
+  // clipping, and saturated channels converge, which flattened the Doppler
+  // hue split from 24 points to 1 even though the beaming maths never
+  // changed. Leaving headroom keeps the colour, not just the brightness.
+  "  float bright=((0.22+1.15*temp)*density*outerFade + innerEdge*0.85*temp)*0.85;",
+  // Fine-grained structure: filaments and knots riding on the base ramp. A
+  // multiplicative +/-13% so it textures the disk without overriding the
+  // blackbody gradient or the beaming grade applied below.
+  // fbm3 only spans ~0.25-0.75 (octave weights 0.5/0.25/0.125), so feeding
+  // it straight into the 0.87+0.26*x ramp gave +/-6.5%, not the +/-13%
+  // intended, and the base turbulence swamped it (measured +0.4pp). The
+  // smoothstep remaps to a true 0-1 with a hard-ish edge, which is also what
+  // turns soft wobble into filaments and knots.
+  // Anisotropic on purpose: high angular frequency, low radial. Keplerian
+  // shear already smears the base turbulence into stripes that run along
+  // the disk, so an isotropic fine layer just rides those stripes and
+  // vanishes. Stretching the noise along rr makes its features cut across
+  // the bands, which is what reads as filaments and knots.
+  // Strand weave, anisotropic in RADIUS not angle. A ray crosses the disk plane
+  // several times and those samples are summed, which averages away angular
+  // high-frequency detail — a first attempt at sw*58 measured 8-9 strand peaks
+  // in the lensed arc with the layer both on and off, i.e. invisible. Thin
+  // structure at constant radius survives that integration, maps to concentric
+  // threads in the arc and to stripes across the direct band, and is what
+  // differential rotation actually produces.
+  "  float fil=strands(vec2(sw*4.0-rot*0.5, rr*34.0));",
+  // A second, coarser set at a different rate so threads beat against each
+  // other rather than forming one regular comb.
+  "  float fil2=strands(vec2(sw*9.0-rot*1.1, rr*17.0));",
+  "  float weave=0.62*fil+0.38*fil2;",
+  // Per-thread brightness: sampled at the same radial rate so each ring gets
+  // its own level, giving bright and faint members rather than uniform ribs.
+  "  float strandLevel=vnoise(vec2(sw*2.0-rot*0.3, rr*34.0));",
+  "  float fine=smoothstep(0.24,0.70,weave)*(0.55+0.95*strandLevel);",
+  // Wider swing than a texture pass: strands should read as separate threads
+  // of light, not ripples on a gradient.
+  "  bright*=mix(1.0, 0.58+0.78*fine, uTurb);",
   "  float beam=cos(ang);",                              // approaching/receding limb
   // Beaming runs along x, not z: for a circular orbit at (x,0,z) the velocity
   // is tangential (-z,0,x), so its line-of-sight component (camera on -z)
@@ -66,8 +113,8 @@ const FRAG = [
   // top/bottom axis, where it is invisible edge-on, which is why both limbs
   // sampled identically.
   "  float dop=0.42+1.25*smoothstep(-1.0,1.0,beam);",    // brightness asymmetry
-  "  vec3 warmSide=vec3(1.0,0.93,0.80);",
-  "  vec3 coolSide=vec3(0.62,0.76,1.0);",                // blue-white receding limb
+  "  vec3 warmSide=vec3(1.0,0.90,0.72);",
+  "  vec3 coolSide=vec3(0.58,0.74,1.0);",                // blue-white receding limb
   "  c=mix(c*coolSide, c*warmSide, smoothstep(-0.85,0.85,beam));",
   "  return c*bright*dop;",
   "}",
@@ -78,20 +125,26 @@ const FRAG = [
   // from the cell hash so nothing pulses in sync. `shear` stretches the star
   // along the tangential axis — fed by the ray's accumulated deflection, so
   // stars smear as they pass the lensing radius rather than staying round.
-  "vec3 starLayer(vec2 sph, float scale, float thresh, float sizeK, float dim, float shear){",
+  "vec3 starLayer(vec2 sph, float scale, float thresh, float sizeK, float dim, float shear, float thin){",
   "  vec2 p=sph*scale;",
   "  vec2 ip=floor(p), fp=fract(p);",
   // Clustering: low-frequency density field, so the sky has sparse and busy
   // regions instead of an even sprinkle.
   "  float dens=vnoise(ip*0.09);",
-  "  float th=mix(thresh+0.030, thresh-0.045, dens);",
+  // `thin` lifts the threshold near the hole so the sky sparsens where lensing
+  // is strongest, keeping the black hole the focal point while corners stay busy.
+  "  float th=mix(thresh+0.030, thresh-0.045, dens)+thin*0.055;",
   "  float h=hash21(ip);",
   "  if(h<th) return vec3(0.0);",
   "  float m=(h-th)/max(1.0-th,1e-3);",                  // rank among surviving stars
   "  vec2 jit=vec2(hash21(ip+11.3), hash21(ip+37.7));",
   "  vec2 dv=fp-jit;",
   "  dv.x/=(1.0+shear*9.0);",                            // lensing streak
-  "  float rad=sizeK*(0.028+0.070*m*m);",
+  // Size, not just brightness. Below the knee nearly every star is a single
+  // tiny pinprick; the top ~12% jump to several times that radius, which is
+  // the pinpricks-plus-a-few-big-ones mix the reference sky shows. A smooth
+  // m*m ramp made everything mid-sized and read as uniform grain.
+  "  float rad=sizeK*(0.020+0.022*m+0.150*smoothstep(0.88,1.0,m));",
   "  float d2=dot(dv,dv);",
   "  float core=exp(-d2/max(rad*rad,1e-6));",
   // Colour temperature, weighted toward white / blue-white with a warm tail.
@@ -104,7 +157,9 @@ const FRAG = [
   "    float sp=0.5+2.2*hash21(ip+63.4);",
   "    tw=0.72+0.28*sin(uTime*sp+ph);",
   "  }",
-  "  vec3 acc=col*core*dim*tw*(0.35+1.5*m);",
+  // Cubic in rank: the field is dominated by faint stars with a sparse bright
+  // tail, which is what a real sky looks like and what sells distance.
+  "  vec3 acc=col*core*dim*tw*(0.16+1.7*m*m*m);",
   // Hero stars: the brightest few get a four-point diffraction glint.
   "  if(m>0.90){",
   "    float g=(m-0.90)/0.10;",
@@ -118,12 +173,41 @@ const FRAG = [
   // Three depth layers at different angular scales. Parallax is applied at a
   // different amplitude per layer (far layers barely move), which is what sells
   // the depth on pointer movement.
-  "vec3 starField(vec3 d, float shear){",
+  "vec3 starField(vec3 d, float shear, float thin){",
   "  vec2 sph=vec2(atan(d.z,d.x), asin(clamp(d.y,-1.0,1.0)));",
   "  vec3 col=vec3(0.004,0.005,0.010);",                  // deep-space floor
-  "  col+=starLayer(sph+uParallax*0.25,  34.0, 0.947, 0.95, 0.70, shear);", // near
-  "  col+=starLayer(sph+uParallax*0.11,  74.0, 0.962, 0.68, 0.46, shear);", // mid
-  "  col+=starLayer(sph+uParallax*0.04, 150.0, 0.972, 0.48, 0.28, shear);", // far
+  "  if(uNebula>0.001){",
+  // Two-stage mask: a coarse field decides WHERE clouds exist at all, a finer
+  // one shapes them. Multiplying leaves genuine dark voids between clusters,
+  // where a single field gave an even haze across the whole sky.
+  "    float region=smoothstep(0.50,0.72, fbm3(sph*0.85+vec2(3.1,7.7)));",
+  "    float shape=smoothstep(0.40,0.78, fbm3(sph*2.4-vec2(5.2,1.9)));",
+  "    float cloud=region*shape;",
+  // Cyan-blue base, kept cooler than the disk so the approaching limb stays
+  // the warmest thing in frame.
+  "    vec3 tint=mix(vec3(0.17,0.40,0.76), vec3(0.24,0.54,0.84), shape);",
+  // Rare green-white knots: a sparse ridged field gated hard, so they read as
+  // small bright cores inside clouds rather than tinting every cloud.
+  "    float knot=smoothstep(0.78,0.96, ridged(sph*5.5+vec2(11.3,2.7)))*cloud;",
+  // 0.080 nominal. A sweep at 0.034 / 0.062 / 0.080 / 0.099 against the
+  // reference showed 0.062 still reading as faint haze; 0.080 gives clearly
+  // present cyan cloud while the sky mean stays around 4% of full scale, so
+  // it is still atmosphere rather than a competing subject.
+  "    col+=tint*cloud*0.080*uNebula;",
+  // Strong enough to actually cross over. The deep-space floor is itself
+  // blue-dominant (0.004,0.005,0.010), so at 0.045 and then 0.10 the knots
+  // never got green above blue anywhere in frame (measured max G-B = -2):
+  // they were a slight blue-shift rather than the green-white cores the
+  // reference shows. Gated hard by `knot`, so they stay rare and small.
+  "    col+=vec3(0.66,0.90,0.82)*knot*0.13*uNebula;",
+  "  }",
+  "  col+=starLayer(sph+uParallax*0.25,  34.0, 0.850, 0.95, 0.72, shear, thin);", // near
+  "  col+=starLayer(sph+uParallax*0.11,  74.0, 0.862, 0.64, 0.50, shear, thin);", // mid
+  "  col+=starLayer(sph+uParallax*0.06, 150.0, 0.856, 0.44, 0.32, shear, thin);", // far
+  "  if(uStarLayers>3.5){",
+  "    col+=starLayer(sph+uParallax*0.02, 260.0, 0.846, 0.32, 0.20, shear, thin);", // deep
+  "    col+=starLayer(sph+uParallax*0.01, 420.0, 0.852, 0.26, 0.13, shear, thin);", // dust grains
+  "  }",
   "  return col;",
   "}",
   "",
@@ -140,10 +224,11 @@ const FRAG = [
   "  vec3 col=vec3(0.0);",
   "  float minR=1e9; bool captured=false;",
   "  const int STEPS=220; float rs=1.0; float G=1.5;",
+  "  float far=max(24.0, uCamDist+14.0);",
   "  for(int i=0;i<STEPS;i++){",
   "    float r=length(pos); minR=min(minR,r);",
   "    if(r<rs){ captured=true; break; }",                 // event horizon: nothing escapes
-  "    if(r>24.0){ break; }",
+  "    if(r>far){ break; }",
   "    float dt=clamp(r*0.08,0.02,0.40);",
   "    vec3 toC=-pos/max(r,1e-3);",
   "    dir=normalize(dir + toC*(G/(r*r))*dt);",
@@ -158,13 +243,23 @@ const FRAG = [
   // Total angular deflection drives the star shear, so the streaking is the
   // same quantity the lensing already computed rather than a fudge.
   "  float bend=1.0-clamp(dot(dir,dir0),-1.0,1.0);",
-  "  float shear=smoothstep(0.02,0.45,bend);",
+  "  float shear=smoothstep(0.014,0.40,bend);",
   // Only stars whose rays were meaningfully bent get smeared. Feeding raw
   // `bend` in stretched every star in the sky, so the whole field read as
   // scratches rather than points with a lensed arc near the hole.
-"  if(!captured){ col+=starField(dir, shear); }",
-  "  float ring=pow(smoothstep(0.10,0.0,abs(minR-1.5)),1.5);",
-  "  col+=vec3(1.0,0.88,0.68)*ring*1.15;",                 // photon ring: warm, not cyan
+  // Reuse the deflection already computed: high bend == close to the hole.
+  // Wider range than first tried: at 0.006-0.09 the falloff was spent within
+  // ~2 shadow radii, where the lensed arc covers the sky anyway, so measured
+  // density near the ring (0.73%) was no lower than the far corners (0.64%).
+"  if(!captured){ col+=starField(dir, shear, smoothstep(0.0015,0.05,bend)); }",
+  "  float ring=pow(smoothstep(0.065,0.0,abs(minR-1.5)),1.5);",
+  // The reference shows both at once: a razor inner edge AND a halo that
+  // dissolves gradually into the dark. `ring` is the hard line; `halo` is a
+  // much wider, weaker skirt biased outward from the photon sphere, so it
+  // fades into space without softening the edge itself.
+  "  float halo=captured ? 0.0 : pow(smoothstep(0.45,0.0,max(minR-1.5,0.0)),2.6);",
+  "  col+=vec3(1.0,0.88,0.68)*ring*1.35;",                 // photon ring: warm, not cyan
+  "  col+=vec3(0.85,0.80,0.72)*halo*0.065;",               // soft outer atmosphere
   "  col*=uPulse;",
   // Idle redshift: a few percent toward blue, reversed on any interaction.
   "  col=mix(col, col*vec3(0.88,0.95,1.12), clamp(uRedshift,0.0,1.0));",
@@ -190,19 +285,21 @@ export function tween(from, to, dur, ease, onUpdate, onDone) {
  * Build the renderer. `opts`:
  *   container   element to append the canvas to
  *   centerX     0.5 = centred; 0.62 pushes the hole right of centre
+ *   centerY     0 = centred; fraction of height, positive lifts the hole
  *   camDist     initial camera distance (11 frames the whole silhouette)
- *   reduce      prefers-reduced-motion: no twinkle, no idle drift
+ *   reduce      prefers-reduced-motion: static frame — no disk flow, pulse,
+ *               twinkle or parallax
  *   parallax    enable pointer parallax on the star layers
  *   bloom       [strength, radius, threshold]
  * Throws if the shader fails to compile, so callers can fall back.
  */
 export async function createGargantua(opts) {
   const {
-    container, centerX = 0.5, camDist = 11.0, reduce = false,
+    container, centerX = 0.5, centerY = 0.0, camDist = 11.0, reduce = false,
     // Bloom threshold sits above the tone-mapped disk's mid-tones so only
     // genuinely hot pixels bloom. At 0.8 the entire disk qualified and the
     // halo bled across the shadow, lifting the event horizon off pure black.
-    parallax = false, bloom = [0.28, 0.34, 1.05],
+    parallax = false, bloom = [0.28, 0.34, 1.05], nebula = false,
   } = opts;
 
   const THREE = await import("three");
@@ -239,7 +336,9 @@ export async function createGargantua(opts) {
   // centerX is a fraction of viewport width; the shader works in uv units
   // normalised by height, so convert through the aspect ratio.
   const aspect = () => { const v = viewport(); return v.w / v.h; };
-  const centerUv = () => new THREE.Vector2((centerX - 0.5) * aspect(), 0.0);
+  // centerY is a fraction of viewport height, positive = up. uv is already
+  // normalised by height, so it maps straight through with no aspect term.
+  const centerUv = () => new THREE.Vector2((centerX - 0.5) * aspect(), centerY);
 
   const uniforms = {
     uRes: { value: new THREE.Vector2(buf.x, buf.y) },
@@ -251,6 +350,9 @@ export async function createGargantua(opts) {
     uParallax: { value: new THREE.Vector2(0, 0) },
     uRedshift: { value: 0.0 },
     uStarBright: { value: reduce ? 0.0 : 1.0 },
+    uNebula: { value: nebula ? 1.0 : 0.0 },
+    uTurb: { value: 1.0 },
+    uStarLayers: { value: 4.0 },
   };
   const mat = new THREE.ShaderMaterial({ uniforms, vertexShader: VERT, fragmentShader: FRAG });
   scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
@@ -307,8 +409,15 @@ export async function createGargantua(opts) {
       if (w !== lastW || h !== lastH) { lastW = w; lastH = h; resize(); }
       syncFrames--;
     }
-    uniforms.uTime.value = t;
-    uniforms.uPulse.value = 1.0 + 0.03 * Math.sin(t * (2.0 * Math.PI / 4.0));
+    // Under prefers-reduced-motion the clock is held, which freezes the disk
+    // flow and the bloom pulse as well as the twinkle already gated by
+    // uStarBright. Previously only twinkle/parallax/tweens were disabled and
+    // uTime advanced regardless, so the disk kept streaming — the one piece of
+    // motion most likely to bother a motion-sensitive viewer. Held at a
+    // non-zero instant so the turbulence sits in a developed state rather than
+    // its t=0 pattern.
+    uniforms.uTime.value = reduce ? 6.0 : t;
+    uniforms.uPulse.value = reduce ? 1.0 : 1.0 + 0.03 * Math.sin(t * (2.0 * Math.PI / 4.0));
     par.x += (par.tx - par.x) * 0.06;
     par.y += (par.ty - par.y) * 0.06;
     uniforms.uParallax.value.set(par.x, par.y);
@@ -322,6 +431,11 @@ export async function createGargantua(opts) {
     renderer,
     uniforms,
     setRedshift(v) { uniforms.uRedshift.value = v; },
+    // Accepts a scale, not just a flag, so strength is tunable at runtime
+    // and 0 still works as the documented performance cut.
+    setNebula(v) { uniforms.uNebula.value = (v === true) ? 1.0 : (v === false ? 0.0 : v); },
+    setTurb(v) { uniforms.uTurb.value = v ? 1.0 : 0.0; },
+    setStarLayers(n) { uniforms.uStarLayers.value = n; },
     bloomPass,
     // Render one frame synchronously at an explicit time. Exists so the scene
     // can be pixel-verified in environments where requestAnimationFrame is
