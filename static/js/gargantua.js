@@ -25,7 +25,7 @@ const FRAG = [
   "uniform vec2 uParallax;",    // star-layer drift from pointer / device tilt
   "uniform float uRedshift;",   // 0 = neutral, 1 = fully cooled idle grade
   "uniform float uStarBright;", // 0 kills twinkle for prefers-reduced-motion
-  "uniform float uNebula;",     // 0/1: faint background dust wash (optional)
+  "uniform float uNebula;",     // background dust wash: 0 = off, 1 = nominal
   "uniform float uTurb;",       // 0/1: fine disk turbulence layer
   "uniform float uStarLayers;", // 3 or 4: number of starfield depth layers
   "",
@@ -176,7 +176,7 @@ const FRAG = [
   "vec3 starField(vec3 d, float shear, float thin){",
   "  vec2 sph=vec2(atan(d.z,d.x), asin(clamp(d.y,-1.0,1.0)));",
   "  vec3 col=vec3(0.004,0.005,0.010);",                  // deep-space floor
-  "  if(uNebula>0.5){",
+  "  if(uNebula>0.001){",
   // Two-stage mask: a coarse field decides WHERE clouds exist at all, a finer
   // one shapes them. Multiplying leaves genuine dark voids between clusters,
   // where a single field gave an even haze across the whole sky.
@@ -189,13 +189,17 @@ const FRAG = [
   // Rare green-white knots: a sparse ridged field gated hard, so they read as
   // small bright cores inside clouds rather than tinting every cloud.
   "    float knot=smoothstep(0.78,0.96, ridged(sph*5.5+vec2(11.3,2.7)))*cloud;",
-  "    col+=tint*cloud*0.034;",
+  // 0.080 nominal. A sweep at 0.034 / 0.062 / 0.080 / 0.099 against the
+  // reference showed 0.062 still reading as faint haze; 0.080 gives clearly
+  // present cyan cloud while the sky mean stays around 4% of full scale, so
+  // it is still atmosphere rather than a competing subject.
+  "    col+=tint*cloud*0.080*uNebula;",
   // Strong enough to actually cross over. The deep-space floor is itself
   // blue-dominant (0.004,0.005,0.010), so at 0.045 and then 0.10 the knots
   // never got green above blue anywhere in frame (measured max G-B = -2):
   // they were a slight blue-shift rather than the green-white cores the
   // reference shows. Gated hard by `knot`, so they stay rare and small.
-  "    col+=vec3(0.66,0.90,0.82)*knot*0.13;",
+  "    col+=vec3(0.66,0.90,0.82)*knot*0.13*uNebula;",
   "  }",
   "  col+=starLayer(sph+uParallax*0.25,  34.0, 0.850, 0.95, 0.72, shear, thin);", // near
   "  col+=starLayer(sph+uParallax*0.11,  74.0, 0.862, 0.64, 0.50, shear, thin);", // mid
@@ -427,7 +431,9 @@ export async function createGargantua(opts) {
     renderer,
     uniforms,
     setRedshift(v) { uniforms.uRedshift.value = v; },
-    setNebula(v) { uniforms.uNebula.value = v ? 1.0 : 0.0; },
+    // Accepts a scale, not just a flag, so strength is tunable at runtime
+    // and 0 still works as the documented performance cut.
+    setNebula(v) { uniforms.uNebula.value = (v === true) ? 1.0 : (v === false ? 0.0 : v); },
     setTurb(v) { uniforms.uTurb.value = v ? 1.0 : 0.0; },
     setStarLayers(n) { uniforms.uStarLayers.value = n; },
     bloomPass,
