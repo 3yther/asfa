@@ -1,148 +1,155 @@
-/* ── Samurai theme — light ──────────────────────────────────────────────────
-   Cream/white ground, near-black ink, gold + warm bronze accents. This is a
-   true light-mode inversion of style.css's dark HUD, so it has to override
-   more than just the accent colours: every surface (--bg/--panel/--card-bg),
-   every text tier (--text/--text-dim/--text-faint/--muted) and every border
-   (--line/--line-bright) flips, or the page ends up light-on-light.
+/* ── Samurai theme — dark charcoal + gold ────────────────────────────────────
+   Every value here is taken from the entrance scene (/samurai-theme), either
+   from its source constants or sampled out of the rendered frame, so the
+   dashboard reads as lit by the same moon rather than as a separate theme
+   that happens to share a name.
 
-   Semantic status colours ARE overridden here, unlike the earlier dark
-   samurai palette which deliberately left them alone. The reason is
-   contrast, not decoration: #3FB950 green and #f59e0b amber are tuned to
-   carry on a near-black ground and go muddy on cream. The darker variants
-   below keep the same meaning (green = good, red = bad, amber = warning) at
-   a readable contrast on a light surface. See cyberpunk.css for the
-   dark-side pairing. */
+   Where the values come from:
+     samurai-theme.js  skyZenith #161f23  cloudDark #141d20  skyNadir #3a4447
+                       skyHorizon #5e6e71  sunGlow #9fb0b2   ground #232b29
+     grass-shader.js   base #7d837e  mid #c9cdc6  tip #f0f2ee
+     clouds.js         litColor #fff4dc  shadowColor #5f5648   <- the warm layer
+     katana.js         fittings #d4a94a and #b08a48            <- the gold
+     rendered frame    darkest #060808, brightest #dae8e7, warmest #594f21
+
+   The scene is overwhelmingly cool slate; its only warmth is the cloud layer
+   and the katana's brass. That is exactly the ratio this palette uses —
+   charcoal and warm silver almost everywhere, gold only where a decision is
+   being offered. The previous light rebuild failed because it made gold the
+   ambient colour instead of the accent. */
 :root {
-  /* ── Surfaces ─────────────────────────────────────────────────────────── */
-  --bg:            #f5f5f0;   /* cream page ground */
-  --panel:         #ffffff;   /* solid panel/table surfaces */
-  --panel-2:       #fafaf8;
-  --panel-3:       #f2efe9;
-  /* Card glass. Light + fairly opaque: the dark theme's heavy blur reads as
-     depth over black, but over cream it just looks like haze, so these lean
-     more solid than their dark counterparts. */
-  --card-bg:       rgba(255, 255, 255, 0.72);
-  --card-bg-solid: rgba(255, 255, 255, 0.94);
+  /* ── Surfaces: three deliberately separated value steps ──────────────────
+     page (darkest) -> card (mid) -> text (lightest). The last attempt put all
+     three within a few percent of each other, so nothing separated. */
+  --bg:            #141d20;   /* cloudDark — deep slate, not void-black */
+  --panel:         #1e282b;   /* one clear step up: card/table surfaces */
+  --panel-2:       #242f33;
+  --panel-3:       #2b373b;
+  --card-bg:       rgba(30, 40, 43, 0.62);
+  --card-bg-solid: rgba(30, 40, 43, 0.94);
 
-  /* --void is NOT a background despite the name — its only use in style.css
-     is `color: var(--void)`, the ink sitting on a --cyan fill. Because the
-     accents below are deepened for contrast on cream, that fill is now dark,
-     so this ink flips to white. The two have to be chosen together. */
-  --void:          #ffffff;
+  /* --void is ink sitting ON a bright accent, not a background. The accents
+     below are gold and silver, so this stays dark. */
+  --void:          #121a1d;
 
-  /* ── Text ─────────────────────────────────────────────────────────────── */
-  --text:          #1a1a1a;   /* primary ink */
-  --text-sec:      #4a4a4a;
-  --text-dim:      #4a4a4a;   /* secondary */
-  --text-faint:    #7a7367;   /* hints, timestamps */
-  --muted:         #6f6a60;   /* 50+ uses — the workhorse secondary tone */
+  /* ── Text: the cloud layer's warm cream, stepped down ────────────────────
+     Warm-neutral rather than blue-grey, so it reads as moonlit cloth instead
+     of generic dark-mode grey, while staying close in value to the grass tips
+     (#f0f2ee source / #dae8e7 as rendered). */
+  --text:          #ece7d9;   /* from clouds.js litColor #fff4dc, softened */
+  --text-sec:      #b9b4a6;
+  --text-dim:      #a8a396;
+  --text-faint:    #7d786c;
+  --muted:         #9b978b;   /* 50+ uses — the workhorse secondary tone */
 
-  /* ── Accents ──────────────────────────────────────────────────────────────
-     Deliberately deeper than showroom gold/bronze. --primary is a text and
-     border colour in 45 of its 48 uses (--cyan, 22 of 29), and #d4af37 on
-     cream measures 1.9:1 — unreadable, well under the 4.5:1 AA floor. These
-     land at 4.6–5.7:1 while still reading unmistakably as gold and bronze.
-     Pure #d4af37 survives where it's a *fill* with dark ink on top (--grad,
-     the orb glow), which is the one place it has the contrast to spare. */
-  --primary:       #7d5f10;   /* deep gold — 5.3:1 on cream */
-  /* Hover deepens rather than lightens. On cream a *brighter* gold loses
-     contrast and reads as fading out — the opposite of "this is active" —
-     so prominence comes from depth + the card shadow below. */
-  --primary-hi:    #5f4a0c;
-  --cyan:          #6d5638;   /* deep bronze (design "cyan" slot) — 5.7:1 */
-  --cyan-hi:       #54422b;
-  --cyan-deep:     #4a3a26;
-  --cyan-glow:     rgba(109, 86, 56, 0.18);
-  --magenta:       #7a6134;   /* warm gold-brown */
-  --purple:        #6b5942;   /* warm brown */
-  --indigo:        #6b5942;
-  --gold:          #8a6a12;
+  /* ── Ambient accent: moonlit silver, NOT gold ────────────────────────────
+     --primary carries 45 of style.css's text/border uses, so whatever sits
+     here becomes the ambient colour of the whole UI. Gold here measured 33%
+     of on-screen text as gold — the mission-bar readout, the clock, the orb
+     hint — which is the "gold as wallpaper" failure this rebuild exists to
+     avoid. A warm-leaning silver from the grass mid-tone keeps the body of
+     the interface charcoal-and-silver and lets gold mean something.
+     On dark, hover goes BRIGHTER (the opposite of the light rebuild, where
+     brightening lost contrast). */
+  --primary:       #c2c7bd;   /* grass-shader.js mid #c9cdc6, warmed */
+  --primary-hi:    #e2e6dc;
 
-  /* Primary action fill. NOT a white→white gradient: --grad backs
-     .hud-chip.chip-action, which hardcodes near-black text on top, so a white
-     fill would erase the button outline entirely. Gold reads as the CTA. */
-  --grad:          linear-gradient(135deg, #d4af37, #b8956a);
+  /* ── Gold: decision points only ──────────────────────────────────────────
+     Straight off the katana's fittings. Reaches the UI through --grad
+     (primary action fill), --gold (brand marks, key highlights) and the orb,
+     rather than through the ambient accent above. */
+  --gold:          #d4a94a;   /* katana.js #d4a94a */
 
-  /* ── Semantic status — darkened for contrast on cream ─────────────────── */
-  --green:         #2d5a2d;
-  --online:        #2d5a2d;
-  --red:           #8b0000;
-  --alert:         #8b0000;
-  --amber:         #8a6508;
-  --warn:          #8a6508;
+  /* Secondary accents stay in the scene's cool silver, so gold keeps its
+     meaning. The design "cyan" slot carries the moonlit silver. */
+  --cyan:          #9fb0b2;   /* samurai-theme.js sunGlow */
+  --cyan-hi:       #c6d3d4;
+  --cyan-deep:     #6f7e80;
+  --cyan-glow:     rgba(159, 176, 178, 0.22);
+  --magenta:       #b08a48;   /* katana.js deeper brass */
+  --purple:        #5f5648;   /* clouds.js shadowColor — warm taupe */
+  --indigo:        #5f5648;
 
-  /* ── Lines / borders — warm tan, never neutral grey ───────────────────── */
-  --line:          #e0d5c7;
-  --line-bright:   #d4c5b9;
+  /* Primary action fill. Gold gradient with dark ink on top (.hud-chip
+     .chip-action hardcodes near-black text), so the CTA is the one place
+     gold covers area rather than outlining it. */
+  --grad:          linear-gradient(135deg, #d4a94a, #b08a48);
 
-  /* ── Chart series — warm ramp instead of the cyan/violet set ──────────── */
-  --series-1:      #d4af37;
-  --series-2:      #8b7355;
-  --series-3:      #b8860b;
-  --series-4:      #2d5a2d;
+  /* ── Status: functional first ────────────────────────────────────────────
+     Muted rather than garish, but not pushed so far that an error stops
+     reading as an error against the charcoal. */
+  --green:         #5fbf7a;
+  --online:        #5fbf7a;
+  --red:           #ea7169;
+  --alert:         #ea7169;
+  --amber:         #d9a441;
+  --warn:          #d9a441;
 
-  /* ── Orb ──────────────────────────────────────────────────────────────── */
-  --orb-glow:      rgba(212, 175, 55, 0.45);
-  --orb-crit:      #8b0000;
+  /* ── Lines: warm bronze-grey, never a bright rule ────────────────────────
+     From the grass base (#7d837e) and cloud shadow (#5f5648) family. */
+  --line:          #2f383b;
+  --line-bright:   #47524f;
 
-  /* ── Surfaces behind chrome / raised / inset elements ─────────────────── */
-  --surface-chrome: rgba(255, 255, 255, 0.94);  /* header, navs, status bars */
-  --surface-raised: rgba(255, 255, 255, 0.98);  /* toasts, notif panel */
-  /* Inset wells go slightly *darker* than the page rather than lighter —
-     that's what reads as recessed on a light ground, the same way the dark
-     theme uses a darker well against its own background. */
-  --surface-inset:  rgba(0, 0, 0, 0.045);
-  /* Modal scrims stay dark even in light mode: a scrim's job is to drop the
-     page back behind the dialog, and a light scrim over a light page does
-     nothing. Softer than the dark theme's, since there's less to hide. */
-  --surface-scrim:  rgba(40, 34, 26, 0.55);
+  /* ── Chart series: silver-to-brass ramp ──────────────────────────────────*/
+  --series-1:      #d4a94a;
+  --series-2:      #9fb0b2;
+  --series-3:      #b08a48;
+  --series-4:      #5fbf7a;
 
-  /* Accent channels for the rgba() glows/hairlines/tints in style.css. Without
-     these the whole light theme keeps a pale blue cast — most visibly as a cyan
-     halo around the nav clock. Warm equivalents of the accents above. */
-  --primary-rgb:   125, 95, 16;
-  --cyan-rgb:      109, 86, 56;
-  --purple-rgb:    107, 89, 66;
-  --magenta-rgb:   122, 97, 52;
-  /* Warm tan in place of the cool slate hairline/label neutral. */
-  --neutral-rgb:   138, 126, 108;
-  /* Ink flips to near-black: the page sheets use this for card text, which
-     would otherwise stay white and vanish against cream. */
-  --fg-rgb:        26, 26, 26;
+  /* ── Orb ─────────────────────────────────────────────────────────────────*/
+  --orb-glow:      rgba(212, 169, 74, 0.55);
+  --orb-crit:      #ea7169;
+
+  /* ── Surfaces behind chrome / raised / inset elements ────────────────────*/
+  --surface-chrome: rgba(16, 23, 26, 0.94);   /* header, navs, status bars */
+  --surface-raised: rgba(20, 28, 31, 0.97);   /* toasts, notif panel */
+  --surface-inset:  rgba(0, 0, 0, 0.30);      /* wells read as recessed */
+  --surface-scrim:  rgba(8, 12, 14, 0.80);
+
+  /* ── Accent channels for the rgba() glows/hairlines in style.css ─────────*/
+  /* Panel surface as a triple, for the page-specific sheets that need a
+     per-call alpha on the card colour. Matches --panel #1e282b. */
+  --panel-rgb:     30, 40, 43;
+  --primary-rgb:   194, 199, 189;
+  --cyan-rgb:      159, 176, 178;
+  --purple-rgb:    95, 86, 72;
+  --magenta-rgb:   176, 138, 72;
+  --neutral-rgb:   141, 137, 121;
+  /* Ink channel: light again, as this is a dark theme. The page-specific
+     sheets write rgba(var(--fg-rgb),a) for card text. */
+  --fg-rgb:        236, 231, 217;
 }
 
 /* --orb-rgb is declared on .orb-stage itself, not :root, so a :root override
-   never reaches it — the element-scoped declaration wins for that subtree.
-   Retargeting the same selector is the only way to recolour the orb's CSS
-   glow layers. (The canvas-drawn orb reads --primary/--purple from JS and is
-   already handled — see themedRgb() in main.js.) */
-.orb-stage { --orb-rgb: 212, 175, 55; }
-.orb-stage.orb-critical { --orb-rgb: 139, 0, 0; }
+   never reaches it. The orb is canvas-drawn and was the single worst casualty
+   of the light rebuild — cream on cream, visible only as a faint dotted ring.
+   Gold on charcoal gives it back its presence as the page's focal point.
+   (The canvas layers read --primary/--purple through themedRgb() in main.js
+   and are handled by the palette above.) */
+.orb-stage { --orb-rgb: 212, 169, 74; }
+.orb-stage.orb-critical { --orb-rgb: 234, 113, 105; }
 
-/* The starfield is a fixed, full-viewport canvas painted black with stars at
-   z-index -1 — it covers --bg entirely, so without this the page stays black
-   no matter what the palette says. White stars on cream wouldn't read anyway;
-   a starfield is a dark-space motif, so the light theme simply drops it and
-   lets the cream ground show through. */
+/* The starfield belongs to the cyberpunk night sky, not a misty field at
+   moonrise. Hidden here so --bg's slate is what actually shows. */
 #starfield-bg { display: none; }
 
-/* The dark HUD leans on glow for depth; on a light ground glow does nothing,
-   so cards get a soft physical shadow and a warm hairline instead. */
+/* Depth on a dark ground comes from a lifted surface plus a hairline, not
+   from the cyan glow the dark cyberpunk theme uses. */
 .card, .sci-fi-panel {
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 6px 20px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 28px rgba(0, 0, 0, 0.32);
 }
 
-/* Inputs must sit lighter than their own text, and lighter than the cream
-   page, or the field disappears into the background. */
+/* Inputs sit slightly darker than their panel so the field reads as a well,
+   with a warm border rather than a grey one. */
 input, textarea, select {
-  background: #fafaf8;
-  border-color: #d4c5b9;
+  background: #182124;
+  border-color: #3b4649;
   color: var(--text);
 }
-input::placeholder, textarea::placeholder { color: #a29a8c; }
+input::placeholder, textarea::placeholder { color: #6f6c62; }
 
-/* Disabled states fade to a warm tint rather than dropping out entirely. */
+/* Disabled fades into the panel rather than vanishing. */
 button:disabled, input:disabled, select:disabled, textarea:disabled {
-  opacity: 0.55;
-  color: #a29a8c;
+  opacity: 0.5;
+  color: #6f6c62;
 }

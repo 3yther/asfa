@@ -41,6 +41,9 @@
      hairlines and tints in style.css that need a per-call alpha. Same
      technique the orb already used (--orb-rgb). These reproduce the exact
      literals they replaced, so cyberpunk renders identically to before. */
+  /* Panel surface as a triple, for the page-specific sheets that need a
+     per-call alpha on the card colour. Matches --panel #0B111A. */
+  --panel-rgb:     11, 17, 26;
   --primary-rgb:   0, 217, 255;
   --cyan-rgb:      34, 211, 238;
   --purple-rgb:    124, 58, 237;

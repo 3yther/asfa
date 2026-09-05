@@ -37,8 +37,11 @@
     <button id="sound-toggle" type="button" title="Toggle UI sounds"
       onclick="if(window.SoundFX){SoundFX.toggle(); this.textContent = SoundFX.isEnabled() ? '🔊' : '🔇';}">🔇</button>
     <span class="nav-clock" id="nav-clock">--:--:-- UTC</span>
+    {# Theme-driven rather than a hardcoded cyan: this button sits in the nav on
+       every page, so the literal it used to carry was the last piece of
+       cyberpunk cyan surviving on an otherwise fully themed screen. #}
     <button id="nav-logout" type="button" title="Log out"
-      style="background:none;border:1px solid rgba(0,217,255,.25);color:rgba(0,217,255,.55);
+      style="background:none;border:1px solid rgba(var(--cyan-rgb),.25);color:rgba(var(--cyan-rgb),.55);
              border-radius:4px;padding:2px 8px;cursor:pointer;font:inherit;font-size:.8em;">⏻</button>
   </div>
 </nav>
