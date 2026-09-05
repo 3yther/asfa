@@ -35,6 +35,25 @@
   </nav>
 </div>
 
+<!-- Personal mon. An overlay rather than a billboard in the scene: it is a mark
+     on the frame, not an object in the world, so it should not take the scene's
+     fog, lighting or depth. currentColor throughout, so the one rule on
+     .samurai-mon sets the whole seal's tone. -->
+<div class="samurai-mon" aria-hidden="true">
+  <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="50" cy="50" r="46.5" stroke="currentColor" stroke-width="1.6"/>
+    <circle cx="50" cy="50" r="40" stroke="currentColor" stroke-width="0.7" opacity="0.7"/>
+    <!-- Four tick marks on the diagonals — the quartering a traditional mon
+         uses to seat the device inside the ring. -->
+    <g stroke="currentColor" stroke-width="0.7" opacity="0.5">
+      <path d="M50 3.5v6M50 90.5v6M3.5 50h6M90.5 50h6"/>
+    </g>
+    <text x="50" y="50" fill="currentColor" font-family="Georgia, 'Times New Roman', serif"
+          font-size="34" font-weight="600" letter-spacing="1"
+          text-anchor="middle" dominant-baseline="central">AS</text>
+  </svg>
+</div>
+
 <div id="samurai-loader">
   <span class="samurai-loader-mark">ASFA</span>
   <span class="samurai-loader-bar"></span>

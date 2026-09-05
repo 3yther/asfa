@@ -217,9 +217,39 @@
 .samurai-menu a.no-anim .stroke,
 .samurai-menu a.no-anim .lbl.ink { transition: none; }
 
+/* ── Personal mon ───────────────────────────────────────────────────────────
+   Bottom-right, diagonally opposite the logo and clear of the menu's left
+   column. Sized and toned as a watermark: it should be findable, not read.
+   The colour is the blade's rim light (CONFIG.colors.sunGlow, #9fb0b2) lifted
+   toward cream, so it belongs to the same metal as the sword. */
+.samurai-mon {
+  position: fixed;
+  right: clamp(18px, 4vw, 56px);
+  bottom: clamp(18px, 4vw, 52px);
+  width: clamp(46px, 5.2vw, 74px);
+  z-index: 8;                 /* over the vignette (5), under the menu (10) */
+  pointer-events: none;
+  color: #dfe4d8;
+  opacity: 0.30;
+  /* Sits over mist that runs from near-white to slate depending on where the
+     clouds are, so it needs its own separation from the plate — a dark drop
+     shadow reads as a carved edge and holds the mark on the light patches. */
+  filter: drop-shadow(0 1px 3px rgba(8, 18, 20, 0.85));
+}
+.samurai-mon svg { display: block; width: 100%; height: auto; }
+
 @media (max-width: 760px) {
   .samurai-ui { justify-content: flex-end; padding-bottom: clamp(26px, 7vh, 62px); }
   .samurai-menu { max-width: 100%; gap: clamp(5px, 1.4vh, 12px); }
+  /* The menu moves to the bottom of the screen on narrow viewports, so the mon
+     goes back to the top-right to stay off it — the only corner that is free
+     once the logo has the top-left and the menu has the whole lower half. */
+  .samurai-mon {
+    top: clamp(14px, 3.4vw, 34px);
+    bottom: auto;
+    width: clamp(38px, 10vw, 52px);
+    opacity: 0.24;
+  }
   /* Floor raised from the old uppercase sans's 13px — Yuji Boku's brush
      detail (the flourish on capitals, the stroke taper) starts to mush
      below ~17px. Tested at 17px against the shortest real menu items. */
@@ -235,6 +265,9 @@
     gap: 0 clamp(20px, 4vw, 52px);
   }
   .samurai-menu a { font-size: clamp(16px, 1.8vw, 21px); }
+  /* A wrapped menu can reach the right-hand side, so shrink the mark and tuck
+     it further into the corner rather than letting the two overlap. */
+  .samurai-mon { width: clamp(34px, 4vw, 46px); right: 14px; bottom: 12px; opacity: 0.22; }
 }
 
 /* Reduced motion: no wipe, the end state applies at once; the effect stays. */

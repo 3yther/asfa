@@ -4,6 +4,8 @@ import { createKatana } from './katana.js';
 import { createGrassField } from './grass-shader.js';
 import { createParticles } from './particles.js';
 import { createClouds } from './clouds.js';
+import { createTorii } from './torii.js';
+import { createMoon } from './moon.js';
 
 const canvas = document.getElementById('samurai-canvas');
 const loader = document.getElementById('samurai-loader');
@@ -39,6 +41,16 @@ if (!supportsWebGL()) {
   clearTimeout(window.__samuraiSafety);
   const app = new SamuraiScene(canvas).init();
 
+  // Moon before clouds so the scene graph reads back-to-front. The moon's disc,
+  // halo and wisps are all transparent, so they sort by distance against the
+  // cloud billboards: a cloud nearer than the moon's 355 units draws over it,
+  // one further away draws under. Explicit renderOrder inside moon.js only
+  // settles the moon's own three pieces against each other, where the distances
+  // are too close together to sort reliably.
+  const moon = createMoon(app.camera);
+  app.scene.add(moon);
+  app.add({ update: moon.userData.update, dispose: moon.userData.dispose });
+
   // Clouds: transparent, so Three's own opaque-then-transparent pass with
   // depth-testing already puts them behind the grass/katana silhouette and
   // in front of the sky dome (which never writes depth) — no explicit
@@ -47,6 +59,13 @@ if (!supportsWebGL()) {
   const clouds = createClouds(app.sun, app.camera);
   app.scene.add(clouds);
   app.add({ update: clouds.userData.update, dispose: clouds.userData.dispose });
+
+  // Static: no update hook, nothing animated. It stands in the mist and that is
+  // the whole of its job. Takes the camera because it frames itself against the
+  // projection rather than sitting at a fixed world coordinate.
+  const torii = createTorii(app.camera);
+  app.scene.add(torii);
+  app.add({ dispose: torii.userData.dispose });
 
   // The katana group carries its own point-down flip; the lean goes on a
   // pivot above it so the two rotations compose instead of overwriting.
