@@ -120,6 +120,20 @@
 .nutrition-screen .nh-ring-sm .hud-label { font-size: 7px; margin-top: 1px; }
 .nutrition-screen .nh-macro-rings { display: flex; justify-content: center; gap: 14px; }
 
+/* ── Apple Watch burn (under the calorie ring) ─────────────────────────────── */
+.nutrition-screen .nh-burn {
+  margin-top: 10px; padding-top: 9px;
+  border-top: 1px solid rgba(var(--neutral-rgb), .12);
+  text-align: center;
+}
+.nutrition-screen .nh-burn-row {
+  display: flex; align-items: baseline; justify-content: center; gap: 8px;
+}
+.nutrition-screen .nh-burn-row b { font: 600 15px var(--mono); color: var(--text); }
+.nutrition-screen .nh-burn-net {
+  margin-top: 3px; font-size: 10px; letter-spacing: .05em; color: var(--muted);
+}
+
 /* ── SCORE + STREAK ───────────────────────────────────────────────────────── */
 .nutrition-screen .nh-score { display: flex; flex-direction: column; }
 .nutrition-screen .nh-grade {
