@@ -122,11 +122,18 @@ battery.
 
 ## 3. Test it
 
-From your laptop, replacing the token:
+From your laptop. Put the token in a variable rather than inline — a literal
+token on the command line lands in your shell history, and `read -s` keeps it
+off the screen too:
 
 ```bash
-curl -sS -X POST https://asfa-production.up.railway.app/api/health/sync \
-  -H "Authorization: Bearer asfa_YOUR_TOKEN" \
+read -rs ASFA_TOKEN && export ASFA_TOKEN
+ASFA_URL=https://asfa-production.up.railway.app
+```
+
+```bash
+curl -sS -X POST "$ASFA_URL/api/health/sync" \
+  -H "Authorization: Bearer $ASFA_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"metric_date":"2026-09-05","sleep_duration_minutes":450,"hrv_ms":42.5,"calories_active":600,"steps":9000}'
 ```
@@ -136,8 +143,7 @@ Expected: `{"success": true, "count": 1, "synced": [...], "errors": []}`.
 Read it back:
 
 ```bash
-curl -sS https://asfa-production.up.railway.app/api/health/metrics/latest \
-  -H "Authorization: Bearer asfa_YOUR_TOKEN"
+curl -sS "$ASFA_URL/api/health/metrics/latest" -H "Authorization: Bearer $ASFA_TOKEN"
 ```
 
 Then open the dashboard's BODY tab. The card needs one day for the numbers, two
@@ -160,7 +166,7 @@ one. Manual and cardio-derived step entries for the same day are untouched.
 day total is a `SUM`, and the watch posts a running total, so a 10,000-step day
 would have read as six figures by evening.)
 
-**Sleep is not written to the manual sleep log.** The HABITS "Sleep & Recovery"
+**Sleep is not written to the manual sleep log.** The HABITS "Sleep Log"
 card is your own hand-entered log with a subjective 1–5 quality the watch cannot
 supply, so the sync never overwrites it. The BODY card prefers watch data and
 falls back to the manual log for duration, so the two never disagree.

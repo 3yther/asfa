@@ -1,0 +1,16 @@
+# gitleaks false positives, by fingerprint (commit:path:rule:line).
+#
+# Two curl examples in the health-sync guide used a literal placeholder,
+# "asfa_YOUR_TOKEN". gitleaks' curl-auth-header rule scores it on entropy alone
+# and cannot tell a placeholder from a real bearer token, so it blocked every
+# subsequent commit — the scan covers history, not just the staged diff.
+#
+# The guide now uses "$ASFA_TOKEN" from the environment, which is better advice
+# anyway (a literal token on a command line ends up in shell history). These two
+# entries only silence the finding in the commit that already shipped the old
+# wording, which cannot be edited without rewriting pushed history.
+#
+# Nothing here was ever a live credential: the ASFA sync token is stored as a
+# SHA-256 hash and is only ever shown once, in the browser, at creation.
+488eabbd7c3c7441a54721c07870bc090b0c1627:docs/apple-watch-health-sync.md:curl-auth-header:128
+488eabbd7c3c7441a54721c07870bc090b0c1627:docs/apple-watch-health-sync.md:curl-auth-header:139

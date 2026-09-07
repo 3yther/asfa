@@ -39,7 +39,7 @@
   #bodycomp-card .bc-manual summary { cursor: pointer; font-size: .68rem; letter-spacing: 1px; color: var(--muted); padding: 4px 0; }
   #bodycomp-card .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   /* Sleep & Recovery — Apple Watch (BODY tab). #sleep-card below is the
-     separate manual log on HABITS. Every colour goes through a theme token, so
+     separate "Sleep Log" on HABITS. Every colour goes through a theme token, so
      this card follows the samurai/cyberpunk palettes like everything else. */
   #recovery-card .rc-top { display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; margin-top: 10px; }
   #recovery-card .readout-l { font-size: 30px; line-height: 1.1; }
@@ -75,7 +75,7 @@
   #recovery-card .rc-table .rc-row-hrv { color: var(--text); text-align: right; }
   @media (max-width: 560px) { #recovery-card .rc-top { grid-template-columns: 1fr; } }
 
-  /* Sleep & Recovery card */
+  /* Sleep Log — the manual nightly entry (HABITS tab) */
   #sleep-card .sleep-log { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
   #sleep-card .sleep-input { width: 100%; }
   #sleep-card .sleep-quality { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
@@ -521,7 +521,7 @@
 
   <section class="card sci-fi-panel" id="sleep-card" data-card="sleep" data-tabs="habits">
     <div class="card-head">
-      <h2 data-decode>Sleep &amp; Recovery</h2>
+      <h2 data-decode>Sleep Log</h2>
       <span class="hud-label">LAST NIGHT</span>
     </div>
 
@@ -594,9 +594,10 @@
     <div id="bench-split-body"><div class="muted mono">// LOADING…</div></div>
   </section>
 
-  <!-- Apple Watch recovery. Distinct from #sleep-card on the HABITS tab, which
-       is the *manual* log (subjective quality 1-5 → readiness). This one is the
-       Watch's objective data: HRV, the stage split, and the 7-day trend. Sleep
+  <!-- Apple Watch recovery. Distinct from "Sleep Log" (#sleep-card) on the
+       HABITS tab, which is the *manual* entry (subjective quality 1-5 →
+       readiness, which the gym page reads). This one is the Watch's objective
+       data: HRV, the stage split, and the 7-day trend. Sleep
        duration falls back to the manual log when the Watch has not synced, so
        the two cards can never show different numbers for the same night. -->
   <section class="card sci-fi-panel" id="recovery-card" data-card="recovery" data-tabs="body">
