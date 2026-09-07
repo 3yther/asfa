@@ -189,7 +189,20 @@ _API_KEY_READ_ENDPOINTS = {
     "api_steps_date",
     "api_nutrition_today",
     "api_sleep_readiness",
+    # Read-back for the Shortcut, so it can show what the server actually holds.
+    "api_health_metrics",
+    "api_health_metrics_latest",
 }
+# The one write a key may perform, and the exact scope it must carry to do it.
+# Deliberately a mapping and not a set: a 'health_sync' key must not be able to
+# POST anywhere else, and a plain 'read' key must not be able to POST at all.
+# Everything absent from here stays session+CSRF gated.
+_API_KEY_WRITE_ENDPOINTS = {
+    "api_health_sync": "health_sync",
+}
+# Scopes a key may be issued with. 'read' unlocks the GET allowlist above;
+# 'health_sync' additionally unlocks the single POST in _API_KEY_WRITE_ENDPOINTS.
+_API_KEY_SCOPES = ("read", "health_sync")
 # Human-recognizable prefix on every issued token (e.g. asfa_xY3...). The first
 # few chars are also stored as `prefix` so keys are identifiable in the list.
 _API_KEY_PREFIX = "asfa_"
@@ -307,7 +320,26 @@ def _require_login():
     # to the passphrase gate below. No CSRF needed (GET/HEAD only).
     if request.method in ("GET", "HEAD") and request.endpoint in _API_KEY_READ_ENDPOINTS:
         key = _authenticate_api_key()
-        if key and key.get("scope") == "read":
+        # A health_sync key can read the allowlist too — it is strictly a
+        # superset of read, and the Shortcut needs the read-back to report what
+        # the server stored.
+        if key and key.get("scope") in _API_KEY_SCOPES:
+            g.api_key_id = key["id"]
+            try:
+                db.touch_api_key(key["id"])
+            except Exception as e:
+                logger.error("api key touch failed: %s", e)
+            return None
+    # The single key-authenticated WRITE: the hourly health sync. Scoped per
+    # endpoint, so this cannot become a general "keys can POST" hole. Sets
+    # g.api_key_id, which _csrf_protect reads to skip the token check — an iOS
+    # Shortcut has no session and therefore no CSRF token to send, and the
+    # bearer token is not a cookie, so it is not replayable cross-site the way
+    # CSRF protection exists to prevent.
+    required_scope = _API_KEY_WRITE_ENDPOINTS.get(request.endpoint)
+    if required_scope and request.method == "POST":
+        key = _authenticate_api_key()
+        if key and key.get("scope") == required_scope:
             g.api_key_id = key["id"]
             try:
                 db.touch_api_key(key["id"])
@@ -513,6 +545,12 @@ def _csrf_protect():
     if request.method not in _CSRF_METHODS:
         return None
     if request.endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    # Authenticated by API key rather than by cookie (set in _require_login,
+    # which runs first). CSRF exists to stop a third-party page riding along on
+    # an ambient cookie; a bearer token is never sent automatically by a
+    # browser, so there is nothing here for an attacker to ride.
+    if getattr(g, "api_key_id", None):
         return None
     expected = session.get("csrf_token") or ""
     provided = request.headers.get("X-CSRF-Token") or ""
@@ -1540,6 +1578,73 @@ def api_nutrition_today():
         for m in db.get_meals(today)
     ]
     return jsonify(totals)
+
+
+# ── Apple Watch health sync ────────────────────────────────────────────────────
+# POST is reachable two ways: a logged-in browser session (CSRF as usual), or an
+# 'health_sync'-scoped API key as a bearer token — see _API_KEY_WRITE_ENDPOINTS.
+# The GETs are session-gated plus the read allowlist.
+
+@app.route("/api/health/sync", methods=["POST"])
+def api_health_sync():
+    payload = request.get_json(force=True, silent=True) or {}
+    # Two shapes accepted. The Shortcut sends {"days": [{...}, {...}]} because it
+    # posts yesterday (sleep + HRV, needing a complete day) and today (partial
+    # activity) in one request; a single flat object is accepted too so the
+    # endpoint stays trivially testable with curl.
+    days = payload.get("days")
+    if not isinstance(days, list):
+        days = [payload]
+
+    synced, errors = [], []
+    for entry in days:
+        if not isinstance(entry, dict):
+            errors.append({"error": "each day must be an object"})
+            continue
+        metric_date = entry.get("metric_date") or _log_date(entry.get("date"))
+        try:
+            datetime.strptime(str(metric_date)[:10], "%Y-%m-%d")
+        except (TypeError, ValueError):
+            errors.append({"metric_date": metric_date,
+                           "error": "metric_date must be YYYY-MM-DD"})
+            continue
+        metric_date = str(metric_date)[:10]
+        # A future date means the phone's clock or the Shortcut's date maths is
+        # wrong; storing it would put a permanent phantom day at the head of
+        # every chart, which is far worse than refusing it.
+        if metric_date > _today():
+            errors.append({"metric_date": metric_date, "error": "date is in the future"})
+            continue
+        if not any(k in entry for k in db.HEALTH_METRIC_FIELDS):
+            errors.append({"metric_date": metric_date, "error": "no recognised metrics"})
+            continue
+        synced.append(db.sync_health_metrics(metric_date, entry))
+
+    if not synced:
+        return jsonify({"success": False, "synced": [], "errors": errors}), 400
+    # 207-style partial success is deliberately NOT used: the Shortcut shows a
+    # notification off this response and a non-2xx would read as total failure.
+    return jsonify({"success": True, "synced": synced, "errors": errors,
+                    "count": len(synced)})
+
+
+@app.route("/api/health/metrics")
+def api_health_metrics():
+    days = request.args.get("days", 7, type=int)
+    return jsonify(db.get_health_metrics(days))
+
+
+@app.route("/api/health/metrics/latest")
+def api_health_metrics_latest():
+    return jsonify(db.get_latest_health_metrics() or {})
+
+
+@app.route("/api/health/recovery")
+def api_health_recovery():
+    """Everything the Sleep & Recovery card draws — latest day, recovery badge,
+    HRV baseline and the trend — resolved server-side so they cannot disagree."""
+    days = request.args.get("days", 7, type=int)
+    return jsonify(db.get_recovery_summary(days))
 
 
 @app.route("/api/nutrition/history")
@@ -5088,16 +5193,24 @@ def _generate_startup_briefing():
 
 @app.route("/api/keys/generate", methods=["POST"])
 def api_keys_generate():
-    """Mint a new read-only key. The raw token is returned exactly once and is
-    never recoverable — only its SHA-256 is stored."""
+    """Mint a new key. The raw token is returned exactly once and is never
+    recoverable — only its SHA-256 is stored.
+
+    `scope` defaults to 'read' so every existing caller is unchanged; passing
+    'health_sync' issues the key the iOS Shortcut needs, which is read PLUS the
+    single POST /api/health/sync. An unrecognised scope is rejected rather than
+    silently downgraded, so a typo cannot mint a key that quietly cannot sync."""
     data = request.get_json(silent=True) or {}
     name = ((data.get("name") or "").strip()[:100]) or "API Key"
+    scope = (data.get("scope") or "read").strip()
+    if scope not in _API_KEY_SCOPES:
+        return jsonify({"error": f"scope must be one of {', '.join(_API_KEY_SCOPES)}"}), 400
     raw_key = _API_KEY_PREFIX + secrets.token_urlsafe(32)
-    db.create_api_key(_hash_api_key(raw_key), raw_key[:12], name, scope="read")
+    db.create_api_key(_hash_api_key(raw_key), raw_key[:12], name, scope=scope)
     return jsonify({
         "key": raw_key,
         "name": name,
-        "scope": "read",
+        "scope": scope,
         "message": "Save this key now — it is shown only once and cannot be retrieved again.",
     }), 201
 

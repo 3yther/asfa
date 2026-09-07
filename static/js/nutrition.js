@@ -126,6 +126,38 @@ function nhRenderReadouts(totals, goals) {
   ring("nh-fat-ring", t.total_fat, g.fat_goal);
 }
 
+// ── Apple Watch burn ─────────────────────────────────────────────────────────
+// Shown only for TODAY. The Watch pushes an intra-day running total, so on any
+// past date the number would be whatever it happened to be at the last sync of
+// that day — a partial figure presented as a daily total. Hiding it there is
+// more honest than showing a value that is quietly wrong.
+async function nhRenderBurn(dateStr, totals) {
+  const wrap = document.getElementById("nh-burn");
+  if (!wrap) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (dateStr && dateStr !== today) { wrap.hidden = true; return; }
+
+  let row;
+  try { row = await apiGet("/api/health/metrics/latest"); } catch { wrap.hidden = true; return; }
+  const active = row && row.metric_date === today ? row.calories_active : null;
+  if (active == null) { wrap.hidden = true; return; }
+
+  wrap.hidden = false;
+  const val = document.getElementById("nh-burn-val");
+  if (val) val.textContent = `${Math.round(active)} kcal`;
+
+  // Net is intake minus ACTIVE calories only, never calories_total. Total
+  // includes basal burn, so subtracting it from intake answers a different
+  // question and produces a large negative number that looks like a bug.
+  const intake = Math.round(Number((totals || {}).total_calories) || 0);
+  const net = document.getElementById("nh-burn-net");
+  if (net) {
+    net.textContent = intake
+      ? `INTAKE ${intake} − BURNED ${Math.round(active)} = NET ${intake - Math.round(active)}`
+      : "NOTHING LOGGED YET TODAY";
+  }
+}
+
 function nhRenderMeals(meals) {
   const wrap = document.getElementById("nh-meals");
   const empty = document.getElementById("nh-empty");
@@ -188,6 +220,9 @@ function nhRenderDay(day) {
   NH.meals = Array.isArray(day.meals) ? day.meals : [];
   nhRenderReadouts(day.totals, NH.goals);
   nhRenderMeals(day.meals);
+  // Fire-and-forget: the burn row is supplementary, so a slow or failed health
+  // fetch must not hold up (or break) the rest of the day's render.
+  nhRenderBurn(NH.date, day.totals);
   const label = document.getElementById("nh-date");
   if (label) { label.textContent = nhDateLabel(NH.date); label.dataset.date = NH.date; }
 }

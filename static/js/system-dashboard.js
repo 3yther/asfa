@@ -538,4 +538,115 @@
       }
     });
   })();
+  // ── Apple Watch Health Sync ─────────────────────────────────────────────────
+  // Issues the 'health_sync'-scoped API key the iOS Shortcut authenticates with.
+  //
+  // The key lives in the api_keys table rather than being a constant generated
+  // at server startup, which matters more than it sounds: a startup-generated
+  // token changes on every process start, so each Railway redeploy would break
+  // the Shortcut silently — hourly 401s nobody ever sees. Stored, it survives
+  // redeploys, and it can be named, revoked and audited by last-used.
+  (function initHealthSync() {
+    const container = document.getElementById("health-sync-container");
+    if (!container) return;
+
+    const FMT = new Intl.DateTimeFormat("en-GB", {
+      day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: true,
+    });
+    const when = (v) => {
+      if (!v) return "never";
+      const d = new Date(String(v).replace(" ", "T"));
+      return isNaN(d) ? esc(v) : FMT.format(d);
+    };
+
+    function render(keys) {
+      const watch = keys.filter((k) => k.scope === "health_sync" && !k.revoked_at);
+      const rows = watch.length
+        ? watch.map((k) => `
+            <div style="display:flex;justify-content:space-between;align-items:center;
+                        gap:8px;padding:8px 0;border-bottom:1px solid var(--line);">
+              <div>
+                <div style="color:var(--text);font-size:13px;font-weight:600;">${esc(k.name || "Watch key")}</div>
+                <div style="color:${DIM};font-size:11px;margin-top:2px;">
+                  ${esc(k.prefix || "")}… · created ${when(k.created_at)} · last used ${when(k.last_used_at)}</div>
+              </div>
+              <button data-revoke-key="${k.id}" style="${btnStyle(RED)}padding:4px 10px;">Revoke</button>
+            </div>`).join("")
+        : `<p style="color:${DIM};font-size:12px;">No sync key yet.</p>`;
+
+      container.innerHTML = `
+        <p style="color:${DIM};font-size:12px;margin:0 0 10px;">
+          The token the iOS Shortcut uses to POST HealthKit data. It can write to
+          <code>/api/health/sync</code> and read health metrics back — nothing else.
+          Shown once at creation and stored only as a hash, so it cannot be
+          recovered later; if you lose it, revoke and issue another.</p>
+        ${rows}
+        <div id="health-sync-new" style="display:none;margin-top:10px;padding:10px;
+             border:1px solid ${GREEN};border-radius:6px;background:rgba(0,0,0,.25);">
+          <div style="color:${GREEN};font-size:11px;margin-bottom:6px;">
+            COPY THIS NOW — IT WILL NOT BE SHOWN AGAIN</div>
+          <code id="health-sync-token" style="word-break:break-all;font-size:12px;
+                color:var(--text);display:block;"></code>
+          <button id="health-sync-copy" style="${btnStyle(CYAN)}margin-top:8px;padding:4px 10px;">Copy</button>
+        </div>
+        <button id="health-sync-gen" style="${btnStyle(CYAN)}margin-top:10px;">
+          Generate sync key</button>
+        <p style="color:${DIM};font-size:11px;margin:10px 0 0;">
+          Setup steps: <code>docs/apple-watch-health-sync.md</code> in the repo.</p>`;
+
+      const gen = document.getElementById("health-sync-gen");
+      gen.addEventListener("click", async () => {
+        gen.disabled = true;
+        try {
+          const r = await apiSend("/api/keys/generate", "POST",
+            { name: "Apple Watch Sync", scope: "health_sync" });
+          const box = document.getElementById("health-sync-new");
+          const tok = document.getElementById("health-sync-token");
+          tok.textContent = r.key;
+          box.style.display = "block";
+          document.getElementById("health-sync-copy").addEventListener("click", () => {
+            // clipboard.writeText needs a secure context; on plain http over the
+            // LAN it rejects, so fall back to selecting the text to copy by hand.
+            (navigator.clipboard ? navigator.clipboard.writeText(r.key) : Promise.reject())
+              .then(() => toast("Key copied", GREEN))
+              .catch(() => {
+                const range = document.createRange();
+                range.selectNodeContents(tok);
+                const sel = window.getSelection();
+                sel.removeAllRanges(); sel.addRange(range);
+                toast("Select and copy the highlighted key", AMBER);
+              });
+          });
+          toast("Sync key created", GREEN);
+        } catch (e) {
+          toast(esc(e.message || "Could not create key"), RED);
+        } finally {
+          gen.disabled = false;
+        }
+      });
+
+      container.querySelectorAll("[data-revoke-key]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try {
+            await apiSend("/api/keys/" + btn.dataset.revokeKey + "/revoke", "POST");
+            toast("Key revoked — the Shortcut will stop syncing", AMBER);
+            load();
+          } catch (e) {
+            btn.disabled = false;
+            toast(esc(e.message || "Could not revoke key"), RED);
+          }
+        });
+      });
+    }
+
+    function load() {
+      apiGet("/api/keys/list")
+        .then((keys) => render(Array.isArray(keys) ? keys : []))
+        .catch((e) => {
+          container.innerHTML = `<p style="color:${RED};">Error: ${esc(e.message || e)}</p>`;
+        });
+    }
+    load();
+  })();
 })();

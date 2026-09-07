@@ -38,6 +38,43 @@
   #bodycomp-card .bc-val { font-size: 1.15rem; margin-top: 2px; }
   #bodycomp-card .bc-manual summary { cursor: pointer; font-size: .68rem; letter-spacing: 1px; color: var(--muted); padding: 4px 0; }
   #bodycomp-card .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  /* Sleep & Recovery — Apple Watch (BODY tab). #sleep-card below is the
+     separate manual log on HABITS. Every colour goes through a theme token, so
+     this card follows the samurai/cyberpunk palettes like everything else. */
+  #recovery-card .rc-top { display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; margin-top: 10px; }
+  #recovery-card .readout-l { font-size: 30px; line-height: 1.1; }
+  #recovery-card .rc-stages { display: flex; height: 7px; gap: 2px; margin-top: 10px; border-radius: 3px; overflow: hidden; }
+  #recovery-card .rc-seg { height: 100%; border-radius: 2px; min-width: 2px; }
+  #recovery-card .rc-seg-deep { background: var(--primary); }
+  #recovery-card .rc-seg-rem { background: var(--cyan); opacity: .8; }
+  #recovery-card .rc-seg-light { background: rgba(var(--neutral-rgb), .32); }
+  #recovery-card .rc-stage-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 7px; font: 500 10px var(--mono); letter-spacing: .06em; color: var(--muted); }
+  #recovery-card .rc-stage-legend b { color: var(--text-dim); font-weight: 600; }
+  #recovery-card .rc-badge {
+    display: inline-block; margin-top: 8px; padding: 3px 9px;
+    font: 600 10px var(--mono); letter-spacing: .09em; text-transform: uppercase;
+    border-radius: var(--r-pill, 999px); border: 1px solid currentColor;
+  }
+  /* The three recovery states. Muted red on "low" rather than an alert red —
+     a night of poor recovery is information, not an emergency. */
+  #recovery-card .rc-badge[data-status="good"]    { color: var(--green); }
+  #recovery-card .rc-badge[data-status="fair"]    { color: var(--amber, var(--warn)); }
+  #recovery-card .rc-badge[data-status="low"]     { color: var(--red); opacity: .85; }
+  #recovery-card .rc-badge[data-status="unknown"] { color: var(--muted); }
+  #recovery-card .rc-baseline { font-size: 10px; letter-spacing: .05em; margin-top: 6px; }
+  #recovery-card .rc-spark-wrap { margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(var(--neutral-rgb), .10); }
+  #recovery-card .rc-spark { width: 100%; height: 44px; margin-top: 6px; display: block; overflow: visible; }
+  #recovery-card .rc-spark polyline { fill: none; stroke: var(--cyan); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+  #recovery-card .rc-spark circle { fill: var(--cyan); }
+  #recovery-card .rc-spark .rc-spark-last { fill: var(--primary); }
+  #recovery-card .rc-spark .rc-spark-base { stroke: rgba(var(--neutral-rgb), .30); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+  #recovery-card #rc-details summary { cursor: pointer; font: 500 11px var(--mono); letter-spacing: .08em; color: var(--muted); padding: 8px 0 4px; }
+  #recovery-card .rc-table { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; font: 500 11px var(--mono); letter-spacing: .04em; }
+  #recovery-card .rc-table .rc-row-day { color: var(--muted); }
+  #recovery-card .rc-table .rc-row-sleep { color: var(--text-dim); }
+  #recovery-card .rc-table .rc-row-hrv { color: var(--text); text-align: right; }
+  @media (max-width: 560px) { #recovery-card .rc-top { grid-template-columns: 1fr; } }
+
   /* Sleep & Recovery card */
   #sleep-card .sleep-log { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
   #sleep-card .sleep-input { width: 100%; }
@@ -555,6 +592,50 @@
       <span class="hud-label" id="bench-phase-label">—</span>
     </div>
     <div id="bench-split-body"><div class="muted mono">// LOADING…</div></div>
+  </section>
+
+  <!-- Apple Watch recovery. Distinct from #sleep-card on the HABITS tab, which
+       is the *manual* log (subjective quality 1-5 → readiness). This one is the
+       Watch's objective data: HRV, the stage split, and the 7-day trend. Sleep
+       duration falls back to the manual log when the Watch has not synced, so
+       the two cards can never show different numbers for the same night. -->
+  <section class="card sci-fi-panel" id="recovery-card" data-card="recovery" data-tabs="body">
+    <div class="card-head">
+      <h2 data-decode>Sleep &amp; Recovery</h2>
+      <span class="hud-label" id="rc-synced">—</span>
+    </div>
+
+    <div id="rc-empty" class="muted mono" hidden>
+      // WAITING FOR WATCH DATA — SEE SETTINGS → HEALTH SYNC
+    </div>
+
+    <div id="rc-body" hidden>
+      <div class="rc-top">
+        <div class="rc-primary">
+          <div class="hud-label">SLEEP</div>
+          <div class="readout-l val-live glow" id="rc-sleep">—</div>
+          <div class="rc-stages" id="rc-stages" role="img" aria-label="Sleep stage split"></div>
+          <div class="rc-stage-legend" id="rc-stage-legend"></div>
+        </div>
+        <div class="rc-secondary">
+          <div class="hud-label">HRV</div>
+          <div class="readout-l val-live glow" id="rc-hrv">—</div>
+          <span class="rc-badge" id="rc-badge" data-status="unknown">—</span>
+          <div class="rc-baseline muted mono" id="rc-baseline"></div>
+        </div>
+      </div>
+
+      <div class="rc-spark-wrap">
+        <div class="hud-label">HRV · 7 DAYS</div>
+        <svg class="rc-spark" id="rc-spark" viewBox="0 0 200 44" preserveAspectRatio="none"
+             role="img" aria-labelledby="rc-spark-desc"><desc id="rc-spark-desc">7-day HRV trend</desc></svg>
+      </div>
+
+      <details id="rc-details">
+        <summary>+ 7-DAY BREAKDOWN</summary>
+        <div class="rc-table" id="rc-table"></div>
+      </details>
+    </div>
   </section>
 
   <section class="card sci-fi-panel" id="bodyweight-card" data-tabs="body">

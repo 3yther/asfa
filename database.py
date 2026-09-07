@@ -9825,6 +9825,298 @@ def get_steps_week(end_date=None) -> dict:
     }
 
 
+# ── Apple Watch health metrics (HealthKit → hourly iOS Shortcut) ─────────────
+#
+# What this table is FOR, and what it deliberately is not:
+#
+#   * HRV and the sleep-stage split (deep/light/REM) exist nowhere else — this
+#     is their only home.
+#   * Active/total calories likewise. Note this is NOT the same quantity as
+#     get_daily_expenditure(), which back-calculates true burn from intake and
+#     tissue change. The Watch's number is a sensor estimate of *movement*.
+#     Both are kept; they answer different questions and would be wrong to merge.
+#   * Steps are mirrored into the existing `steps` table (source 'apple_watch')
+#     rather than being read from here, so the steps UI keeps one source of
+#     truth. See sync_health_metrics.
+#   * Sleep DURATION is stored here but never written into the manual `sleep`
+#     table. That table requires a subjective quality 1-5 the Watch cannot
+#     supply, and its rows are the user's own log — a sync job silently
+#     overwriting hand-entered nights would be the wrong trade.
+#
+# No FOREIGN KEY on user_id: this app has no `users` table (it is single-user,
+# gated by one passphrase, keyed off DEFAULT_USER_ID). The column is kept for
+# shape-compatibility with the rest of the schema, matching user_settings.
+
+_HEALTH_METRICS_READY = False
+
+# Fields the sync endpoint accepts, and the type each is coerced to. Anything
+# not in here is ignored rather than trusted into a SQL statement.
+HEALTH_METRIC_FIELDS = {
+    "sleep_duration_minutes": int,
+    "sleep_deep_minutes": int,
+    "sleep_light_minutes": int,
+    "sleep_rem_minutes": int,
+    "hrv_ms": float,
+    "calories_active": int,
+    "calories_total": int,
+    "steps": int,
+}
+
+# HRV bands used when there is not yet enough history for a personal baseline.
+# The brief's absolute numbers; they are a starting point, not a diagnosis.
+HRV_GOOD_MS = 40.0
+HRV_FAIR_MS = 30.0
+# Days of prior HRV needed before the badge switches to a personal baseline.
+HRV_BASELINE_MIN_DAYS = 4
+HRV_BASELINE_WINDOW = 7
+
+
+def _ensure_health_metrics_table():
+    global _HEALTH_METRICS_READY
+    if _HEALTH_METRICS_READY:
+        return
+    stmt = """CREATE TABLE IF NOT EXISTS health_metrics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 1,
+        metric_date TEXT NOT NULL,
+        sleep_duration_minutes INTEGER,
+        sleep_deep_minutes INTEGER,
+        sleep_light_minutes INTEGER,
+        sleep_rem_minutes INTEGER,
+        hrv_ms REAL,
+        calories_active INTEGER,
+        calories_total INTEGER,
+        steps INTEGER,
+        synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, metric_date)
+    )"""
+    if USE_POSTGRES:
+        stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    with get_db() as conn:
+        conn.cursor().execute(stmt)
+    _HEALTH_METRICS_READY = True
+
+
+def upsert_health_metrics(metric_date, fields: dict, user_id: int = DEFAULT_USER_ID,
+                          synced_at=None) -> dict:
+    """Merge `fields` into one day's row, creating it if absent.
+
+    PARTIAL by design, and that is the whole point. The Shortcut posts sleep and
+    HRV for *yesterday* and activity for *today*, then repeats every hour. A
+    plain INSERT-OR-REPLACE would blank yesterday's HRV the moment an activity-
+    only payload arrived for the same date, and a plain INSERT would violate the
+    unique constraint. Only keys actually present are written; everything else
+    on the row is left exactly as it was.
+
+    Returns the full row as stored.
+    """
+    _ensure_health_metrics_table()
+    clean = {}
+    for key, cast in HEALTH_METRIC_FIELDS.items():
+        if key not in fields or fields[key] is None:
+            continue
+        try:
+            value = cast(fields[key])
+        except (TypeError, ValueError):
+            continue
+        # Negative sleep/steps/calories are sensor or transcription noise, not
+        # data. Drop rather than store, so a bad hour cannot poison a chart.
+        if value < 0:
+            continue
+        clean[key] = value
+
+    if synced_at is None:
+        # get_current_time() honours the Settings clock override, so a backfill
+        # session stamps rows at the simulated instant like every other writer.
+        synced_at = to_local_datetime(get_current_time())
+    if isinstance(synced_at, datetime):
+        synced_at = synced_at.strftime("%Y-%m-%d %H:%M:%S")
+
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT id FROM health_metrics WHERE user_id = {ph} AND metric_date = {ph}",
+            (user_id, metric_date))
+        existing = cur.fetchone()
+        if existing:
+            sets = ", ".join(f"{k} = {ph}" for k in clean)
+            sets = (sets + ", " if sets else "") + f"synced_at = {ph}"
+            params = list(clean.values()) + [synced_at, dict(existing)["id"]]
+            cur.execute(f"UPDATE health_metrics SET {sets} WHERE id = {ph}", params)
+        else:
+            cols = list(clean.keys())
+            placeholders = ", ".join([ph] * (len(cols) + 3))
+            cur.execute(
+                f"INSERT INTO health_metrics (user_id, metric_date, {', '.join(cols) + ', ' if cols else ''}synced_at) "
+                f"VALUES ({placeholders})",
+                [user_id, metric_date] + list(clean.values()) + [synced_at])
+    return get_health_metrics_for_date(metric_date, user_id) or {}
+
+
+def _health_row(row) -> dict:
+    d = dict(row)
+    d.pop("user_id", None)
+    d.pop("id", None)
+    if d.get("synced_at") is not None:
+        d["synced_at"] = str(d["synced_at"])
+    if d.get("hrv_ms") is not None:
+        d["hrv_ms"] = round(float(d["hrv_ms"]), 1)
+    return d
+
+
+def get_health_metrics_for_date(metric_date, user_id: int = DEFAULT_USER_ID):
+    _ensure_health_metrics_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT * FROM health_metrics WHERE user_id = {ph} AND metric_date = {ph}",
+            (user_id, metric_date))
+        row = cur.fetchone()
+    return _health_row(row) if row else None
+
+
+def get_health_metrics(days: int = 7, user_id: int = DEFAULT_USER_ID) -> list:
+    """The last `days` days that HAVE data, most recent first.
+
+    Days with no sync are omitted rather than returned as empty rows: the
+    sparkline needs to distinguish "HRV was low" from "the watch didn't sync",
+    and a zero-filled gap reads as the former.
+    """
+    _ensure_health_metrics_table()
+    days = _clamp_limit(days, 7, 365)
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT * FROM health_metrics WHERE user_id = {ph} "
+            f"ORDER BY metric_date DESC LIMIT {ph}", (user_id, days))
+        return [_health_row(r) for r in cur.fetchall()]
+
+
+def get_latest_health_metrics(user_id: int = DEFAULT_USER_ID):
+    """Most recently DATED row, not most recently synced — an hourly job
+    re-touching an old day must not make it look like today's data."""
+    rows = get_health_metrics(1, user_id)
+    return rows[0] if rows else None
+
+
+def get_hrv_baseline(exclude_date=None, user_id: int = DEFAULT_USER_ID):
+    """Median HRV over the recent window, or None with too little history.
+
+    Median, not mean: a single night of illness or a bad strap contact throws an
+    HRV mean by 10+ ms, and the baseline is exactly what must not move on one
+    bad reading. `exclude_date` keeps the day being judged out of its own
+    baseline.
+    """
+    _ensure_health_metrics_table()
+    ph = "%s" if USE_POSTGRES else "?"
+    sql = (f"SELECT hrv_ms FROM health_metrics WHERE user_id = {ph} "
+           f"AND hrv_ms IS NOT NULL")
+    params = [user_id]
+    if exclude_date is not None:
+        sql += f" AND metric_date <> {ph}"
+        params.append(exclude_date)
+    sql += f" ORDER BY metric_date DESC LIMIT {ph}"
+    params.append(HRV_BASELINE_WINDOW)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(sql, tuple(params))
+        vals = sorted(float(dict(r)["hrv_ms"]) for r in cur.fetchall())
+    if len(vals) < HRV_BASELINE_MIN_DAYS:
+        return None
+    mid = len(vals) // 2
+    return round(vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2, 1)
+
+
+def recovery_status(hrv_ms, baseline=None) -> dict:
+    """Map an HRV reading onto {status, label, band, baseline}.
+
+    Two modes, and the distinction is reported so the UI can be honest about it:
+      * `baseline` present  → judged against the user's own median. HRV is
+        wildly individual (a healthy adult's can sit anywhere from 20 to 100 ms),
+        so an absolute threshold tells you mostly how old you are.
+      * no baseline yet     → the absolute bands, flagged as provisional.
+    """
+    if hrv_ms is None:
+        return {"status": "unknown", "label": "no data", "band": None, "baseline": baseline}
+    hrv = float(hrv_ms)
+    if baseline:
+        ratio = hrv / baseline
+        if ratio >= 0.95:
+            status, label = "good", "good recovery"
+        elif ratio >= 0.85:
+            status, label = "fair", "fair"
+        else:
+            status, label = "low", "needs rest"
+        return {"status": status, "label": label, "band": "baseline",
+                "baseline": baseline, "ratio": round(ratio, 2)}
+    if hrv >= HRV_GOOD_MS:
+        status, label = "good", "good recovery"
+    elif hrv >= HRV_FAIR_MS:
+        status, label = "fair", "fair"
+    else:
+        status, label = "low", "needs rest"
+    return {"status": status, "label": label, "band": "absolute", "baseline": None}
+
+
+# The `steps` source name the Watch writes under. Kept as a constant because
+# the sync REPLACES rows carrying it (see sync_health_metrics) — a typo here
+# would silently start appending instead.
+WATCH_STEPS_SOURCE = "apple_watch"
+
+
+def sync_health_metrics(metric_date, fields: dict, user_id: int = DEFAULT_USER_ID) -> dict:
+    """Store one day's metrics AND mirror steps into the `steps` table.
+
+    The mirror is a REPLACE, not an append. `steps` is an append-only log whose
+    day total is SUM(steps), and the Shortcut posts today's *running* total every
+    hour — appending would count 09:00's 4,000 steps again at 10:00, and again at
+    11:00, so a 10,000-step day would read as six figures by evening. Deleting
+    this date's previous watch row first keeps exactly one, while leaving manual
+    and cardio-derived rows for the same day untouched.
+    """
+    row = upsert_health_metrics(metric_date, fields, user_id)
+    steps = row.get("steps")
+    if steps is not None:
+        _ensure_steps_tables()
+        ph = "%s" if USE_POSTGRES else "?"
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"DELETE FROM steps WHERE date = {ph} AND source = {ph}",
+                (metric_date, WATCH_STEPS_SOURCE))
+        if steps > 0:
+            add_step_entry(metric_date, WATCH_STEPS_SOURCE, steps,
+                           detail={"synced": True}, created_at=get_current_time())
+    return row
+
+
+def get_recovery_summary(days: int = 7, user_id: int = DEFAULT_USER_ID) -> dict:
+    """Everything the Sleep & Recovery card needs, in one call.
+
+    Assembled server-side rather than in the browser so the badge, the baseline
+    and the sparkline can never disagree about which days they were computed
+    from.
+    """
+    history = get_health_metrics(days, user_id)
+    latest = history[0] if history else None
+    hrv = latest.get("hrv_ms") if latest else None
+    baseline = get_hrv_baseline(exclude_date=latest["metric_date"] if latest else None,
+                                user_id=user_id)
+    # Oldest-first for drawing; the query returns newest-first for the API.
+    trend = [{"date": r["metric_date"], "hrv_ms": r.get("hrv_ms")}
+             for r in reversed(history)]
+    return {
+        "latest": latest,
+        "recovery": recovery_status(hrv, baseline),
+        "trend": trend,
+        "history": history,
+        "has_data": bool(history),
+    }
+
+
 # ── Data export (one CSV string per module) ──────────────────────────────────
 # Pure read-only serializers used by the "Export All Data" endpoint. Each
 # returns a CSV string (with a single header row) or "" when the module has no

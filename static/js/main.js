@@ -631,7 +631,7 @@ const CARD_LOADERS = {
   inbox: fetchEmails, news: fetchNews, scent: fetchScent,
   goals: fetchGoals, reflection: fetchReflection,
   supplements: fetchSupplements, bodycomp: fetchBodyComp,
-  sleep: fetchSleep,
+  sleep: fetchSleep, recovery: fetchRecovery,
   finance: fetchFinance,
   "split-progress": fetchSplitProgress,
   "nutrition-split": fetchNutritionSplit,
@@ -1000,6 +1000,157 @@ async function fetchSleepHistory() {
       return `<div class="sleep-bar" style="height:${h}%" title="${esc(n.date)} · readiness ${esc(n.readiness)}"></div>`;
     }).join("");
   } catch { /* leave strip as-is */ }
+}
+
+// ── Sleep & Recovery — Apple Watch (BODY tab) ──────────────────────────────────
+// Reads /api/health/recovery, which resolves the badge, the HRV baseline and the
+// trend server-side; nothing here re-derives them, so the badge and the
+// sparkline cannot end up describing different sets of days.
+
+function fmtSleepDuration(mins) {
+  if (mins == null) return "—";
+  const m = Math.max(0, Math.round(Number(mins) || 0));
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+// "2 hours ago" from a naive local 'YYYY-MM-DD HH:MM:SS'. Parsed by hand
+// because `new Date("2026-09-06 14:30:00")` is not a format the spec requires
+// engines to accept, and Safari in particular returns Invalid Date for it.
+function fmtSyncedAgo(stamp) {
+  if (!stamp) return "NEVER SYNCED";
+  const m = String(stamp).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!m) return "SYNCED";
+  const then = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+  const mins = Math.round((Date.now() - then.getTime()) / 60000);
+  if (!isFinite(mins)) return "SYNCED";
+  if (mins < 2) return "SYNCED JUST NOW";
+  if (mins < 60) return `SYNCED ${mins} MIN AGO`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `SYNCED ${hrs} HOUR${hrs === 1 ? "" : "S"} AGO`;
+  const days = Math.round(hrs / 24);
+  return `SYNCED ${days} DAY${days === 1 ? "" : "S"} AGO`;
+}
+
+function renderRecoveryStages(latest) {
+  const bar = document.getElementById("rc-stages");
+  const legend = document.getElementById("rc-stage-legend");
+  if (!bar || !legend) return;
+  const parts = [
+    ["deep", "DEEP", latest.sleep_deep_minutes],
+    ["rem", "REM", latest.sleep_rem_minutes],
+    ["light", "LIGHT", latest.sleep_light_minutes],
+  ].filter((p) => p[2] != null && Number(p[2]) > 0);
+  const total = parts.reduce((a, p) => a + Number(p[2]), 0);
+  if (!total) { bar.innerHTML = ""; legend.innerHTML = ""; return; }
+  bar.innerHTML = parts.map(([k, , v]) =>
+    `<div class="rc-seg rc-seg-${k}" style="flex:${Number(v)}"></div>`).join("");
+  // Percentages are of the staged total, not of time in bed: the Watch's stage
+  // minutes rarely sum to the duration it reports, so dividing by duration
+  // gives three figures that visibly fail to reach 100%.
+  legend.innerHTML = parts.map(([, label, v]) =>
+    `<span>${label} <b>${Math.round((Number(v) / total) * 100)}%</b></span>`).join("");
+}
+
+function renderHrvSparkline(trend, baseline) {
+  const svg = document.getElementById("rc-spark");
+  if (!svg) return;
+  const pts = (trend || []).filter((p) => p && p.hrv_ms != null);
+  const desc = '<desc id="rc-spark-desc">7-day HRV trend</desc>';
+  if (pts.length < 2) {
+    svg.innerHTML = desc +
+      '<text x="100" y="26" text-anchor="middle" font-size="9" fill="currentColor" ' +
+      'opacity=".5">NEED 2+ DAYS</text>';
+    return;
+  }
+  const W = 200, H = 44, pad = 5;
+  const vals = pts.map((p) => Number(p.hrv_ms));
+  // Include the baseline in the extent so its dashed line can't fall outside
+  // the viewBox, and pad a flat series so it draws mid-height instead of at 0.
+  const all = baseline ? vals.concat([baseline]) : vals;
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
+  const x = (i) => pad + (i * (W - pad * 2)) / (pts.length - 1);
+  const y = (v) => H - pad - ((v - lo) / (hi - lo)) * (H - pad * 2);
+  const line = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const base = baseline
+    ? `<line class="rc-spark-base" x1="${pad}" y1="${y(baseline).toFixed(1)}" x2="${W - pad}" y2="${y(baseline).toFixed(1)}"></line>`
+    : "";
+  const dots = vals.map((v, i) =>
+    `<circle class="${i === vals.length - 1 ? "rc-spark-last" : ""}" cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="${i === vals.length - 1 ? 2.6 : 1.5}"></circle>`).join("");
+  svg.innerHTML = desc + base + `<polyline points="${line}"></polyline>` + dots;
+}
+
+function renderRecoveryTable(history) {
+  const table = document.getElementById("rc-table");
+  if (!table) return;
+  if (!history || !history.length) { table.innerHTML = ""; return; }
+  table.innerHTML = history.map((r) => {
+    const d = String(r.metric_date || "");
+    const m = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const day = m
+      ? new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(undefined, { weekday: "short" })
+      : d;
+    return `<span class="rc-row-day">${esc(day)}</span>` +
+           `<span class="rc-row-sleep">${esc(fmtSleepDuration(r.sleep_duration_minutes))}</span>` +
+           `<span class="rc-row-hrv">${r.hrv_ms == null ? "—" : esc(r.hrv_ms) + " ms"}</span>`;
+  }).join("");
+}
+
+async function fetchRecovery() {
+  const card = document.getElementById("recovery-card");
+  if (!card) return;
+  let data;
+  try { data = await apiGet("/api/health/recovery?days=7"); } catch { return; }
+
+  const empty = document.getElementById("rc-empty");
+  const body = document.getElementById("rc-body");
+  const synced = document.getElementById("rc-synced");
+  if (!data || !data.has_data) {
+    if (empty) empty.hidden = false;
+    if (body) body.hidden = true;
+    if (synced) synced.textContent = "NO WATCH DATA";
+    return;
+  }
+  if (empty) empty.hidden = true;
+  if (body) body.hidden = false;
+
+  const latest = data.latest || {};
+  if (synced) synced.textContent = fmtSyncedAgo(latest.synced_at);
+
+  // Sleep duration falls back to the manual log so this card and the HABITS
+  // sleep card never disagree about the same night.
+  let mins = latest.sleep_duration_minutes;
+  if (mins == null) {
+    try {
+      const s = await apiGet("/api/sleep/readiness");
+      if (s && s.duration != null) mins = Math.round(Number(s.duration) * 60);
+    } catch { /* no manual entry either; the em-dash below is the honest answer */ }
+  }
+  const sleepEl = document.getElementById("rc-sleep");
+  if (sleepEl) sleepEl.textContent = fmtSleepDuration(mins);
+  renderRecoveryStages(latest);
+
+  const rec = data.recovery || {};
+  const hrvEl = document.getElementById("rc-hrv");
+  if (hrvEl) hrvEl.textContent = latest.hrv_ms == null ? "—" : `${latest.hrv_ms} ms`;
+  const badge = document.getElementById("rc-badge");
+  if (badge) {
+    badge.textContent = rec.label || "—";
+    badge.dataset.status = rec.status || "unknown";
+  }
+  const baseEl = document.getElementById("rc-baseline");
+  if (baseEl) {
+    // Say which yardstick produced the badge. Before there is enough history
+    // it is a generic threshold, and presenting that as a personal read would
+    // be overclaiming.
+    baseEl.textContent = rec.baseline
+      ? `VS YOUR ${rec.baseline} MS BASELINE`
+      : "GENERIC BANDS — BASELINE NEEDS 4+ DAYS";
+  }
+
+  renderHrvSparkline(data.trend, rec.baseline);
+  renderRecoveryTable(data.history);
+  if (!window.asfa_initial_load) glowCard("recovery");
 }
 
 function wireSleep() {

@@ -65,6 +65,16 @@
               <div class="hud-label">KCAL LEFT</div>
             </div>
           </div>
+          <!-- Apple Watch burn. Hidden entirely until the watch has synced
+               today, rather than showing a zero — "0 burned" is a claim, and a
+               wrong one; absent data should look absent. -->
+          <div class="nh-burn" id="nh-burn" hidden>
+            <div class="nh-burn-row">
+              <span class="hud-label">BURNED · WATCH</span>
+              <b class="mono" id="nh-burn-val">—</b>
+            </div>
+            <div class="nh-burn-net mono" id="nh-burn-net"></div>
+          </div>
           <div class="nh-macro-rings" role="group" aria-label="Macros remaining">
             <div class="nh-ring nh-ring-sm">
               <svg viewBox="0 0 80 80" aria-hidden="true">
