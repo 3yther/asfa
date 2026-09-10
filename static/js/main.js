@@ -928,7 +928,7 @@ function renderTradingActivity(d) {
 }
 
 // ── Habits (water) ─────────────────────────────────────────────────────────────
-// Sleep moved to its own Sleep & Recovery card (fetchSleep); habits.sleep_hours
+// Sleep moved to its own Sleep Log card (fetchSleep); habits.sleep_hours
 // is no longer written from the dashboard.
 async function fetchHabits() {
   try {
@@ -947,7 +947,7 @@ function renderWater(ml, target, streak) {
   if (strkEl) strkEl.textContent = streak ? `🔥 ${streak}` : "";
 }
 
-// ── Sleep & Recovery (Tier 6) ───────────────────────────────────────────────────
+// ── Sleep Log (Tier 6) ─────────────────────────────────────────────────────────
 // Two-state card: STATE A (quick-log form) until today is logged, then STATE B
 // (readiness readout, locked for the day). A failed fetch leaves the card as-is
 // so it never blanks — matching the other loaders' try/catch pattern.
