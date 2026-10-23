@@ -296,7 +296,7 @@ def scan_apprenticeships() -> dict:
     level = min_level()
     summary = {"employers_scanned": 0, "keywords_scanned": 0, "new": 0,
                "closed": 0, "alerted": 0, "excluded": 0, "errors": [],
-               "baseline_run": False}
+               "baseline_run": False, "route_scanned": 0, "route_found": 0}
     new_bucket = []
     excluded = []
 
@@ -321,6 +321,29 @@ def scan_apprenticeships() -> dict:
             summary["employers_scanned"] += 1
             summary["new"] += new_count
             _log_scan("employer", alias, len(raws), new_count, duration_ms)
+
+    # ---- Digital-route sweep (no search term) ----
+    # The one pass that does not depend on wording: gov.uk's own route filter
+    # selects Digital Level 4+ listings, so a role whose advert uses none of our
+    # keywords is still found. Runs first so the keyword scans that follow are
+    # mostly confirming what it already has.
+    started = time.time()
+    try:
+        raws = scraper.by_route(min_level=1)
+    except ScraperError as e:
+        summary["errors"].append(f"route: {e}")
+        _log_scan("route", "digital L4+", 0, 0,
+                  int((time.time() - started) * 1000), error=str(e))
+    else:
+        duration_ms = int((time.time() - started) * 1000)
+        new_count = _persist_vacancies(raws, employer=None,
+                                       new_bucket=new_bucket,
+                                       employers=employers,
+                                       excluded=excluded)
+        summary["route_scanned"] = 1
+        summary["route_found"] = len(raws)
+        summary["new"] += new_count
+        _log_scan("route", "digital L4+", len(raws), new_count, duration_ms)
 
     # ---- Keyword scans (surface employers we don't track by name) ----
     for kw in keyword_scans():
@@ -400,7 +423,8 @@ def scan_apprenticeships() -> dict:
         orm.session.rollback()
 
     logger.info("Apprenticeship scan complete — %d new, %d closed, %d alerted, "
-                "%d excluded%s", summary["new"], summary["closed"],
-                summary["alerted"], summary["excluded"],
+                "%d excluded, route sweep found %d%s",
+                summary["new"], summary["closed"], summary["alerted"],
+                summary["excluded"], summary["route_found"],
                 " (silent baseline)" if summary["baseline_run"] else "")
     return summary

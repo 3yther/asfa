@@ -408,3 +408,111 @@ def test_verdict_serialises_for_the_log():
     assert d["keep"] is False
     assert d["reason"] == sc.REASON_TITLE
     assert "detail" in d and "terms" in d
+
+
+# ── gov.uk's own filters (field names verified against the live site) ───────
+
+def test_the_route_sweep_params_are_the_verified_ones():
+    """?routeIds=7&levelIds=4&levelIds=5&levelIds=6&levelIds=7
+
+    Pinned because these came from checking the live site, not from guessing,
+    and a silent change here would alter what the sweep covers.
+    """
+    assert sc.DIGITAL_ROUTE_ID == 7
+    assert sc.DEFAULT_LEVEL_IDS == (4, 5, 6, 7)
+    assert sc.route_sweep_params() == {"routeIds": 7, "levelIds": [4, 5, 6, 7]}
+
+
+def test_the_sweep_sends_no_search_term():
+    """The whole point: the route filter selects the listings, so one pass
+    covers the route instead of depending on wording."""
+    assert "searchTerm" not in sc.route_sweep_params()
+
+
+# ── Distance validation ─────────────────────────────────────────────────────
+
+def test_the_allowed_distances_are_the_sites_own():
+    assert sc.DISTANCE_VALUES == (2, 5, 10, 15, 20, 30, 40, "all")
+
+
+def test_the_default_distance_is_twenty():
+    assert sc.DEFAULT_DISTANCE == 20
+    assert sc.search_distance() == 20
+
+
+@pytest.mark.parametrize("value", [2, 5, 10, 15, 20, 30, 40, "all"])
+def test_every_accepted_distance_validates(value):
+    assert sc.validate_distance(value) == value
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("20", 20), (" 20 ", 20), ("ALL", "all"), ("All", "all"), (" all ", "all"),
+])
+def test_distance_strings_are_normalised(raw, expected):
+    assert sc.validate_distance(raw) == expected
+
+
+@pytest.mark.parametrize("bad", [25, 1, 0, -5, 100, 3.5, "near", "", None, True,
+                                 [20], {"d": 20}])
+def test_an_unaccepted_distance_is_rejected(bad):
+    """Rejected, not coerced. Distance changes which listings a sweep can see,
+    so quietly substituting a different radius would make the numbers a lie —
+    and a wrong "nothing found" is worse than an error."""
+    with pytest.raises(ValueError):
+        sc.validate_distance(bad)
+
+
+def test_the_rejection_message_names_the_allowed_values():
+    with pytest.raises(ValueError) as e:
+        sc.validate_distance(25)
+    assert "2, 5, 10, 15, 20, 30, 40" in str(e.value)
+    assert "all" in str(e.value)
+
+
+def test_the_distance_can_be_set_from_the_environment(monkeypatch):
+    monkeypatch.setenv("SCOUT_DISTANCE", "40")
+    assert sc.search_distance() == 40
+    monkeypatch.setenv("SCOUT_DISTANCE", "all")
+    assert sc.search_distance() == "all"
+
+
+def test_a_bad_distance_in_the_environment_raises(monkeypatch):
+    monkeypatch.setenv("SCOUT_DISTANCE", "25")
+    with pytest.raises(ValueError):
+        sc.search_distance()
+
+
+def test_the_distance_can_be_set_in_config(isolated_config):
+    _write(isolated_config, {"distance": 5})
+    assert sc.search_distance() == 5
+
+
+def test_a_bad_distance_in_config_falls_back_to_the_default(isolated_config):
+    """A mistyped config value must not stop a scan; the warning is the signal."""
+    _write(isolated_config, {"distance": 25})
+    assert sc.search_distance() == sc.DEFAULT_DISTANCE
+
+
+# ── Field names we do NOT have are not guessed ──────────────────────────────
+
+def test_the_distance_and_postcode_field_names_have_no_default():
+    """Guessing a field name would send a query that looks local and is
+    silently nationwide — a worse failure than not filtering at all."""
+    assert sc.distance_param() is None
+    assert sc.postcode_param() is None
+
+
+def test_the_home_postcode_is_config_only_and_never_hardcoded():
+    assert sc.home_postcode() == ""
+
+
+def test_the_home_postcode_can_be_configured(isolated_config):
+    _write(isolated_config, {"home_postcode": ["DA17 6AB"]})
+    assert sc.home_postcode() == "DA17 6AB"
+
+
+def test_the_field_names_can_be_configured_once_known(isolated_config):
+    _write(isolated_config, {"distance_param": ["distance"],
+                             "postcode_param": ["location"]})
+    assert sc.distance_param() == "distance"
+    assert sc.postcode_param() == "location"

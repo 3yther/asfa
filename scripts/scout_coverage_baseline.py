@@ -81,11 +81,23 @@ def judge(vacancy):
 
 # ── Measurement ──────────────────────────────────────────────────────────────
 
-def _searches(use_employers: bool):
-    """(kind, term) pairs this run will issue, from the live config."""
+# The route sweep's label, used to attribute vacancies to it in `found_by`.
+ROUTE_TERM = "[route sweep] digital, Level 4+"
+
+
+def _searches(use_employers: bool, route_sweep: bool = True):
+    """(kind, term) pairs this run will issue, from the live config.
+
+    The route sweep goes first because it is the method with no dependency on
+    wording, so it is the baseline the keyword searches get measured against
+    rather than the other way round.
+    """
     from services import apprenticeships
 
-    out = [("keyword", kw) for kw in apprenticeships.keyword_scans()]
+    out = []
+    if route_sweep:
+        out.append(("route", ROUTE_TERM))
+    out += [("keyword", kw) for kw in apprenticeships.keyword_scans()]
     if use_employers:
         import app as app_module
         from models import Employer
@@ -96,7 +108,8 @@ def _searches(use_employers: bool):
     return out
 
 
-def measure(use_employers=False, min_level=1, max_pages=None, verbose=True):
+def measure(use_employers=False, min_level=1, max_pages=None, verbose=True,
+            route_sweep=True):
     """Run every configured search and tally the union of what comes back.
 
     min_level defaults to 1, not the app's 4: the baseline has to see what the
@@ -115,14 +128,22 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True):
     per_search = []
     errors = []
 
-    searches = _searches(use_employers)
+    searches = _searches(use_employers, route_sweep=route_sweep)
     for i, (kind, term) in enumerate(searches, 1):
         if verbose:
             print(f"  [{i}/{len(searches)}] {kind}: {term} ... ", end="", flush=True)
         stats = {}
         try:
-            fn = scraper.by_employer if kind == "employer" else scraper.by_keyword
-            raws = fn(term, min_level=min_level, stats=stats)
+            if kind == "route":
+                # No search term: the route filter selects the listings. Also no
+                # local level floor — gov.uk has already filtered via levelIds,
+                # so re-filtering here would only discard listings whose level
+                # we failed to parse.
+                raws = scraper.by_route(min_level=1, stats=stats)
+            elif kind == "employer":
+                raws = scraper.by_employer(term, min_level=min_level, stats=stats)
+            else:
+                raws = scraper.by_keyword(term, min_level=min_level, stats=stats)
         except ScraperError as e:
             errors.append({"kind": kind, "term": term, "error": str(e)})
             if verbose:
@@ -294,14 +315,57 @@ def _summarise(by_ref, per_search, errors, searches, use_employers,
             key=lambda d: (d["reason"], d["title"])),
     }
 
+    # ── Route sweep vs keyword run ───────────────────────────────────────
+    # Two different ways of finding the same thing, so the interesting number is
+    # what each one MISSES. The sweep selects on what an apprenticeship IS; the
+    # keywords select on what its advert SAYS. Neither is a superset of the
+    # other, and the symmetric difference is the evidence for keeping both.
+    sweep_refs = {ref for ref, terms in found_by.items() if ROUTE_TERM in terms}
+    keyword_refs = {ref for ref, terms in found_by.items()
+                    if any(t != ROUTE_TERM for t in terms)}
+    # The keyword run's comparable subset: what it found that IS digital and
+    # Level 4+, which is what the sweep is restricted to.
+    keyword_digital_l4 = {
+        v.reference for v in vacs
+        if v.reference in keyword_refs and digital_route(v)
+        and v.level is not None and v.level >= 4}
+
+    sweep_row = next((r for r in per_search if r.get("term") == ROUTE_TERM), None)
+
+    def _describe(refs):
+        return sorted(
+            ({"ref": r,
+              "title": by_ref[r].title,
+              "employer": by_ref[r].employer_name_raw,
+              "level": by_ref[r].level,
+              "course": by_ref[r].training_course,
+              "source": by_ref[r].source,
+              "url": by_ref[r].url} for r in refs if r in by_ref),
+            key=lambda d: (d["level"] is None, -(d["level"] or 0), d["title"]))
+
+    route_comparison = {
+        "ran": sweep_row is not None,
+        "sweep_slots_reported": (sweep_row or {}).get("site_reported_total"),
+        "sweep_slots_fetched": (sweep_row or {}).get("cards_seen"),
+        "sweep_duplicate_cards": (sweep_row or {}).get("duplicate_cards"),
+        "sweep_stopped_because": (sweep_row or {}).get("stopped_because"),
+        "sweep_distinct": len(sweep_refs),
+        "keyword_digital_level_4_plus": len(keyword_digital_l4),
+        "in_both": len(sweep_refs & keyword_digital_l4),
+        "only_in_sweep": _describe(sweep_refs - keyword_digital_l4),
+        "only_in_keywords": _describe(keyword_digital_l4 - sweep_refs),
+    }
+
     # Per-keyword attribution: which terms found what, and which vacancies only
     # the widened terms reach. Computed from one run rather than by diffing two.
     original = set(scout_config.ORIGINAL_SEARCH_PHRASES)
     only_new_refs = {ref for ref, terms in found_by.items()
-                     if not (set(terms) & original)}
+                     if not (set(terms) & original) and set(terms) != {ROUTE_TERM}}
     by_keyword = {}
     for ref, terms in found_by.items():
         for term in set(terms):
+            if term == ROUTE_TERM:
+                continue        # reported in its own section, not as a keyword
             entry = by_keyword.setdefault(term, {
                 "distinct_vacancies": 0, "new_vs_original_six": 0,
                 "is_original_phrase": term in original})
@@ -373,6 +437,7 @@ def _summarise(by_ref, per_search, errors, searches, use_employers,
         "searches_issued": len(searches),
         "employer_sweep": use_employers,
         "query_params_sent": GovUkScraper.search_params("<term>"),
+        "route_sweep_params": GovUkScraper.route_sweep_params(),
         "errors": errors,
         "totals": {
             "unique_results": len(vacs),
@@ -396,6 +461,7 @@ def _summarise(by_ref, per_search, errors, searches, use_employers,
         },
         "coverage": coverage,
         "exclusions": exclusions,
+        "route_comparison": route_comparison,
         "by_keyword": by_keyword,
         "only_new_keywords_found": len(only_new_refs),
         "original_phrases": list(scout_config.ORIGINAL_SEARCH_PHRASES),
@@ -463,9 +529,17 @@ def measure_fixture(fixture_dir, min_level=1):
 def report(snap):
     t = snap["totals"]
     print()
-    print(f"query sent per search      : {snap.get('query_params_sent')}")
+    print(f"keyword query              : {snap.get('query_params_sent')}")
+    if snap.get("route_sweep_params"):
+        print(f"route sweep query          : {snap['route_sweep_params']}")
+    parts = []
+    if (snap.get("route_comparison") or {}).get("ran"):
+        parts.append("route sweep")
+    parts.append("keyword scans")
+    if snap["employer_sweep"]:
+        parts.append("employer sweep")
     print(f"searches issued            : {snap['searches_issued']}"
-          f"{'  (incl. employer sweep)' if snap['employer_sweep'] else '  (keyword scans only)'}")
+          f"  ({' + '.join(parts)})")
     print(f"unique listings returned   : {t['unique_results']}")
     print(f"  Level 4+                 : {t['level_4_plus']}")
     print(f"  Level 6+                 : {t['level_6_plus']}")
@@ -557,6 +631,53 @@ def report(snap):
             star = "*" if any(course == d or course.startswith(d)
                               for d in digital_set) else " "
             print(f"  {star} {course[:52]:<54}{n:>4}")
+
+    rc = snap.get("route_comparison") or {}
+    if rc.get("ran"):
+        print()
+        print("route sweep vs keyword run")
+        print("  (?routeIds=7&levelIds=4..7 — selects on what the "
+              "apprenticeship IS,")
+        print("   not on what its advert says, so neither method is a superset)")
+        slots = rc.get("sweep_slots_reported")
+        print(f"    sweep: result slots reported : "
+              f"{slots if slots is not None else 'n/a'}")
+        print(f"    sweep: slots fetched         : {rc.get('sweep_slots_fetched')}")
+        print(f"    sweep: duplicate cards       : "
+              f"{rc.get('sweep_duplicate_cards')}   (same vacancy, another location)")
+        print(f"    sweep: DISTINCT vacancies    : {rc.get('sweep_distinct')}")
+        print(f"    sweep: stopped because       : {rc.get('sweep_stopped_because')}")
+        print(f"    keywords: digital AND L4+    : "
+              f"{rc.get('keyword_digital_level_4_plus')}")
+        print(f"    found by both                : {rc.get('in_both')}")
+        print(f"    only the sweep found         : {len(rc.get('only_in_sweep') or [])}"
+              f"   <-- the keywords MISS these")
+        print(f"    only the keywords found      : "
+              f"{len(rc.get('only_in_keywords') or [])}"
+              f"   <-- outside the sweep's filter")
+
+        for label, rows, note in (
+            ("ONLY the route sweep found (keyword wording missed them)",
+             rc.get("only_in_sweep") or [],
+             "these are the argument for the sweep"),
+            ("ONLY the keyword run found (not in the digital L4+ route)",
+             rc.get("only_in_keywords") or [],
+             "check whether each is really digital, or really Level 4+"),
+        ):
+            if not rows:
+                continue
+            print()
+            print(f"  {label} — {len(rows)}:")
+            print(f"  ({note})")
+            for d in rows[:25]:
+                lvl = d["level"] if d["level"] is not None else "?"
+                print(f"    L{str(lvl):<3} {d['ref']:<18}{d['title'][:38]:<40}"
+                      f"{d['employer'][:20]}")
+                if d.get("course"):
+                    print(f"         course: {d['course'][:60]}")
+            if len(rows) > 25:
+                print(f"    ... and {len(rows) - 25} more "
+                      f"(full list in the JSON snapshot)")
 
     ex = snap.get("exclusions") or {}
     if ex:
@@ -697,6 +818,8 @@ def compare(a_path, b_path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--no-route-sweep", action="store_true",
+                    help="skip the digital-route sweep (keyword searches only)")
     ap.add_argument("--employers", action="store_true",
                     help="also sweep every watched employer alias (slow, heavy)")
     ap.add_argument("--min-level", type=int, default=1,
@@ -717,7 +840,7 @@ def main():
         return 0
 
     if args.estimate:
-        searches = _searches(args.employers)
+        searches = _searches(args.employers, route_sweep=not args.no_route_sweep)
         pages = args.max_pages or scout_config.max_pages()
         worst = len(searches) * pages
         print(f"searches            : {len(searches)}")
@@ -743,13 +866,14 @@ def main():
         print(f"Counting fixtures in {args.fixture} (no network)")
         snap = measure_fixture(args.fixture, min_level=args.min_level)
     else:
-        searches = _searches(args.employers)
+        searches = _searches(args.employers, route_sweep=not args.no_route_sweep)
         cap = args.max_pages or scout_config.max_pages()
         print(f"Measuring gov.uk coverage — {len(searches)} searches, "
               f">=1s apart, up to {cap} pages each "
               f"(worst case ~{len(searches) * cap} requests)")
         snap = measure(use_employers=args.employers, min_level=args.min_level,
-                       max_pages=args.max_pages)
+                       max_pages=args.max_pages,
+                       route_sweep=not args.no_route_sweep)
 
     report(snap)
     if args.out:

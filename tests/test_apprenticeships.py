@@ -16,8 +16,9 @@ import database as db
 from models import Employer, ScanLog, ScoutJob
 from models import db as orm
 from services import apprenticeships, scout_config, scout_notify
-from services.scrapers.gov_uk import (GovUkScraper, RawVacancy, _parse_uk_date,
-                                      clean_title, reference_from_href)
+from services.scrapers.gov_uk import (SEARCH_URL, GovUkScraper, RawVacancy,
+                                      ScraperError, _parse_uk_date, clean_title,
+                                      reference_from_href)
 
 
 @pytest.fixture
@@ -1588,3 +1589,173 @@ def test_per_page_stats_are_merged_not_replaced():
     assert stats["kept"] == 20
     assert stats["ref_kinds"] == {"vac": 20}
     assert stats["reported_total"] == 20
+
+
+# ── The digital-route sweep ─────────────────────────────────────────────────
+# Verified against the live site: ?routeIds=7&levelIds=4&levelIds=5&levelIds=6
+# &levelIds=7&sort=AgeAsc returns "45 results found" nationwide, with no
+# searchTerm. One pass covers the whole Digital Level 4+ route.
+
+def test_the_route_sweep_sends_the_verified_query():
+    import requests
+    params = GovUkScraper.route_sweep_params()
+    url = requests.Request("GET", SEARCH_URL, params=params).prepare().url
+
+    assert "routeIds=7" in url
+    assert url.count("levelIds=") == 4
+    for level in (4, 5, 6, 7):
+        assert f"levelIds={level}" in url
+    assert "sort=AgeAsc" in url
+    assert "searchTerm" not in url, "the sweep must not send a search term"
+
+
+def test_level_ids_are_sent_as_a_repeated_parameter():
+    assert GovUkScraper.route_sweep_params()["levelIds"] == [4, 5, 6, 7]
+
+
+def test_by_route_walks_pagination_like_any_search():
+    pages = [
+        "".join(_loc_card(f"VAC{i}", "London") for i in range(10)),
+        "".join(_loc_card(f"VAC{i}", "London") for i in range(10, 20)),
+    ]
+    stats = {}
+    got = _paged_scraper(pages, 20).by_route(min_level=1, stats=stats)
+
+    assert len(got) == 20
+    assert stats["stopped_because"] == "reached_site_total"
+
+
+def test_by_route_does_not_apply_a_local_level_floor():
+    """gov.uk has already filtered to Level 4+ via levelIds. Re-filtering here
+    would only discard the listings whose level we failed to parse — exactly the
+    off-site ones worth keeping."""
+    card = ('<li class="das-search-results__list-item">'
+            '<h2><a href="/apprenticeship/VAC1">Apprentice</a></h2>'
+            '<p class="govuk-body">ACME</p><p class="govuk-body">London</p>'
+            '</li>')
+    stats = {}
+    got = _paged_scraper([card], 1).by_route(min_level=1, stats=stats)
+
+    assert len(got) == 1
+    assert got[0].level is None
+    assert stats.get("dropped_below_level", 0) == 0
+
+
+def test_the_sweep_query_is_requested_separately_from_the_keyword_query():
+    """Two different queries; neither should contaminate the other."""
+    assert "routeIds" not in GovUkScraper.search_params("cyber")
+    assert "searchTerm" not in GovUkScraper.route_sweep_params()
+
+
+# ── Distance: validated, but not sent until the field name is known ────────
+
+def test_a_valid_distance_is_accepted_but_omitted_without_a_field_name(caplog):
+    """Validated so a bad value is caught, omitted so the query cannot lie
+    about being local when the field name is unknown."""
+    with caplog.at_level("WARNING", logger="asfa.gov_uk"):
+        params = GovUkScraper.route_sweep_params(distance=20)
+
+    assert params == {"routeIds": 7, "levelIds": [4, 5, 6, 7], "sort": "AgeAsc"}
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("no distance_param is configured" in m for m in messages), \
+        f"a silently nationwide sweep must warn; got {messages}"
+
+
+@pytest.mark.parametrize("bad", [25, 0, -1, "near"])
+def test_an_invalid_distance_raises_before_any_request(bad):
+    with pytest.raises(ValueError):
+        GovUkScraper.route_sweep_params(distance=bad)
+
+
+def test_a_distance_is_sent_once_the_field_name_is_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCOUT_DISTANCE_PARAM", "distance")
+    monkeypatch.setenv("SCOUT_POSTCODE_PARAM", "location")
+    params = GovUkScraper.route_sweep_params(distance=20, postcode="DA17 6AB")
+
+    assert params["distance"] == 20
+    assert params["location"] == "DA17 6AB"
+    assert params["routeIds"] == 7
+
+
+def test_the_nationwide_sweep_sends_no_distance_at_all():
+    assert GovUkScraper.route_sweep_params() == {
+        "routeIds": 7, "levelIds": [4, 5, 6, 7], "sort": "AgeAsc"}
+
+
+def test_the_scan_runs_the_route_sweep_before_the_keywords(watchlist, monkeypatch):
+    """Production uses the sweep too, not just the measurement tool."""
+    db.kv_set(apprenticeships._BASELINE_KEY, "1")
+    monkeypatch.setattr("services.scout_notify.alert_new_listings", lambda **kw: True)
+    monkeypatch.setattr(apprenticeships, "keyword_scans", lambda: ["software developer"])
+
+    order = []
+    monkeypatch.setattr(
+        GovUkScraper, "by_route",
+        lambda self, min_level=1, distance=None, postcode="", stats=None:
+            (order.append("route"),
+             [_appr_raw("VAC-R1", "Trainee Analyst Programme", "IBM UK",
+                        course="Data technician (level 4)")])[1])
+    monkeypatch.setattr(
+        GovUkScraper, "by_keyword",
+        lambda self, kw, min_level=4, stats=None:
+            (order.append("keyword"),
+             [_appr_raw("VAC-R2", "Software Developer Apprentice", "IBM UK")])[1])
+    monkeypatch.setattr(GovUkScraper, "by_employer",
+                        lambda self, a, min_level=4, stats=None: [])
+
+    summary = apprenticeships.scan_apprenticeships()
+
+    assert order[0] == "route", "the sweep must run before the keyword scans"
+    assert summary["route_scanned"] == 1
+    assert summary["route_found"] == 1
+    assert summary["new"] == 2
+    assert ScoutJob.query.filter_by(external_ref="VAC-R1").count() == 1
+
+
+def test_a_failing_route_sweep_does_not_abort_the_scan(watchlist, monkeypatch):
+    """Best-effort, like every other pass: one bad request must not cost the
+    keyword scans."""
+    db.kv_set(apprenticeships._BASELINE_KEY, "1")
+    monkeypatch.setattr("services.scout_notify.alert_new_listings", lambda **kw: True)
+    monkeypatch.setattr(apprenticeships, "keyword_scans", lambda: ["software developer"])
+
+    def boom(self, min_level=1, distance=None, postcode="", stats=None):
+        raise ScraperError("gov.uk said no")
+
+    monkeypatch.setattr(GovUkScraper, "by_route", boom)
+    monkeypatch.setattr(
+        GovUkScraper, "by_keyword",
+        lambda self, kw, min_level=4, stats=None:
+            [_appr_raw("VAC-R3", "Software Developer Apprentice", "IBM UK")])
+    monkeypatch.setattr(GovUkScraper, "by_employer",
+                        lambda self, a, min_level=4, stats=None: [])
+
+    summary = apprenticeships.scan_apprenticeships()
+
+    assert summary["route_scanned"] == 0
+    assert any("route" in e for e in summary["errors"])
+    assert summary["new"] == 1, "the keyword scan must still have run"
+
+
+def test_a_role_found_by_both_the_sweep_and_a_keyword_is_one_row(watchlist, monkeypatch):
+    """Dedupe is by reference, so overlapping methods cost nothing."""
+    db.kv_set(apprenticeships._BASELINE_KEY, "1")
+    sent = []
+    monkeypatch.setattr("services.scout_notify.alert_new_listings",
+                        lambda **kw: sent.append(kw) or True)
+    monkeypatch.setattr(apprenticeships, "keyword_scans", lambda: ["software developer"])
+
+    same = _appr_raw("VAC-R4", "Software Developer Apprentice", "IBM UK")
+    monkeypatch.setattr(GovUkScraper, "by_route",
+                        lambda self, min_level=1, distance=None, postcode="",
+                        stats=None: [same])
+    monkeypatch.setattr(GovUkScraper, "by_keyword",
+                        lambda self, kw, min_level=4, stats=None: [same])
+    monkeypatch.setattr(GovUkScraper, "by_employer",
+                        lambda self, a, min_level=4, stats=None: [])
+
+    summary = apprenticeships.scan_apprenticeships()
+
+    assert summary["new"] == 1
+    assert ScoutJob.query.filter_by(external_ref="VAC-R4").count() == 1
+    assert len(sent[0]["apprenticeships"]) == 1, "one vacancy, one alert"

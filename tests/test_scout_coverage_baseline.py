@@ -971,8 +971,10 @@ def test_the_estimate_reports_the_new_budget(capsys, monkeypatch):
         capture_output=True, text=True, cwd=repo)
 
     assert r.returncode == 0, r.stderr
+    n = len(baseline._searches(use_employers=False))     # route sweep + keywords
+    assert f"searches            : {n}" in r.stdout
     assert "max pages each      : 20" in r.stdout
-    assert "worst-case requests : 340" in r.stdout, "17 searches x 20 pages"
+    assert f"worst-case requests : {n * 20}" in r.stdout
     assert "1 request/second" in r.stdout
     assert "ceiling, not a budget" in r.stdout, \
         "the worst case overstates the real cost; say so"
@@ -988,5 +990,166 @@ def test_the_estimate_honours_a_page_cap_override():
         capture_output=True, text=True, cwd=repo, env=env)
 
     assert r.returncode == 0, r.stderr
+    n = len(baseline._searches(use_employers=False))
     assert "max pages each      : 5" in r.stdout
-    assert "worst-case requests : 85" in r.stdout
+    assert f"worst-case requests : {n * 5}" in r.stdout
+
+
+# ── Route sweep vs keyword run ──────────────────────────────────────────────
+# Two ways of finding the same thing, so the number that matters is what each
+# one MISSES. The sweep selects on what the apprenticeship IS; the keywords
+# select on what its advert SAYS. Neither is a superset of the other.
+
+def _rv(ref, title, course, level=4, src="findapprenticeship"):
+    return RawVacancy(reference=ref, title=title, employer_name_raw="Emp " + ref,
+                      training_course=course, level=level, location="London",
+                      source=src, url=f"https://example.test/{ref}")
+
+
+def _sweep_row(slots=45, cards=45, dup=12, stopped="reached_site_total"):
+    return {"kind": "route", "term": baseline.ROUTE_TERM, "returned": 33,
+            "new_to_run": 33, "site_reported_total": slots, "pages_fetched": 5,
+            "cards_seen": cards, "dropped_no_ref": 0, "dropped_below_level": 0,
+            "level_unparsed": 0, "duplicate_cards": dup, "extra_locations": dup,
+            "stopped_because": stopped, "ref_kinds": {},
+            "unmatched_href_samples": []}
+
+
+def _mixed_run():
+    """28 found by both, 5 only by the sweep, 3 only by keywords, 1 noise."""
+    vacs, found_by = {}, {}
+    for i in range(28):
+        r = f"BOTH{i}"
+        vacs[r] = _rv(r, f"Software Developer Apprentice {i}",
+                      "Software developer (level 4)")
+        found_by[r] = [baseline.ROUTE_TERM, "software developer"]
+    for i in range(5):
+        r = f"SWEEP{i}"
+        vacs[r] = _rv(r, f"Trainee Analyst Programme {i}",
+                      "Data technician (level 4)")
+        found_by[r] = [baseline.ROUTE_TERM]
+    for i in range(3):
+        r = f"KW{i}"
+        vacs[r] = _rv(r, f"Cyber Apprentice {i}",
+                      "Cyber security technologist (level 6)", level=6)
+        found_by[r] = ["cyber security"]
+    vacs["N1"] = _rv("N1", "Business Administrator Apprentice",
+                     "Business administrator (level 4)")
+    found_by["N1"] = ["information"]
+    return vacs, found_by
+
+
+def test_the_comparison_reports_both_sides_and_the_overlap():
+    vacs, found_by = _mixed_run()
+    rc = baseline._summarise(vacs, [_sweep_row()], [], ["a"], False,
+                             found_by=found_by)["route_comparison"]
+
+    assert rc["ran"] is True
+    assert rc["sweep_slots_reported"] == 45
+    assert rc["sweep_slots_fetched"] == 45
+    assert rc["sweep_duplicate_cards"] == 12
+    assert rc["sweep_distinct"] == 33
+    assert rc["keyword_digital_level_4_plus"] == 31
+    assert rc["in_both"] == 28
+
+
+def test_vacancies_only_the_sweep_found_are_listed():
+    """The argument for the sweep: titles no keyword would match."""
+    vacs, found_by = _mixed_run()
+    rc = baseline._summarise(vacs, [_sweep_row()], [], ["a"], False,
+                             found_by=found_by)["route_comparison"]
+
+    assert len(rc["only_in_sweep"]) == 5
+    refs = {d["ref"] for d in rc["only_in_sweep"]}
+    assert refs == {f"SWEEP{i}" for i in range(5)}
+    row = rc["only_in_sweep"][0]
+    for key in ("ref", "title", "employer", "level", "course", "url"):
+        assert key in row
+
+
+def test_vacancies_only_the_keywords_found_are_listed():
+    vacs, found_by = _mixed_run()
+    rc = baseline._summarise(vacs, [_sweep_row()], [], ["a"], False,
+                             found_by=found_by)["route_comparison"]
+
+    assert len(rc["only_in_keywords"]) == 3
+    assert {d["ref"] for d in rc["only_in_keywords"]} == {"KW0", "KW1", "KW2"}
+
+
+def test_keyword_noise_is_left_out_of_the_comparison():
+    """The sweep is restricted to digital Level 4+, so the keyword side has to
+    be the comparable subset or the difference is meaningless."""
+    vacs, found_by = _mixed_run()
+    rc = baseline._summarise(vacs, [_sweep_row()], [], ["a"], False,
+                             found_by=found_by)["route_comparison"]
+
+    assert "N1" not in {d["ref"] for d in rc["only_in_keywords"]}
+    assert rc["keyword_digital_level_4_plus"] == 31
+
+
+def test_a_level_3_digital_role_is_not_in_the_keyword_comparison():
+    vacs = {"a": _rv("A", "Digital Support Apprentice",
+                     "Digital support technician (level 3)", level=3)}
+    rc = baseline._summarise(vacs, [_sweep_row()], [], ["a"], False,
+                             found_by={"A": ["digital"]})["route_comparison"]
+    assert rc["keyword_digital_level_4_plus"] == 0
+
+
+def test_the_comparison_is_absent_when_the_sweep_did_not_run():
+    rc = baseline._summarise({}, [], [], ["a"], False,
+                             found_by={})["route_comparison"]
+    assert rc["ran"] is False
+
+
+def test_the_route_term_is_not_counted_as_a_keyword():
+    """It has its own section; listing it among the keywords would double-count
+    and make "only the widened terms find it" wrong."""
+    vacs, found_by = _mixed_run()
+    snap = baseline._summarise(vacs, [_sweep_row()], [], ["a"], False,
+                               found_by=found_by)
+    assert baseline.ROUTE_TERM not in snap["by_keyword"]
+
+
+def test_a_sweep_only_vacancy_is_not_credited_to_the_widened_keywords():
+    """It was not found by a keyword at all, so the widening gets no credit."""
+    vacs, found_by = _mixed_run()
+    snap = baseline._summarise(vacs, [_sweep_row()], [], ["a"], False,
+                               found_by=found_by)
+    assert snap["only_new_keywords_found"] == 1      # just N1, via "information"
+
+
+def test_the_comparison_is_printed_with_both_lists(capsys):
+    vacs, found_by = _mixed_run()
+    baseline.report(baseline._summarise(vacs, [_sweep_row()], [], ["a"], False,
+                                        found_by=found_by))
+    out = capsys.readouterr().out
+
+    assert "route sweep vs keyword run" in out
+    assert "routeIds=7" in out
+    assert "only the sweep found         : 5" in out
+    assert "only the keywords found      : 3" in out
+    assert "keyword wording missed them" in out
+    assert "Trainee Analyst Programme 0" in out
+    assert "Cyber Apprentice 0" in out
+
+
+def test_the_report_shows_both_queries(capsys):
+    baseline.report(baseline._summarise({}, [_sweep_row()], [], ["a"], False,
+                                        found_by={}))
+    out = capsys.readouterr().out
+    assert "keyword query" in out
+    assert "route sweep query" in out
+    assert "'routeIds': 7" in out
+    assert "route sweep + keyword scans" in out
+
+
+def test_the_sweep_is_the_first_search_issued():
+    """It runs before the keywords so it is the baseline they are measured
+    against, not the other way round."""
+    searches = baseline._searches(use_employers=False)
+    assert searches[0] == ("route", baseline.ROUTE_TERM)
+
+
+def test_the_sweep_can_be_skipped():
+    searches = baseline._searches(use_employers=False, route_sweep=False)
+    assert all(kind != "route" for kind, _ in searches)

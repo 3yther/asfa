@@ -40,10 +40,14 @@ from datetime import date
 from typing import NamedTuple, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
+import logging
+
 import requests
 from bs4 import BeautifulSoup
 
 from services import scout_config
+
+logger = logging.getLogger("asfa.gov_uk")
 
 
 BASE_URL = "https://www.findapprenticeship.service.gov.uk"
@@ -223,6 +227,64 @@ class GovUkScraper:
         """Broad keyword search — useful for spotting new employers."""
         return self._search_all_pages(
             self.search_params(keyword), min_level, stats=stats)
+
+    def by_route(self, min_level: int = 1, distance=None, postcode: str = "",
+                 stats: Optional[dict] = None) -> list[RawVacancy]:
+        """Sweep the whole Digital route at Level 4+, with no search term.
+
+        This is the method that does not depend on wording. A keyword search
+        only finds a vacancy if the right word appears in it; the route filter
+        selects on what the apprenticeship IS, so one pass covers the route.
+
+        min_level defaults to 1 here, not 4: gov.uk has already filtered to
+        Level 4+ via levelIds, so re-filtering locally would only discard the
+        listings whose level we failed to parse.
+        """
+        params = self.route_sweep_params(distance=distance, postcode=postcode)
+        return self._search_all_pages(params, min_level, stats=stats)
+
+    @staticmethod
+    def route_sweep_params(distance=None, postcode: str = "") -> dict:
+        """The route sweep's query. Field names verified against the live site.
+
+            ?routeIds=7&levelIds=4&levelIds=5&levelIds=6&levelIds=7&sort=AgeAsc
+
+        `distance` and `postcode` are accepted and VALIDATED but only appear in
+        the query when the parameter names for them are configured. gov.uk's
+        allowed distance values are known (2/5/10/15/20/30/40/all); the names of
+        the distance and postcode fields are not, and guessing a field name
+        would silently produce a nationwide search while reporting a local one.
+        Set "distance_param" and "postcode_param" in config/scout_filters.json
+        once they are confirmed and this starts sending them.
+        """
+        params = dict(scout_config.route_sweep_params())
+        params["sort"] = "AgeAsc"
+
+        if distance is None and not postcode:
+            return params
+
+        # Validate even when we cannot send it, so a bad value is caught here
+        # rather than being quietly dropped.
+        if distance is not None:
+            distance = scout_config.validate_distance(distance)
+
+        distance_param = scout_config.distance_param()
+        postcode_param = scout_config.postcode_param()
+        if distance is not None:
+            if distance_param:
+                params[distance_param] = distance
+            else:
+                logger.warning(
+                    "gov_uk: distance=%r requested but no distance_param is "
+                    "configured, so the sweep stays nationwide", distance)
+        if postcode:
+            if postcode_param:
+                params[postcode_param] = postcode
+            else:
+                logger.warning(
+                    "gov_uk: postcode=%r requested but no postcode_param is "
+                    "configured, so the sweep stays nationwide", postcode)
+        return params
 
     @staticmethod
     def search_params(term: str) -> dict:
