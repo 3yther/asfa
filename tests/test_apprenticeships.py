@@ -397,6 +397,165 @@ def test_zero_results_short_circuits():
     assert GovUkScraper()._parse_search_page(html, min_level=4) == []
 
 
+# ── Result-count parsing (the coverage bug) ──────────────────────────────────
+
+@pytest.mark.parametrize("total", [10, 20, 30, 40, 50, 60, 100, 110, 1000, 2340])
+def test_zero_results_detection_is_not_a_substring_match(total):
+    """The regression that was costing coverage.
+
+    The check was `if "0 results found" in title`. That substring is also in
+    "10 results found", "20", "50", "100"... so any total ending in a zero digit
+    made the parser discard the whole page. Where the title carries the overall
+    total (identical on every page) that zeroed the entire search silently.
+    """
+    card = """
+    <li class="das-search-results__list-item">
+      <a href="/apprenticeship/VAC1">Cyber Apprentice</a>
+      <p class="govuk-body">BT GROUP</p>
+      <p class="govuk-body">London</p>
+      <p class="govuk-body"><b>Training course</b> Cyber security technologist (level 4)</p>
+    </li>
+    """
+    html = f"<html><title>{total} results found</title><ul>{card}</ul></html>"
+    parsed = GovUkScraper()._parse_search_page(html, min_level=4)
+    assert len(parsed) == 1, f"'{total} results found' was read as zero results"
+
+
+def test_a_genuine_zero_still_short_circuits():
+    html = "<html><title>0 results found</title><ul></ul></html>"
+    assert GovUkScraper()._parse_search_page(html, min_level=4) == []
+
+
+@pytest.mark.parametrize("title,expected", [
+    ("0 results found", 0),
+    ("1 result found", 1),
+    ("47 results found", 47),
+    ("2,340 results found", 2340),
+    ("Apprenticeship search", None),
+])
+def test_reported_total_reads_the_sites_own_count(title, expected):
+    """The number to compare a scrape against, so a shortfall is visible."""
+    html = f"<html><title>{title}</title></html>"
+    assert GovUkScraper.reported_total(html) == expected
+
+
+# ── Parse diagnostics ────────────────────────────────────────────────────────
+
+def test_unparseable_references_are_counted_not_silently_dropped():
+    """A listing whose link isn't /apprenticeship/VAC<digits> used to vanish
+    without trace, which is indistinguishable from the site having fewer
+    results. The samples are what identify an unknown reference format."""
+    cards = """
+    <li class="das-search-results__list-item">
+      <a href="/apprenticeship/1234567">Data Apprentice</a>
+      <p class="govuk-body">LLOYDS</p>
+      <p class="govuk-body">London</p>
+      <p class="govuk-body"><b>Training course</b> Data analyst (level 4)</p>
+    </li>
+    <li class="das-search-results__list-item">
+      <a href="/apprenticeship/VAC9">Network Apprentice</a>
+      <p class="govuk-body">CISCO</p>
+      <p class="govuk-body">London</p>
+      <p class="govuk-body"><b>Training course</b> Network engineer (level 6)</p>
+    </li>
+    """
+    html = f"<html><title>2 results found</title><ul>{cards}</ul></html>"
+    stats = {}
+    parsed = GovUkScraper()._parse_search_page(html, min_level=4, stats=stats)
+
+    assert len(parsed) == 1
+    assert stats["cards_seen"] == 2
+    assert stats["dropped_no_ref"] == 1
+    assert "/apprenticeship/1234567" in stats["unmatched_href_samples"]
+
+
+def test_stats_record_the_sites_total_and_why_pagination_stopped():
+    html = "<html><title>0 results found</title><ul></ul></html>"
+    stats = {}
+    s = GovUkScraper(min_interval=0)
+    s.session.get = lambda *a, **k: type(
+        "R", (), {"status_code": 200, "text": html,
+                  "raise_for_status": lambda self: None})()
+    s.by_keyword("devops", stats=stats)
+
+    assert stats["reported_total"] == 0
+    assert stats["pages_fetched"] == 1
+    assert stats["stopped_because"] == "empty_page"
+
+
+def test_hitting_the_page_cap_is_reported():
+    """So "we collected 50" can be told apart from "the site only had 50"."""
+    def card(n):
+        return (f'<li class="das-search-results__list-item">'
+                f'<a href="/apprenticeship/VAC{n}">Apprentice</a>'
+                f'<p class="govuk-body">ACME</p><p class="govuk-body">London</p>'
+                f'<p class="govuk-body"><b>Training course</b> '
+                f'Software developer (level 4)</p></li>')
+    counter = {"i": 0}
+
+    def get(*_a, **_k):
+        counter["i"] += 1
+        base = counter["i"] * 100
+        body = "".join(card(base + k) for k in range(10))
+        return type("R", (), {
+            "status_code": 200,
+            "text": f"<html><title>999 results found</title><ul>{body}</ul></html>",
+            "raise_for_status": lambda self: None})()
+
+    stats = {}
+    s = GovUkScraper(min_interval=0)
+    s.session.get = get
+    got = s.by_keyword("data", min_level=4, stats=stats)
+
+    assert len(got) == 50
+    assert stats["pages_fetched"] == 5
+    assert stats["stopped_because"] == "page_cap"
+
+
+# ── The query actually sent ──────────────────────────────────────────────────
+
+def test_search_params_are_exactly_what_we_think():
+    """Pins the query so a change to coverage is a deliberate, visible edit.
+
+    Today: the search term and a fixed sort. No location, distance, level or
+    route filter — which is why this is a bare national keyword search.
+    """
+    assert GovUkScraper.search_params("cyber security") == {
+        "searchTerm": "cyber security",
+        "sort": "AgeAsc",
+    }
+
+
+def test_page_one_sends_no_page_parameter_and_later_pages_do():
+    seen = []
+
+    def get(_url, params=None, **_k):
+        seen.append(dict(params or {}))
+        n = len(seen)
+        if n > 2:
+            return type("R", (), {
+                "status_code": 200,
+                "text": "<html><title>0 results found</title></html>",
+                "raise_for_status": lambda self: None})()
+        card = (f'<li class="das-search-results__list-item">'
+                f'<a href="/apprenticeship/VAC{n}">Apprentice</a>'
+                f'<p class="govuk-body">ACME</p><p class="govuk-body">London</p>'
+                f'<p class="govuk-body"><b>Training course</b> '
+                f'Software developer (level 4)</p></li>')
+        return type("R", (), {
+            "status_code": 200,
+            "text": f"<html><title>99 results found</title><ul>{card}</ul></html>",
+            "raise_for_status": lambda self: None})()
+
+    s = GovUkScraper(min_interval=0)
+    s.session.get = get
+    s.by_keyword("data", min_level=4)
+
+    assert "PageNumber" not in seen[0]
+    assert seen[1]["PageNumber"] == 2
+    assert seen[2]["PageNumber"] == 3
+
+
 # ── Scraper politeness ───────────────────────────────────────────────────────
 # A scan issues one search per employer alias plus one per keyword. The gap has
 # to hold across those search boundaries, not just between pages of one search.

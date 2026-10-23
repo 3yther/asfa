@@ -4,12 +4,13 @@ This is the tool that produces the before/after numbers, so its counting has to
 be trustworthy and stable: if the measuring stick drifts between two runs the
 comparison is meaningless.
 
-Note on scope: the classifier here is the *measuring stick*, not Scout's
-production relevance rule. The production keyword/exclusion config is Phase 1
-work and is not built yet (the live baseline it has to be measured against is
-blocked — gov.uk is unreachable from the build environment). What is pinned
-here is the word-boundary behaviour the spec calls out, because the same
-requirement will apply to the production rule.
+The metric is deliberately NOT a title-keyword match. Scoring titles that were
+found by tech keywords against those same tech keywords is circular — it can
+only ever return ~100%, which is what made the first baseline read "42 of 43
+digital". It now classifies on the apprenticeship standard (gov.uk's "Training
+course"), which the employer picks from a fixed national catalogue and which is
+therefore independent of the query. The non-circularity property itself is
+pinned below.
 """
 import importlib.util
 import os
@@ -28,107 +29,144 @@ _spec = importlib.util.spec_from_file_location("scout_coverage_baseline", _SPEC_
 baseline = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(baseline)
 
-
 def _vac(ref="VAC1", title="", course="", level=None, employer="ACME"):
     return RawVacancy(reference=ref, title=title, employer_name_raw=employer,
                       training_course=course, level=level)
 
 
-# ── Word boundaries: the case the spec calls out by name ─────────────────────
+# ── The metric does not depend on the search keyword ─────────────────────────
 
-@pytest.mark.parametrize("title", [
-    "Kitchen Assistant Apprentice",
-    "Kitchen Porter",
-    "Commis Chef Apprentice",
-    "Hospitality Team Member",
-    "Dental Nurse Apprentice",
-])
-def test_short_term_it_does_not_match_unrelated_words(title):
-    """`IT` must not hit "kitchen" — a bare substring match would."""
-    assert baseline.is_digital(_vac(title=title)) is False, \
-        f"{title!r} was wrongly classified as digital"
+def test_classification_ignores_the_title_entirely():
+    """The circularity fix, stated as a property.
 
-
-@pytest.mark.parametrize("title", [
-    "IT Support Technician Apprentice",
-    "IT Apprentice",
-    "Apprentice IT Technician",
-    "IT, Networks and Infrastructure Apprentice",
-])
-def test_it_matches_as_a_whole_word(title):
-    assert baseline.is_digital(_vac(title=title)) is True
-
-
-def test_it_matches_when_punctuation_abuts_it():
-    assert baseline.is_digital(_vac(title="Apprentice (IT)")) is True
-
-
-# ── The genuine digital roles the widened net is meant to catch ──────────────
-
-@pytest.mark.parametrize("title,course", [
-    ("Cyber Security Apprentice", "Cyber security technologist (level 4)"),
-    ("Software Developer Apprentice", "Software developer (level 4)"),
-    ("Digital & Technology Solutions Apprentice",
-     "Digital and technology solutions professional (level 6)"),
-    ("Data Analyst Apprentice", "Data analyst (level 4)"),
-    ("Network Engineer Degree Apprentice", "Network engineer (level 6)"),
-    ("Cloud Engineer Apprentice", "Cloud engineer (level 4)"),
-    ("Apprentice Systems Administrator", ""),
-    ("Information Security Apprentice", ""),
-    ("DevOps Apprentice", ""),
-    ("Computing Apprentice", ""),
-])
-def test_digital_roles_are_classified_digital(title, course):
-    assert baseline.is_digital(_vac(title=title, course=course)) is True
-
-
-def test_course_text_alone_can_classify_a_vague_title():
-    """gov.uk titles are often bare; the training course carries the signal."""
-    assert baseline.is_digital(
-        _vac(title="Apprentice", course="Software developer (level 4)")) is True
-
-
-@pytest.mark.parametrize("title", [
-    "Food Hub Project Manager",
-    "Business Administration Apprentice",
-    "Early Years Educator Apprentice",
-    "Bricklaying Apprentice",
-])
-def test_clearly_unrelated_roles_are_not_digital(title):
-    assert baseline.is_digital(_vac(title=title)) is False
-
-
-def test_security_guard_is_a_known_false_positive():
-    """Recorded, not accepted.
-
-    A bare `security` term pulls in physical security. This is exactly the noise
-    Phase 1's title/employer exclusion lists have to remove, and the spec's rule
-    is that missing a real apprenticeship is worse than seeing noise — so the
-    measuring stick stays inclusive and the exclusion happens downstream.
+    Same standard, wildly different titles -> same classification. A title-based
+    metric could not do this, and a title-based metric is what made the search
+    term leak into the measurement.
     """
-    assert baseline.is_digital(_vac(title="Security Guard Apprentice")) is True
+    for title in ["Cyber Security Apprentice", "Apprentice", "",
+                  "Trainee (Ref 8812)", "Kitchen Assistant"]:
+        v = _vac(title=title, course="Cyber security technologist (level 4)")
+        assert baseline.digital_route(v) is True, f"title changed the verdict: {title!r}"
+
+
+def test_a_digital_sounding_title_is_not_enough():
+    """"Security Guard" matched the OLD keyword classifier on `security`. Its
+    standard is a physical-security one, so the route metric rejects it."""
+    v = _vac(title="Security Guard Apprentice", course="Security operative (level 2)")
+    assert baseline.digital_route(v) is False
+
+
+def test_a_plain_title_with_a_digital_standard_still_counts():
+    """The case a title-keyword rule misses: gov.uk titles are often bare."""
+    v = _vac(title="Apprentice", course="Software developer (level 4)")
+    assert baseline.digital_route(v) is True
+
+
+@pytest.mark.parametrize("course", [
+    "Cyber security technologist (level 4)",
+    "Software developer (level 4)",
+    "Data analyst (level 4)",
+    "Network engineer (level 6)",
+    "Digital and technology solutions professional (level 6)",
+    "Information communications technician (level 3)",
+    "DevOps engineer (level 4)",
+    "Cloud engineer (level 4)",
+])
+def test_digital_standards_are_recognised(course):
+    assert baseline.digital_route(_vac(course=course)) is True
+
+
+@pytest.mark.parametrize("course", [
+    "Commis chef (level 2)",
+    "Project manager (level 4)",
+    "Business administrator (level 3)",
+    "Early years educator (level 3)",
+    "Bricklayer (level 2)",
+    "Security operative (level 2)",
+    "Dental nurse (level 3)",
+])
+def test_non_digital_standards_are_rejected(course):
+    assert baseline.digital_route(_vac(course=course)) is False
+
+
+# ── Course-name normalisation ────────────────────────────────────────────────
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Software developer (level 4)", "software developer"),
+    ("Software developer level 4", "software developer"),
+    ("Software developer [Level 4]", "software developer"),
+    ("  Software   developer  (Level 4) ", "software developer"),
+    ("SOFTWARE DEVELOPER (LEVEL 4)", "software developer"),
+    ("", ""),
+])
+def test_course_name_normalisation(raw, expected):
+    assert baseline.course_name(_vac(course=raw)) == expected
+
+
+def test_missing_course_is_unclassified_not_non_digital():
+    """These are listings the metric cannot speak to. Counting them as
+    "not digital" would overstate how much of the corpus it actually covers."""
+    v = _vac(title="Cyber Security Apprentice", course="")
+    assert baseline.route_unclassified(v) is True
+    assert baseline.digital_route(v) is False
 
 
 # ── Counting ─────────────────────────────────────────────────────────────────
 
-def test_summary_counts_levels_and_digital():
+def test_summary_counts_levels_and_digital_route():
     vacs = {
-        "A": _vac("A", "Cyber Security Apprentice", level=4),
-        "B": _vac("B", "Software Developer Apprentice", level=6),
-        "C": _vac("C", "Kitchen Assistant", level=2),
-        "D": _vac("D", "IT Technician", level=3),
-        "E": _vac("E", "Apprentice", level=None),
+        "A": _vac("A", "x", "Cyber security technologist (level 4)", level=4),
+        "B": _vac("B", "x", "Software developer (level 6)", level=6),
+        "C": _vac("C", "x", "Commis chef (level 2)", level=2),
+        "D": _vac("D", "x", "Data analyst (level 3)", level=3),
+        "E": _vac("E", "x", "", level=None),
     }
     s = baseline._summarise(vacs, [], [], ["kw"], False)
     t = s["totals"]
 
     assert t["unique_results"] == 5
-    assert t["level_4_plus"] == 2          # A, B
-    assert t["level_6_plus"] == 1          # B
-    assert t["digital"] == 3               # A, B, D
-    assert t["digital_and_level_4_plus"] == 2
+    assert t["level_4_plus"] == 2            # A, B
+    assert t["level_6_plus"] == 1            # B
+    assert t["digital_route"] == 3           # A, B, D
+    assert t["digital_route_and_level_4_plus"] == 2
+    assert t["route_unclassified"] == 1      # E
     assert t["level_unknown"] == 1
     assert s["by_level"] == {"2": 1, "3": 1, "4": 1, "6": 1, "unknown": 1}
+
+
+def test_summary_records_the_query_that_was_sent():
+    """So a snapshot says what produced it, not just what came back."""
+    s = baseline._summarise({}, [], [], [], False)
+    assert s["query_params_sent"] == {"searchTerm": "<term>", "sort": "AgeAsc"}
+
+
+def test_summary_reports_the_shortfall_against_the_site():
+    per_search = [
+        {"term": "data", "returned": 29, "site_reported_total": 312,
+         "cards_seen": 30, "dropped_no_ref": 1, "dropped_below_level": 0,
+         "stopped_because": "repeats", "unmatched_href_samples": ["/apprenticeship/999"]},
+        {"term": "devops", "returned": 0, "site_reported_total": 20,
+         "cards_seen": 0, "dropped_no_ref": 0, "dropped_below_level": 0,
+         "stopped_because": "empty_page", "unmatched_href_samples": []},
+    ]
+    c = baseline._summarise({}, per_search, [], ["a", "b"], False)["coverage"]
+
+    assert c["sum_site_reported_totals"] == 332
+    assert c["sum_returned"] == 29
+    assert c["total_cards_seen"] == 30
+    assert c["total_dropped_no_ref"] == 1
+    assert c["unmatched_href_samples"] == ["/apprenticeship/999"]
+
+
+def test_summary_counts_searches_capped_by_pagination():
+    per_search = [
+        {"term": "a", "returned": 50, "site_reported_total": 900,
+         "stopped_because": "page_cap"},
+        {"term": "b", "returned": 3, "site_reported_total": 3,
+         "stopped_because": "repeats"},
+    ]
+    c = baseline._summarise({}, per_search, [], ["a", "b"], False)["coverage"]
+    assert c["searches_stopped_at_page_cap"] == 1
 
 
 def test_listings_are_sorted_highest_level_first():
@@ -142,16 +180,14 @@ def test_listings_are_sorted_highest_level_first():
 
 
 def test_snapshot_records_classifier_version():
-    """A diff across a changed classifier is not a real comparison; the version
-    is what makes that visible."""
+    """A diff across a changed classifier is not a real comparison."""
     s = baseline._summarise({}, [], [], [], False)
     assert s["classifier_version"] == baseline.CLASSIFIER_VERSION
-    assert isinstance(baseline.CLASSIFIER_VERSION, int)
+    assert baseline.CLASSIFIER_VERSION >= 4, \
+        "bump the version when the classifier changes, or diffs lie"
 
 
 def test_fixture_mode_dedupes_across_pages(tmp_path):
-    """Two pages sharing a reference must count once — the same union dedup the
-    live run relies on."""
     def card(ref, title, course):
         return (f'<li class="das-search-results__list-item">'
                 f'<a href="/apprenticeship/{ref}">{title}</a>'
@@ -167,7 +203,24 @@ def test_fixture_mode_dedupes_across_pages(tmp_path):
 
     s = baseline.measure_fixture(str(tmp_path), min_level=1)
     assert s["totals"]["unique_results"] == 2
-    assert s["totals"]["level_4_plus"] == 2
+    assert s["totals"]["digital_route"] == 2
+
+
+def test_fixture_mode_surfaces_dropped_references(tmp_path):
+    """The offline path has to expose the same diagnostics as a live run, or it
+    cannot be used to reproduce a coverage gap."""
+    (tmp_path / "p.html").write_text(
+        '<html><title>1 result found</title><ul>'
+        '<li class="das-search-results__list-item">'
+        '<a href="/apprenticeship/1234567">Data Apprentice</a>'
+        '<p class="govuk-body">ACME</p><p class="govuk-body">London</p>'
+        '<p class="govuk-body"><b>Training course</b> Data analyst (level 4)</p>'
+        '</li></ul></html>')
+
+    s = baseline.measure_fixture(str(tmp_path), min_level=1)
+    assert s["totals"]["unique_results"] == 0
+    assert s["coverage"]["total_dropped_no_ref"] == 1
+    assert "/apprenticeship/1234567" in s["coverage"]["unmatched_href_samples"]
 
 
 def test_measurement_writes_no_database_rows(tmp_path):
