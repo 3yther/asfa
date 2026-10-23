@@ -3739,6 +3739,85 @@ def get_scout_pipeline_reminders(days: int = 7) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
+def preview_job_pipeline_cleanup(days: int = 14) -> dict:
+    """Read-only dry run of `cleanup_job_pipeline`. Deletes NOTHING.
+
+    Same cutoff arithmetic and the same WHERE clauses as the real job, but
+    SELECTed and grouped so you can see what it would take, broken down by
+    pipeline stage and application status.
+
+    Exists because `cleanup_job_pipeline` has no status filter: every
+    scout_pipeline row older than the cutoff goes, whatever stage it is in.
+    Run this before trusting the job with an apprenticeship cycle, which runs
+    for months rather than the 14 days the job was tuned for.
+
+    Returns:
+        {
+          "days": N, "cutoff": "...", "cutoff_date": "...",
+          "pipeline_by_stage":   {stage: count, ...},
+          "pipeline_total":      N,
+          "applications_by_status": {status: count, ...},
+          "applications_total":  N,
+          "total":               N,
+          "pipeline_surviving_by_stage": {stage: count, ...},
+        }
+    """
+    _ensure_scout_tables()
+    now = datetime.now()
+    cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    out = {
+        "days": days,
+        "cutoff": cutoff,
+        "cutoff_date": cutoff_date,
+        "pipeline_by_stage": {},
+        "pipeline_total": 0,
+        "applications_by_status": {},
+        "applications_total": 0,
+        "total": 0,
+        "pipeline_surviving_by_stage": {},
+    }
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+
+        # Doomed pipeline rows, by stage — mirrors the job's WHERE exactly.
+        cur.execute(
+            f"SELECT stage, COUNT(*) AS n FROM scout_pipeline "
+            f"WHERE COALESCE(updated_at, created_at) < {ph} "
+            f"GROUP BY stage ORDER BY stage",
+            (cutoff,))
+        for row in cur.fetchall():
+            r = dict(row)
+            out["pipeline_by_stage"][r["stage"] or "(null)"] = r["n"]
+        out["pipeline_total"] = sum(out["pipeline_by_stage"].values())
+
+        # What would survive, for context on how much of the table this is.
+        cur.execute(
+            f"SELECT stage, COUNT(*) AS n FROM scout_pipeline "
+            f"WHERE COALESCE(updated_at, created_at) >= {ph} "
+            f"GROUP BY stage ORDER BY stage",
+            (cutoff,))
+        for row in cur.fetchall():
+            r = dict(row)
+            out["pipeline_surviving_by_stage"][r["stage"] or "(null)"] = r["n"]
+
+        cur.execute(
+            f"SELECT status, COUNT(*) AS n FROM scout_applications "
+            f"WHERE applied_date IS NOT NULL AND applied_date < {ph} "
+            f"GROUP BY status ORDER BY status",
+            (cutoff_date,))
+        for row in cur.fetchall():
+            r = dict(row)
+            out["applications_by_status"][r["status"] or "(null)"] = r["n"]
+        out["applications_total"] = sum(out["applications_by_status"].values())
+
+    out["total"] = out["pipeline_total"] + out["applications_total"]
+    return out
+
+
 def cleanup_job_pipeline(days: int = 14) -> dict:
     """Permanently delete job pipeline and application entries older than `days`.
 
