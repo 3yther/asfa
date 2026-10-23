@@ -591,3 +591,133 @@ def test_report_shows_level_unknown_split_from_level_4_plus(capsys):
     assert "of which off-site" in out
     assert "by source:" in out
     assert "civil_service" in out
+
+
+# ── Coverage metric: result slots vs distinct vacancies ──────────────────────
+# gov.uk's "N results found" counts SLOTS, not vacancies: a multi-location
+# vacancy is one card per location and each is counted. Comparing distinct refs
+# straight against that total reads as a shortfall when nothing is missing —
+# which is how "16 dropped" was misdiagnosed. Confirmed by curl: jcode=2017911
+# appears 8 times on page 1 of "software developer".
+
+def _search_row(term="software developer", returned=14, site=21, cards=21,
+                dup=7, extra_locations=7, pages=1, no_ref=0, below=0,
+                stopped=None):
+    return {"kind": "keyword", "term": term, "returned": returned,
+            "new_to_run": returned, "site_reported_total": site,
+            "pages_fetched": pages, "cards_seen": cards,
+            "dropped_no_ref": no_ref, "dropped_below_level": below,
+            "level_unparsed": 0, "duplicate_cards": dup,
+            "extra_locations": extra_locations, "stopped_because": stopped,
+            "ref_kinds": {}, "unmatched_href_samples": []}
+
+
+def test_site_side_duplicates_are_not_counted_as_a_shortfall():
+    """The real case: 21 slots, 21 fetched, 7 of them repeats -> 14 vacancies
+    and NOTHING missing."""
+    vacs = {f"r{i}": _native(f"VAC{i}", f"Role {i} Apprentice", f"Emp {i}")
+            for i in range(14)}
+    c = baseline._summarise(vacs, [_search_row()], [], ["kw"], False)["coverage"]
+
+    assert c["sum_site_reported_totals"] == 21
+    assert c["total_cards_seen"] == 21
+    assert c["slots_not_fetched"] == 0, "no slot was missed"
+    assert c["site_side_duplicate_cards"] == 7
+    assert c["distinct_listings"] == 14
+
+
+def test_a_real_shortfall_is_still_reported():
+    """Slots the site has that we never fetched — e.g. stopped by the page cap."""
+    c = baseline._summarise(
+        {}, [_search_row(site=312, cards=50, dup=46, extra_locations=46,
+                         pages=5, stopped="page_cap")],
+        [], ["kw"], False)["coverage"]
+
+    assert c["slots_not_fetched"] == 262
+    assert c["searches_stopped_at_page_cap"] == 1
+
+
+def test_duplicates_under_the_page_cap_are_flagged_as_crowding_out():
+    """A capped search whose slots went on location copies is the case where
+    multi-location roles push other vacancies off the fetched pages."""
+    c = baseline._summarise(
+        {}, [_search_row(site=312, cards=50, dup=46, pages=5, stopped="page_cap"),
+             _search_row(term="devops", site=3, cards=3, dup=0,
+                         extra_locations=0, stopped="repeats")],
+        [], ["a", "b"], False)["coverage"]
+
+    assert c["capped_searches_with_duplicates"] == 1
+    assert c["searches_with_duplicates"] == 1
+
+
+def test_a_capped_search_without_duplicates_is_not_flagged():
+    c = baseline._summarise(
+        {}, [_search_row(site=312, cards=50, dup=0, extra_locations=0,
+                         pages=5, stopped="page_cap")],
+        [], ["kw"], False)["coverage"]
+    assert c["capped_searches_with_duplicates"] == 0
+
+
+def test_slots_not_fetched_is_none_when_the_site_total_is_unknown():
+    """A page whose title didn't parse gives no denominator; say so rather than
+    inventing a shortfall of zero."""
+    c = baseline._summarise(
+        {}, [_search_row(site=None, cards=10, dup=0, extra_locations=0)],
+        [], ["kw"], False)["coverage"]
+    assert c["sum_site_reported_totals"] is None
+    assert c["slots_not_fetched"] is None
+
+
+def test_multi_location_listings_are_counted():
+    native = _native("VAC1", "Software Developer Apprentice", "IBM")
+    multi = _ext("jcode:2017911", "Software Developer Apprentice", "HSE", 2017911)
+    for loc in ("Bootle", "Leeds", "London"):
+        multi.add_location(loc)
+
+    t = baseline._summarise({"a": native, "b": multi}, [], [], ["kw"],
+                            False)["totals"]
+    assert t["multi_location_listings"] == 1
+
+
+def test_listings_carry_locations_and_count():
+    multi = _ext("jcode:2017911", "Software Developer Apprentice", "HSE", 2017911)
+    for loc in ("Bootle", "Leeds"):
+        multi.add_location(loc)
+
+    listing = baseline._summarise({"b": multi}, [], [], ["kw"],
+                                  False)["listings"][0]
+    assert listing["locations"] == ["Bootle", "Leeds"]
+    assert listing["location_count"] == 2
+
+
+def test_report_separates_duplicates_from_true_shortfall(capsys):
+    vacs = {f"r{i}": _native(f"VAC{i}", f"Role {i} Apprentice", f"Emp {i}")
+            for i in range(14)}
+    baseline.report(baseline._summarise(vacs, [_search_row()], [], ["kw"], False))
+    out = capsys.readouterr().out
+
+    assert "counts RESULT SLOTS, not vacancies" in out
+    assert "site-side duplicates" in out
+    assert "none missing" in out
+    assert "DISTINCT vacancies" in out
+
+
+def test_report_calls_out_a_true_shortfall(capsys):
+    baseline.report(baseline._summarise(
+        {}, [_search_row(site=312, cards=50, dup=46, pages=5,
+                         stopped="page_cap")],
+        [], ["kw"], False))
+    out = capsys.readouterr().out
+
+    assert "TRUE shortfall" in out
+    assert "crowding out" in out
+
+
+def test_per_search_table_shows_slots_consumed_by_duplicates(capsys):
+    baseline.report(baseline._summarise({}, [_search_row()], [], ["kw"], False))
+    out = capsys.readouterr().out
+
+    assert "dup" in out
+    assert "cards that repeated a vacancy" in out
+    # uniq 14, slots 21, cards 21, dup 7 on the row
+    assert "14" in out and "21" in out and "7" in out

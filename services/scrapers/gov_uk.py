@@ -153,6 +153,33 @@ class RawVacancy:
     # carry no level or training course, so a caller has to be able to tell them
     # apart rather than treat a missing level as bad parsing.
     source: str = SOURCE_FINDAPPRENTICESHIP
+    # Every location this vacancy was listed under. gov.uk renders a
+    # multi-location vacancy as one card PER LOCATION and counts each of them in
+    # "N results found", so the extra cards are the site repeating itself, not
+    # separate jobs. They are merged into one listing and the locations kept
+    # here, rather than discarded — which is what the old per-page dedup did.
+    # `location` stays the first one seen, so existing callers are unaffected.
+    locations: tuple = ()
+
+    def __post_init__(self):
+        # Seed from `location` so a single-location vacancy still reports
+        # locations == (its location,) and location_count == 1.
+        if not self.locations and self.location:
+            self.locations = (self.location,)
+
+    @property
+    def location_count(self) -> int:
+        return len(self.locations)
+
+    def add_location(self, location: str) -> bool:
+        """Record another location for this same vacancy. True if it was new."""
+        location = (location or "").strip()
+        if not location or location in self.locations:
+            return False
+        self.locations = self.locations + (location,)
+        if not self.location:
+            self.location = location
+        return True
 
     def as_dict(self):
         d = asdict(self)
@@ -160,6 +187,8 @@ class RawVacancy:
             d["closing_date"] = self.closing_date.isoformat()
         if self.start_date:
             d["start_date"] = self.start_date.isoformat()
+        d["locations"] = list(self.locations)
+        d["location_count"] = self.location_count
         return d
 
 
@@ -220,8 +249,8 @@ class GovUkScraper:
         stats: Optional[dict] = None
     ) -> list[RawVacancy]:
         """Walk pagination. Stop once we hit an empty page or max_pages."""
-        results: list[RawVacancy] = []
-        seen_refs = set()
+        by_ref: dict[str, RawVacancy] = {}
+        order: list[str] = []
 
         for page in range(1, max_pages + 1):
             p = dict(params)
@@ -235,21 +264,31 @@ class GovUkScraper:
                     stats.setdefault("stopped_because", "empty_page")
                 break
 
-            fresh = [r for r in page_results if r.reference not in seen_refs]
-            if not fresh:  # we're seeing repeats — pagination exhausted
+            fresh = 0
+            for r in page_results:
+                existing = by_ref.get(r.reference)
+                if existing is not None:
+                    # A multi-location vacancy can straddle a page boundary, so
+                    # the merge has to happen here too, not only within a page.
+                    for loc in r.locations or ((r.location,) if r.location else ()):
+                        if existing.add_location(loc) and stats is not None:
+                            stats["extra_locations"] = stats.get("extra_locations", 0) + 1
+                    continue
+                by_ref[r.reference] = r
+                order.append(r.reference)
+                fresh += 1
+
+            if not fresh:  # nothing new on this page — pagination exhausted
                 if stats is not None:
                     stats.setdefault("stopped_because", "repeats")
                 break
-            for r in fresh:
-                seen_refs.add(r.reference)
-                results.append(r)
         else:
             if stats is not None:
                 # Ran the full range without breaking: the cap is what stopped
                 # us, so the site may well have more.
                 stats.setdefault("stopped_because", "page_cap")
 
-        return results
+        return [by_ref[r] for r in order]
 
     def _search_one_page(self, params: dict, min_level: int,
                          stats: Optional[dict] = None) -> list[RawVacancy]:
@@ -301,28 +340,39 @@ class GovUkScraper:
         if stats is not None:
             stats["cards_seen"] = stats.get("cards_seen", 0) + len(cards)
 
-        vacancies: list[RawVacancy] = []
-        seen_in_page = set()
+        # Keyed by reference so a vacancy repeated once per location becomes one
+        # listing carrying every location, rather than one listing and N-1
+        # silently discarded cards.
+        in_page: dict[str, RawVacancy] = {}
+        order: list[str] = []
         for card in cards:
             v = self._parse_card(card, stats=stats)
             if not v:
-                # No parseable /apprenticeship/VAC… link. Counted, because a
-                # reference format this regex doesn't cover would drop real
-                # listings here without a trace.
+                # No parseable detail link at all. Counted, because a link shape
+                # we don't cover would drop real listings without a trace.
                 if stats is not None:
                     stats["dropped_no_ref"] = stats.get("dropped_no_ref", 0) + 1
                     _note_unmatched(stats, card)
                 continue
-            if v.reference in seen_in_page:
-                continue  # multi-location postings render as duplicate cards
-            seen_in_page.add(v.reference)
+            existing = in_page.get(v.reference)
+            if existing is not None:
+                # Same vacancy, another location. The site counted this card in
+                # its result total, so it consumed a result slot.
+                added = existing.add_location(v.location)
+                if stats is not None:
+                    stats["duplicate_cards"] = stats.get("duplicate_cards", 0) + 1
+                    if added:
+                        stats["extra_locations"] = stats.get("extra_locations", 0) + 1
+                continue
             if v.level is not None and v.level < min_level:
                 if stats is not None:
                     stats["dropped_below_level"] = stats.get("dropped_below_level", 0) + 1
                 continue
             if stats is not None and v.level is None:
                 stats["level_unparsed"] = stats.get("level_unparsed", 0) + 1
-            vacancies.append(v)
+            in_page[v.reference] = v
+            order.append(v.reference)
+        vacancies = [in_page[r] for r in order]
         if stats is not None:
             stats["kept"] = stats.get("kept", 0) + len(vacancies)
         return vacancies

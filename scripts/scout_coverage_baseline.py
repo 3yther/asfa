@@ -191,6 +191,8 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True):
                "dropped_no_ref": stats.get("dropped_no_ref", 0),
                "dropped_below_level": stats.get("dropped_below_level", 0),
                "level_unparsed": stats.get("level_unparsed", 0),
+               "duplicate_cards": stats.get("duplicate_cards", 0),
+               "extra_locations": stats.get("extra_locations", 0),
                "stopped_because": stats.get("stopped_because"),
                "ref_kinds": stats.get("ref_kinds", {}),
                "unmatched_href_samples": stats.get("unmatched_href_samples", [])}
@@ -200,7 +202,9 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True):
             gap = "" if site is None else f"  site says {site}"
             drop = (f"  DROPPED {row['dropped_no_ref']} unparseable"
                     if row["dropped_no_ref"] else "")
-            print(f"{len(raws)} ({fresh} new){gap}{drop}")
+            dup = (f"  {row['duplicate_cards']} dup card(s)"
+                   if row["duplicate_cards"] else "")
+            print(f"{len(raws)} ({fresh} new){gap}{dup}{drop}")
             # Print the samples HERE, next to the search that produced them.
             # Burying them in a summary is how the last run reported "16
             # dropped" with no sign of what was dropped.
@@ -311,18 +315,46 @@ def _summarise(by_ref, per_search, errors, searches, use_employers):
     # How far short of the site's own numbers the scrape came. The single most
     # useful figure for diagnosing coverage: if gov.uk reports far more than we
     # collected, the shortfall is in the scraper, not the corpus.
+    # gov.uk's "N results found" counts RESULT SLOTS, not vacancies: a
+    # multi-location vacancy is rendered once per location and each copy is
+    # counted. So the site total must be compared against the CARDS we saw, and
+    # the number of distinct vacancies is a separate, smaller figure. Comparing
+    # distinct refs directly against the site total reads as a shortfall when
+    # nothing is missing at all — which is exactly how "16 dropped" was
+    # misdiagnosed. Confirmed by curl: jcode=2017911 appears 8 times on page 1
+    # of "software developer".
     reported = [r["site_reported_total"] for r in per_search
                 if r.get("site_reported_total") is not None]
+    site_total = sum(reported) if reported else None
+    cards_seen = sum(r.get("cards_seen", 0) for r in per_search)
+    duplicate_cards = sum(r.get("duplicate_cards", 0) for r in per_search)
     coverage = {
         "searches_reporting_a_total": len(reported),
-        "sum_site_reported_totals": sum(reported) if reported else None,
+        # Slots the site says exist, and how many of those slots we fetched.
+        "sum_site_reported_totals": site_total,
+        "total_cards_seen": cards_seen,
+        # Slots we never fetched: the only figure that is a REAL shortfall.
+        "slots_not_fetched": (None if site_total is None
+                              else site_total - cards_seen),
+        # Slots that were the same vacancy again, under another location.
+        "site_side_duplicate_cards": duplicate_cards,
+        "extra_locations_merged": sum(
+            r.get("extra_locations", 0) for r in per_search),
+        "searches_with_duplicates": sum(
+            1 for r in per_search if r.get("duplicate_cards", 0)),
+        # Distinct vacancies, which is what a person actually wants to see.
+        "distinct_listings": len(by_ref),
         "sum_returned": sum(r["returned"] for r in per_search),
-        "total_cards_seen": sum(r.get("cards_seen", 0) for r in per_search),
         "total_dropped_no_ref": sum(r.get("dropped_no_ref", 0) for r in per_search),
         "total_dropped_below_level": sum(
             r.get("dropped_below_level", 0) for r in per_search),
         "searches_stopped_at_page_cap": sum(
             1 for r in per_search if r.get("stopped_because") == "page_cap"),
+        # A capped search that also had duplicates is the crowding-out case:
+        # location copies eat page slots that other vacancies could have used.
+        "capped_searches_with_duplicates": sum(
+            1 for r in per_search
+            if r.get("stopped_because") == "page_cap" and r.get("duplicate_cards", 0)),
         "unmatched_href_samples": sorted({
             h for r in per_search for h in r.get("unmatched_href_samples", [])}),
         "ref_kinds": _merge_counts(r.get("ref_kinds", {}) for r in per_search),
@@ -351,6 +383,8 @@ def _summarise(by_ref, per_search, errors, searches, use_employers):
             "onsite_level_unknown": sum(
                 1 for v in level_unknown
                 if v.source == SOURCE_FINDAPPRENTICESHIP),
+            "multi_location_listings": sum(
+                1 for v in vacs if v.location_count > 1),
         },
         "coverage": coverage,
         "by_level": {str(k): v for k, v in sorted(
@@ -367,6 +401,8 @@ def _summarise(by_ref, per_search, errors, searches, use_employers):
                 "title": v.title,
                 "employer": v.employer_name_raw,
                 "location": v.location,
+                "locations": list(v.locations),
+                "location_count": v.location_count,
                 "level": v.level,
                 "course": v.training_course,
                 "course_normalised": course_name(v),
@@ -399,6 +435,8 @@ def measure_fixture(fixture_dir, min_level=1):
                            "dropped_no_ref": stats.get("dropped_no_ref", 0),
                            "dropped_below_level": stats.get("dropped_below_level", 0),
                            "level_unparsed": stats.get("level_unparsed", 0),
+                           "duplicate_cards": stats.get("duplicate_cards", 0),
+                           "extra_locations": stats.get("extra_locations", 0),
                            "stopped_because": None,
                            "ref_kinds": stats.get("ref_kinds", {}),
                            "unmatched_href_samples": stats.get("unmatched_href_samples", [])})
@@ -428,6 +466,8 @@ def report(snap):
     print(f"      of which on gov.uk     : {t.get('onsite_level_unknown', 0)}"
           f"   (level not parsed — look at these)")
     print(f"    off-site listings        : {t.get('external_listings', 0)}")
+    print(f"  multi-location roles       : {t.get('multi_location_listings', 0)}"
+          f"   (merged from several cards)")
 
     if snap.get("by_source"):
         print()
@@ -437,24 +477,33 @@ def report(snap):
 
     c = snap.get("coverage") or {}
     print()
-    print("coverage vs the site's own numbers:")
+    print("coverage — gov.uk counts RESULT SLOTS, not vacancies:")
+    print("  (a multi-location vacancy is one card per location, each counted)")
     site = c.get("sum_site_reported_totals")
     print(f"    searches reporting a total : {c.get('searches_reporting_a_total')}"
           f" / {snap['searches_issued']}")
-    print(f"    sum of site totals         : "
+    print(f"    result slots site reports  : "
           f"{site if site is not None else 'n/a (title not parsed)'}")
-    print(f"    sum returned by scraper    : {c.get('sum_returned')}")
-    if site:
-        shortfall = site - (c.get("sum_returned") or 0)
-        print(f"    shortfall                  : {shortfall}"
-              f"  ({100 * shortfall / site:.0f}% of what the site reports)")
-    print(f"    cards seen on pages        : {c.get('total_cards_seen')}")
-    print(f"    dropped, no VAC reference  : {c.get('total_dropped_no_ref')}"
-          f"   <-- silently lost listings" if c.get("total_dropped_no_ref")
-          else f"    dropped, no VAC reference  : 0")
-    print(f"    dropped, below min level   : {c.get('total_dropped_below_level')}")
+    print(f"    slots we fetched (cards)   : {c.get('total_cards_seen')}")
+    not_fetched = c.get("slots_not_fetched")
+    if not_fetched is not None:
+        pct = f"  ({100 * not_fetched / site:.0f}% of slots)" if site else ""
+        verdict = "  <-- TRUE shortfall" if not_fetched > 0 else "  (none missing)"
+        print(f"    slots never fetched        : {not_fetched}{pct}{verdict}")
+    print(f"    of fetched slots:")
+    print(f"      site-side duplicates     : {c.get('site_side_duplicate_cards')}"
+          f"   (same vacancy, another location)")
+    print(f"      locations merged in      : {c.get('extra_locations_merged')}")
+    print(f"      unparseable cards        : {c.get('total_dropped_no_ref')}")
+    print(f"      below the level floor    : {c.get('total_dropped_below_level')}")
+    print(f"    DISTINCT vacancies         : {c.get('distinct_listings')}"
+          f"   <-- what you actually have")
     print(f"    searches hitting page cap  : {c.get('searches_stopped_at_page_cap')}"
           f" / {snap['searches_issued']}")
+    capped_dup = c.get("capped_searches_with_duplicates") or 0
+    if capped_dup:
+        print(f"      ...of which ALSO had dups: {capped_dup}"
+              f"   <-- location copies are crowding out other vacancies")
     if c.get("ref_kinds"):
         kinds = ", ".join(f"{k}={v}" for k, v in c["ref_kinds"].items())
         print(f"    reference formats seen      : {kinds}")
@@ -468,14 +517,17 @@ def report(snap):
 
     print()
     print("per search:")
-    print(f"    {'term':<26}{'got':>5}{'site':>6}{'pages':>6}{'cards':>6}"
-          f"{'nodrop':>7}  stopped")
+    print(f"    {'term':<26}{'uniq':>5}{'slots':>6}{'cards':>6}{'dup':>5}"
+          f"{'nodrop':>7}{'pages':>6}  stopped")
     for r in snap["per_search"]:
         site_s = r.get("site_reported_total")
         print(f"    {r['term'][:25]:<26}{r['returned']:>5}"
               f"{(site_s if site_s is not None else '-'):>6}"
-              f"{r.get('pages_fetched', 0):>6}{r.get('cards_seen', 0):>6}"
-              f"{r.get('dropped_no_ref', 0):>7}  {r.get('stopped_because') or '-'}")
+              f"{r.get('cards_seen', 0):>6}{r.get('duplicate_cards', 0):>5}"
+              f"{r.get('dropped_no_ref', 0):>7}{r.get('pages_fetched', 0):>6}"
+              f"  {r.get('stopped_because') or '-'}")
+    print("    uniq = distinct vacancies | slots = site's count | "
+          "dup = cards that repeated a vacancy")
 
     print()
     print("by level:")
@@ -536,11 +588,12 @@ def compare(a_path, b_path):
         print()
 
     keys = ("unique_results", "level_4_plus", "level_6_plus", "level_unknown",
-            "external_listings", "digital_route",
+            "external_listings", "multi_location_listings", "digital_route",
             "digital_route_and_level_4_plus", "route_unclassified")
     label = {"unique_results": "unique listings", "level_4_plus": "Level 4+",
              "level_6_plus": "Level 6+", "level_unknown": "level unknown",
              "external_listings": "off-site listings",
+             "multi_location_listings": "multi-location roles",
              "digital_route": "digital route",
              "digital_route_and_level_4_plus": "digital route AND L4+",
              "route_unclassified": "course text missing"}

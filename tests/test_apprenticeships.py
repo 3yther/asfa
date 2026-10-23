@@ -720,6 +720,136 @@ def test_external_and_onsite_references_cannot_collide():
     assert external.reference != onsite.reference
 
 
+# ── Multi-location vacancies: one listing, every location ───────────────────
+# Confirmed by curl on 2026-10-23: on page 1 of "software developer",
+# jcode=2017911 appears EIGHT times — gov.uk renders a multi-location Civil
+# Service vacancy once per location and counts each copy in "N results found".
+# So those extra cards are the site repeating itself, not listings we lost.
+# They must merge into one listing that keeps the locations, not be discarded.
+
+HSE_LOCATIONS = ["Bootle", "Birmingham", "Bristol", "Cardiff",
+                 "Glasgow", "Leeds", "London", "Manchester"]
+
+
+def _location_cards(url, locations, title="Software Developer Apprentice "
+                                         "(Band 5/EO) (opens in new tab)",
+                    employer="Health and Safety Executive"):
+    return "".join(
+        f'<li class="das-search-results__list-item">'
+        f'<h2><a href="{url}">{title}</a></h2>'
+        f'<p class="govuk-body">{employer}</p>'
+        f'<p class="govuk-body">{loc}</p></li>'
+        for loc in locations)
+
+
+def test_eight_location_cards_become_one_listing():
+    """The real case, exactly: 8 identical jcode cards -> 1 listing, 8 locations."""
+    html = (f"<html><title>8 results found</title><ul>"
+            f"{_location_cards(HSE_CSJOBS_URL, HSE_LOCATIONS)}</ul></html>")
+    stats = {}
+    got = GovUkScraper()._parse_search_page(html, min_level=4, stats=stats)
+
+    assert len(got) == 1, f"expected one merged listing, got {len(got)}"
+    v = got[0]
+    assert v.reference == "jcode:2017911"
+    assert v.location_count == 8
+    assert list(v.locations) == HSE_LOCATIONS
+    # The site counted all 8, so 7 were repeats of a vacancy we already had.
+    assert stats["cards_seen"] == 8
+    assert stats["duplicate_cards"] == 7
+    assert stats["extra_locations"] == 7
+
+
+def test_the_merged_listing_keeps_its_first_location_in_location():
+    """`location` stays a single string so existing callers and the scout_jobs
+    column are unaffected; the full set lives in `locations`."""
+    html = (f"<html><title>8 results found</title><ul>"
+            f"{_location_cards(HSE_CSJOBS_URL, HSE_LOCATIONS)}</ul></html>")
+    v = GovUkScraper()._parse_search_page(html, min_level=4)[0]
+    assert v.location == "Bootle"
+
+
+def test_a_single_location_vacancy_still_reports_one_location():
+    html = (f"<html><title>1 result found</title><ul>"
+            f"{_location_cards(HSE_CSJOBS_URL, ['Bootle'])}</ul></html>")
+    v = GovUkScraper()._parse_search_page(html, min_level=4)[0]
+    assert v.location_count == 1
+    assert list(v.locations) == ["Bootle"]
+
+
+def test_repeated_identical_locations_are_not_counted_twice():
+    """Defensive: the same location twice is one location, not two."""
+    html = (f"<html><title>3 results found</title><ul>"
+            f"{_location_cards(HSE_CSJOBS_URL, ['Bootle', 'Bootle', 'Leeds'])}"
+            f"</ul></html>")
+    stats = {}
+    v = GovUkScraper()._parse_search_page(html, min_level=4, stats=stats)[0]
+    assert list(v.locations) == ["Bootle", "Leeds"]
+    assert stats["duplicate_cards"] == 2      # both repeat cards consumed slots
+    assert stats["extra_locations"] == 1      # only one added a new location
+
+
+def test_two_different_vacancies_are_not_merged_by_location():
+    """Only a shared REFERENCE merges. Same employer, same title, same town,
+    different vacancies must stay separate."""
+    html = ("<html><title>2 results found</title><ul>"
+            + _location_cards(HSE_CSJOBS_URL, ["Bootle"])
+            + _location_cards(
+                "https://www.civilservicejobs.service.gov.uk"
+                "/csr/viewjob.cgi?jcode=2017912", ["Bootle"])
+            + "</ul></html>")
+    got = GovUkScraper()._parse_search_page(html, min_level=4)
+    assert len(got) == 2
+    assert {v.location_count for v in got} == {1}
+
+
+def test_locations_merge_across_a_page_boundary():
+    """A multi-location vacancy can straddle pages, so the merge cannot live
+    only inside one page."""
+    pages = [
+        f"<html><title>8 results found</title><ul>"
+        f"{_location_cards(HSE_CSJOBS_URL, HSE_LOCATIONS[:4])}</ul></html>",
+        f"<html><title>8 results found</title><ul>"
+        f"{_location_cards(HSE_CSJOBS_URL, HSE_LOCATIONS[4:])}</ul></html>",
+        "<html><title>8 results found</title><ul></ul></html>",
+    ]
+    calls = {"i": 0}
+
+    def get(*_a, **_k):
+        i = calls["i"]
+        calls["i"] += 1
+        text = pages[min(i, len(pages) - 1)]
+        return type("R", (), {"status_code": 200, "text": text,
+                              "raise_for_status": lambda self: None})()
+
+    s = GovUkScraper(min_interval=0)
+    s.session.get = get
+    stats = {}
+    got = s.by_keyword("software developer", min_level=4, stats=stats)
+
+    assert len(got) == 1, "the same vacancy on two pages became two listings"
+    assert got[0].location_count == 8
+    assert sorted(got[0].locations) == sorted(HSE_LOCATIONS)
+
+
+def test_as_dict_exposes_locations_and_count():
+    v = RawVacancy(reference="jcode:1", title="t", employer_name_raw="e",
+                   location="Bootle")
+    v.add_location("Leeds")
+    d = v.as_dict()
+    assert d["locations"] == ["Bootle", "Leeds"]
+    assert d["location_count"] == 2
+
+
+def test_add_location_reports_whether_it_was_new():
+    v = RawVacancy(reference="jcode:1", title="t", employer_name_raw="e",
+                   location="Bootle")
+    assert v.add_location("Leeds") is True
+    assert v.add_location("Leeds") is False
+    assert v.add_location("") is False
+    assert v.location_count == 2
+
+
 # ── "(opens in new tab)" is not part of the job title ────────────────────────
 
 @pytest.mark.parametrize("raw,expected", [
@@ -990,3 +1120,32 @@ def test_persisting_an_external_listing_is_idempotent(watchlist):
     assert apprenticeships._persist_vacancies([raw], employer=None,
                                               new_bucket=[]) == 0
     assert ScoutJob.query.filter_by(external_ref=ref).count() == 1
+
+
+def test_a_merged_multi_location_vacancy_persists_as_one_row(watchlist):
+    """It is one job, so it is one scout_jobs row and one alert.
+
+    NOTE: scout_jobs has no locations column, so only `location` (the first one
+    seen) is stored and location_count does not survive persistence. Flagged
+    rather than changed — adding a column is a schema decision.
+    """
+    raw = RawVacancy(reference="jcode:5150001",
+                     title="Software Developer Apprentice",
+                     employer_name_raw="BAE SYSTEMS PLC",
+                     location="Bootle", level=None, training_course="",
+                     source="civil_service",
+                     url=("https://www.civilservicejobs.service.gov.uk"
+                          "/csr/viewjob.cgi?jcode=5150001"))
+    for loc in ("Leeds", "London", "Manchester"):
+        raw.add_location(loc)
+    assert raw.location_count == 4
+
+    emp = Employer.query.filter_by(name="BAE Systems").first()
+    bucket = []
+    assert apprenticeships._persist_vacancies([raw], employer=emp,
+                                              new_bucket=bucket) == 1
+
+    rows = ScoutJob.query.filter_by(external_ref="jcode:5150001").all()
+    assert len(rows) == 1
+    assert rows[0].location == "Bootle"
+    assert len(bucket) == 1, "one vacancy must produce one alert, not four"
