@@ -1,10 +1,10 @@
 """Dry run of the `job_pipeline_cleanup` scheduled job. Deletes NOTHING.
 
 Phase 0b. The job (daily 02:30 Europe/London) calls
-`database.cleanup_job_pipeline(days=14)`, which permanently deletes every
-`scout_pipeline` row older than the cutoff **with no filter on stage**. This
-prints what it would take right now, broken down by stage, so the behaviour can
-be judged against real data before anything is changed.
+`database.cleanup_job_pipeline(days=14)`. It deletes `scout_pipeline` rows past
+the cutoff that are still at the automatic stage, and EXEMPTS any row the user
+moved to a tracked stage (`database.SCOUT_TRACKED_STAGES`). This prints what it
+would take right now, broken down by stage, plus what the exemption saves.
 
 Run from the repo root with the venv active:
 
@@ -23,10 +23,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import database as db  # noqa: E402
 
-# Stages a listing only reaches because the user put it there. `saved` is
-# deliberately absent: `_backfill_scout_pipeline()` inserts every scraped job at
-# stage='saved' on each boot, so it is the automatic default, not a choice.
-USER_CHOSEN_STAGES = ("applied", "interview", "offer", "rejected")
+# Taken from the database module so the script cannot drift from the job it
+# models. `saved` is absent by construction: `_backfill_scout_pipeline()` inserts
+# every scraped job at that stage on each boot, so it is the automatic default
+# rather than a choice the user made.
+USER_CHOSEN_STAGES = db.SCOUT_TRACKED_STAGES
 
 
 def main() -> int:
@@ -51,8 +52,18 @@ def main() -> int:
     if r["pipeline_by_stage"]:
         for stage, n in sorted(r["pipeline_by_stage"].items(),
                                key=lambda kv: (-kv[1], kv[0])):
-            flag = "  <-- user-chosen, would be lost" if stage in USER_CHOSEN_STAGES else ""
+            flag = "  <-- UNEXPECTED: user-chosen" if stage in USER_CHOSEN_STAGES else ""
             print(f"    {stage:<12} {n:>6}{flag}")
+    else:
+        print("    (none)")
+    print()
+
+    print(f"scout_pipeline rows past the cutoff but EXEMPT "
+          f"({r['pipeline_exempt_total']}):")
+    if r["pipeline_exempt_by_stage"]:
+        for stage, n in sorted(r["pipeline_exempt_by_stage"].items(),
+                               key=lambda kv: (-kv[1], kv[0])):
+            print(f"    {stage:<12} {n:>6}  kept (user-chosen)")
     else:
         print("    (none)")
     print()
@@ -79,11 +90,13 @@ def main() -> int:
     at_risk = sum(n for s, n in r["pipeline_by_stage"].items()
                   if s in USER_CHOSEN_STAGES)
     print(f"TOTAL rows the job would delete : {r['total']}")
-    print(f"  of which user-chosen stages   : {at_risk}"
+    print(f"  exempt, kept by stage         : {r['pipeline_exempt_total']}"
           f"  ({'/'.join(USER_CHOSEN_STAGES)})")
     if at_risk:
         print()
-        print(f"  {at_risk} row(s) you moved yourself would be permanently deleted.")
+        print(f"  WARNING: {at_risk} row(s) at a user-chosen stage are still in the")
+        print("  delete set. The exemption is not doing its job — investigate before")
+        print("  the next 02:30 run.")
     return 0
 
 

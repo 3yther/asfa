@@ -751,7 +751,8 @@ function wireBodyComp() {
 }
 
 // ── Scout Pipeline ─────────────────────────────────────────────────────────────
-const SP_STAGES = [["saved", "Saved"], ["applied", "Applied"], ["interview", "Interview"],
+const SP_STAGES = [["saved", "Saved"], ["interested", "Interested"],
+                   ["applied", "Applied"], ["interview", "Interview"],
                    ["offer", "Offer"], ["rejected", "Rejected"]];
 function spDaysAgo(iso) {
   if (!iso) return null;

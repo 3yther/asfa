@@ -3491,7 +3491,21 @@ def delete_scout_application(app_id) -> None:
 
 
 # ── Scout pipeline (CRM-style stage board) ──────────────────────────────────
-SCOUT_STAGES = ("saved", "applied", "interview", "offer", "rejected")
+# Board order, left to right. `interested` sits between saved and applied: the
+# "I mean to apply for this" tier, which `saved` cannot express because the boot
+# backfill assigns it automatically (see SCOUT_AUTO_STAGE).
+SCOUT_STAGES = ("saved", "interested", "applied", "interview", "offer", "rejected")
+
+# The stage `_backfill_scout_pipeline()` inserts scraped listings at. It is a
+# default, not a user decision, which is why it is the only stage the nightly
+# cleanup may delete.
+SCOUT_AUTO_STAGE = "saved"
+
+# Stages that only exist because the user put a listing there. `cleanup_job_pipeline`
+# must never delete these: an apprenticeship cycle runs for months, far longer
+# than the 14-day window the cleanup was tuned for, so age alone says nothing
+# about whether a tracked role still matters.
+SCOUT_TRACKED_STAGES = tuple(s for s in SCOUT_STAGES if s != SCOUT_AUTO_STAGE)
 
 
 def get_scout_pipeline(stage=None) -> list:
@@ -3746,20 +3760,22 @@ def preview_job_pipeline_cleanup(days: int = 14) -> dict:
     SELECTed and grouped so you can see what it would take, broken down by
     pipeline stage and application status.
 
-    Exists because `cleanup_job_pipeline` has no status filter: every
-    scout_pipeline row older than the cutoff goes, whatever stage it is in.
-    Run this before trusting the job with an apprenticeship cycle, which runs
-    for months rather than the 14 days the job was tuned for.
+    `pipeline_exempt_by_stage` is the part worth reading: rows past the cutoff
+    that the stage exemption saves. It is reported separately from
+    `pipeline_surviving_by_stage` (rows simply inside the window) so the
+    exemption's effect is visible rather than inferred.
 
     Returns:
         {
           "days": N, "cutoff": "...", "cutoff_date": "...",
-          "pipeline_by_stage":   {stage: count, ...},
+          "pipeline_by_stage":   {stage: count, ...},   # would be deleted
           "pipeline_total":      N,
+          "pipeline_exempt_by_stage": {stage: count, ...},  # old but tracked
+          "pipeline_exempt_total":    N,
           "applications_by_status": {status: count, ...},
           "applications_total":  N,
           "total":               N,
-          "pipeline_surviving_by_stage": {stage: count, ...},
+          "pipeline_surviving_by_stage": {stage: count, ...},  # inside window
         }
     """
     _ensure_scout_tables()
@@ -3773,6 +3789,8 @@ def preview_job_pipeline_cleanup(days: int = 14) -> dict:
         "cutoff_date": cutoff_date,
         "pipeline_by_stage": {},
         "pipeline_total": 0,
+        "pipeline_exempt_by_stage": {},
+        "pipeline_exempt_total": 0,
         "applications_by_status": {},
         "applications_total": 0,
         "total": 0,
@@ -3787,12 +3805,25 @@ def preview_job_pipeline_cleanup(days: int = 14) -> dict:
         cur.execute(
             f"SELECT stage, COUNT(*) AS n FROM scout_pipeline "
             f"WHERE COALESCE(updated_at, created_at) < {ph} "
+            f"AND (stage IS NULL OR stage = {ph}) "
             f"GROUP BY stage ORDER BY stage",
-            (cutoff,))
+            (cutoff, SCOUT_AUTO_STAGE))
         for row in cur.fetchall():
             r = dict(row)
             out["pipeline_by_stage"][r["stage"] or "(null)"] = r["n"]
         out["pipeline_total"] = sum(out["pipeline_by_stage"].values())
+
+        # Past the cutoff but saved by the stage exemption.
+        cur.execute(
+            f"SELECT stage, COUNT(*) AS n FROM scout_pipeline "
+            f"WHERE COALESCE(updated_at, created_at) < {ph} "
+            f"AND stage IS NOT NULL AND stage <> {ph} "
+            f"GROUP BY stage ORDER BY stage",
+            (cutoff, SCOUT_AUTO_STAGE))
+        for row in cur.fetchall():
+            r = dict(row)
+            out["pipeline_exempt_by_stage"][r["stage"]] = r["n"]
+        out["pipeline_exempt_total"] = sum(out["pipeline_exempt_by_stage"].values())
 
         # What would survive, for context on how much of the table this is.
         cur.execute(
@@ -3819,11 +3850,22 @@ def preview_job_pipeline_cleanup(days: int = 14) -> dict:
 
 
 def cleanup_job_pipeline(days: int = 14) -> dict:
-    """Permanently delete job pipeline and application entries older than `days`.
+    """Delete untouched job pipeline entries, and applications, older than `days`.
 
     Deletes from:
-    - scout_pipeline: where updated_at (or created_at if null) is older than cutoff
+    - scout_pipeline: rows older than the cutoff that are still at
+      SCOUT_AUTO_STAGE. Anything the user moved to a SCOUT_TRACKED_STAGES stage
+      is EXEMPT and kept indefinitely — see below.
     - scout_applications: where applied_date is older than cutoff
+
+    The stage exemption is the point of this function, not an optimisation. The
+    job exists to stop auto-backfilled job alerts piling up, and every scraped
+    listing arrives at stage='saved' from `_backfill_scout_pipeline()`. Deleting
+    by age alone also took rows the user had moved to applied / interview /
+    offer, which is data they entered by hand, about apprenticeship cycles that
+    run for months. Age is evidence about an untouched listing and nothing else.
+
+    `preview_job_pipeline_cleanup` models this exactly; keep the two in step.
 
     Returns dict with counts: {"pipeline": N, "applications": M, "total": N+M}
     """
@@ -3838,11 +3880,14 @@ def cleanup_job_pipeline(days: int = 14) -> dict:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
 
-        # Delete scout_pipeline entries older than cutoff
+        # Delete only untouched (still auto-staged) pipeline rows past the cutoff.
+        # A NULL stage is treated as untouched: it predates the NOT NULL default
+        # and carries no user intent either.
         cur.execute(
             f"DELETE FROM scout_pipeline WHERE "
-            f"COALESCE(updated_at, created_at) < {ph}",
-            (cutoff,))
+            f"COALESCE(updated_at, created_at) < {ph} "
+            f"AND (stage IS NULL OR stage = {ph})",
+            (cutoff, SCOUT_AUTO_STAGE))
         deleted["pipeline"] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
         # Delete scout_applications entries older than cutoff (by date, not datetime)
@@ -3856,10 +3901,31 @@ def cleanup_job_pipeline(days: int = 14) -> dict:
     return deleted
 
 
+def _norm_pipeline_key(value) -> str:
+    """Normalise a dedup key: trimmed, case-folded, inner whitespace collapsed.
+
+    Only ever makes two spellings of the same listing compare EQUAL, so it can
+    cause a skip but never an extra insert — the safe direction, given a
+    spurious insert is what shadows a user's stage.
+    """
+    return " ".join((value or "").split()).casefold()
+
+
 def _backfill_scout_pipeline() -> int:
     """Idempotently pull already-scraped scout_jobs into the pipeline at
-    stage='saved'. Dedups by job_url (or title+company when the url is blank),
-    so re-running never creates duplicates. Returns the number inserted."""
+    SCOUT_AUTO_STAGE. Returns the number inserted.
+
+    INSERT-only by construction: there is no UPDATE here, so a stage the user
+    set by hand can never be written back to 'saved' by a boot.
+
+    Dedup checks the url AND the (title, company) key, both normalised, and
+    skips on either. It used to check them exclusively — url when the job had
+    one, title+company only when it didn't — which let a scraped job carrying a
+    url insert a SECOND row beside a pipeline row the user had already moved to
+    applied/interview. That left the role on the board twice, the user's stage
+    stranded on one copy and a fresh 'saved' duplicate on the other. Checking
+    both unconditionally keeps it to one pipeline row per listing.
+    """
     _ensure_scout_tables()
     inserted = 0
     with get_db() as conn:
@@ -3868,8 +3934,10 @@ def _backfill_scout_pipeline() -> int:
         jobs = [dict(r) for r in cur.fetchall()]
         cur.execute("SELECT job_url, job_title, company FROM scout_pipeline")
         existing = [dict(r) for r in cur.fetchall()]
-        by_url = {e["job_url"] for e in existing if e.get("job_url")}
-        by_key = {(e["job_title"], e["company"]) for e in existing}
+        by_url = {_norm_pipeline_key(e["job_url"])
+                  for e in existing if e.get("job_url")}
+        by_key = {(_norm_pipeline_key(e["job_title"]), _norm_pipeline_key(e["company"]))
+                  for e in existing}
         ph = "%s" if USE_POSTGRES else "?"
         now = datetime.now().isoformat()
         cols = ("job_title, company, job_url, location, stage, source, "
@@ -3877,16 +3945,22 @@ def _backfill_scout_pipeline() -> int:
         for j in jobs:
             if not j.get("title") or not j.get("company"):
                 continue
-            if j.get("url") and j["url"] in by_url:
+            url_key = _norm_pipeline_key(j.get("url"))
+            title_key = (_norm_pipeline_key(j["title"]), _norm_pipeline_key(j["company"]))
+            # Already tracked under either identity — leave it exactly as it is.
+            if url_key and url_key in by_url:
                 continue
-            if not j.get("url") and (j["title"], j["company"]) in by_key:
+            if title_key in by_key:
                 continue
             cur.execute(
                 f"INSERT INTO scout_pipeline ({cols}) VALUES ({','.join([ph]*10)})",
-                (j["title"], j["company"], j.get("url"), j.get("location"), "saved",
+                (j["title"], j["company"], j.get("url"), j.get("location"),
+                 SCOUT_AUTO_STAGE,
                  j.get("source"), j.get("found_date") or date.today().isoformat(),
                  now, now, now))
-            by_url.add(j.get("url")); by_key.add((j["title"], j["company"]))
+            if url_key:
+                by_url.add(url_key)
+            by_key.add(title_key)
             inserted += 1
     return inserted
 
