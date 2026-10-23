@@ -201,6 +201,10 @@ DEFAULT_EMPLOYER_EXCLUSIONS = ()
 REASON_TITLE = "title_excluded"
 REASON_EMPLOYER = "employer_excluded"
 REASON_NOT_DIGITAL = "no_digital_signal"
+# The listing states an apprenticeship standard and it is not a Digital one.
+# Stronger than a title guess, because the standard is what the apprentice
+# actually trains towards.
+REASON_NON_DIGITAL_STANDARD = "non_digital_standard"
 
 KEEP_DIGITAL_STANDARD = "digital_standard"
 KEEP_STRONG_TERM = "strong_digital_term"
@@ -212,6 +216,17 @@ KEEP_UNSURE = "kept_unsure"
 _LOCK = threading.Lock()
 _CACHE: dict = {}
 _CACHE_STAMP = None
+
+# Pages per search. Raised from 5 to 20 once the widened keyword list made the
+# cap bind: 5 of 17 searches stopped at the cap, leaving 201 of 605 result slots
+# unfetched. At 1 request/second a 20-page search is at most 20s, and the loop
+# stops early as soon as the site's own total is accounted for, so the cap is a
+# ceiling for the pathological case rather than a budget to be spent.
+DEFAULT_MAX_PAGES = 20
+
+_SCALARS = {
+    "max_pages": DEFAULT_MAX_PAGES,
+}
 
 _KEYS = {
     "search_keywords": DEFAULT_SEARCH_KEYWORDS,
@@ -250,6 +265,15 @@ def _load_overrides(path: str) -> dict:
         if f"+{key}" in raw and isinstance(raw[f"+{key}"], list):
             extra = tuple(str(v) for v in raw[f"+{key}"] if str(v).strip())
             out[key] = tuple(out.get(key, default)) + extra
+    for key in _SCALARS:
+        value = raw.get(key)
+        if isinstance(value, bool):
+            continue                      # bool is an int subclass; not a count
+        if isinstance(value, int) and value > 0:
+            out[key] = value
+        elif value is not None:
+            logger.warning("scout_config: %s must be a positive integer, "
+                           "ignoring %r", key, value)
     return out
 
 
@@ -265,11 +289,28 @@ def settings(refresh: bool = False) -> dict:
     with _LOCK:
         if refresh or not _CACHE or _CACHE_STAMP != stamp:
             merged = dict(_KEYS)
+            merged.update(_SCALARS)
             merged.update(_load_overrides(path))
-            # Normalise once so the matchers don't re-lower on every listing.
-            _CACHE = {k: tuple(v) for k, v in merged.items()}
+            # Normalise the lists once so the matchers don't re-lower on every
+            # listing; scalars are left as they are.
+            _CACHE = {k: (v if k in _SCALARS else tuple(v))
+                      for k, v in merged.items()}
             _CACHE_STAMP = stamp
         return _CACHE
+
+
+def max_pages() -> int:
+    """Pages to walk per search. SCOUT_MAX_PAGES wins, then the JSON config."""
+    env = os.environ.get("SCOUT_MAX_PAGES")
+    if env:
+        try:
+            value = int(env)
+            if value > 0:
+                return value
+            logger.warning("scout_config: SCOUT_MAX_PAGES must be > 0, got %r", env)
+        except ValueError:
+            logger.warning("scout_config: SCOUT_MAX_PAGES is not an integer: %r", env)
+    return int(settings()["max_pages"])
 
 
 def search_keywords() -> list:
@@ -410,11 +451,25 @@ def judge(title: str, employer: str = "", course: str = "") -> Verdict:
          because a list of guessed phrases should not beat a stated fact;
       2. an excluded EMPLOYER drops it. The user maintains that list from the
          exclusion log, so it is theirs to be blunt with;
-      3. an excluded TITLE drops it, UNLESS an unambiguous technical word is
+      3. a STATED NON-DIGITAL STANDARD drops it, UNLESS an unambiguous technical
+         word is present. If the listing says the apprentice will train as a
+         business administrator or a multi-channel marketer, that is what the
+         apprenticeship is, whatever the search term was. This catches the bulk
+         of what the widened keywords pull in — business administrator,
+         multi-channel marketer, international freight forwarding, interior
+         systems installer, supply chain warehouse operative — without needing
+         a title phrase for each one. Checked BEFORE the title list because a
+         stated standard is better evidence than a guessed phrase, so it gives
+         the more informative reason in the log;
+      4. an excluded TITLE drops it, UNLESS an unambiguous technical word is
          present. "Security Guard" has only the weak term "security" and goes;
          "Digital Project Manager" has "digital" and stays;
-      4. anything else is kept. The `digital` flag records whether any digital
+      5. anything else is kept. The `digital` flag records whether any digital
          term was seen, so a caller can rank without the filter having guessed.
+
+    Steps 3 and 4 share the strong-term override, which is what keeps the rule
+    from eating real roles: a digital standard is never overridden, and neither
+    is an unambiguous technical title.
     """
     blob = f"{title or ''} {course or ''}"
     terms = digital_terms_in(blob)
@@ -427,6 +482,13 @@ def judge(title: str, employer: str = "", course: str = "") -> Verdict:
     employer_hit = matched_employer_exclusion(employer)
     if employer_hit:
         return Verdict(False, REASON_EMPLOYER, detail=employer_hit,
+                       digital=bool(terms), terms=terms)
+
+    stated = course_name(course)
+    if stated and not strong:
+        # The standard is known (there is course text) and step 1 already
+        # established it is not a Digital one.
+        return Verdict(False, REASON_NON_DIGITAL_STANDARD, detail=stated,
                        digital=bool(terms), terms=terms)
 
     title_hit = matched_title_exclusion(title)

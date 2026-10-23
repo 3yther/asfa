@@ -43,6 +43,8 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 import requests
 from bs4 import BeautifulSoup
 
+from services import scout_config
+
 
 BASE_URL = "https://www.findapprenticeship.service.gov.uk"
 SEARCH_URL = BASE_URL + "/apprenticeships"
@@ -194,11 +196,16 @@ class RawVacancy:
 
 class GovUkScraper:
     def __init__(self, user_agent: str = USER_AGENT, timeout: int = 20,
-                 min_interval: float = MIN_REQUEST_INTERVAL):
+                 min_interval: float = MIN_REQUEST_INTERVAL,
+                 max_pages: Optional[int] = None):
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": user_agent, "Accept": "text/html"})
         self.timeout = timeout
         self.min_interval = min_interval
+        # Read from config at construction, so one scan uses one cap throughout
+        # even if the config file is edited mid-run.
+        self.max_pages = (max_pages if max_pages is not None
+                          else scout_config.max_pages())
         # None until the first request, so a fresh scraper doesn't stall a second.
         self._last_request_at: Optional[float] = None
 
@@ -245,26 +252,67 @@ class GovUkScraper:
         self._last_request_at = time.monotonic()
 
     def _search_all_pages(
-        self, params: dict, min_level: int, max_pages: int = 5,
+        self, params: dict, min_level: int, max_pages: Optional[int] = None,
         stats: Optional[dict] = None
     ) -> list[RawVacancy]:
-        """Walk pagination. Stop once we hit an empty page or max_pages."""
+        """Walk pagination, newest first, until there is nothing left to fetch.
+
+        Stop conditions, in the order they are checked:
+
+          "empty_page"        a page returned no cards at all;
+          "identical_page"    this page is the same cards in the same order as
+                              the previous one, so paging is having no effect
+                              and the next request would repeat it. Identity is
+                              (reference, locations) per card, NOT reference
+                              alone: a page carrying further LOCATIONS for
+                              vacancies already seen has the same references
+                              but is a different page with real slots behind
+                              it, which is the case that broke the old rule;
+          "reached_site_total" we have fetched as many result slots as the site
+                              says exist, so there is provably nothing more;
+          "page_cap"          `max_pages` reached — the site may well have more.
+
+        The old condition was "this page added no NEW REFERENCES", which is
+        wrong whenever a page is full of additional LOCATIONS for vacancies
+        already seen: that page adds no reference but is a different page with
+        real slots behind it. Measured on the "software" search, it stopped
+        after 20 of the site's 32 slots and lost 12 vacancies. Identity of the
+        page itself is the only safe signal, because gov.uk serves the same page
+        for an out-of-range PageNumber rather than an empty one.
+        """
+        if max_pages is None:
+            max_pages = self.max_pages
         by_ref: dict[str, RawVacancy] = {}
         order: list[str] = []
+        slots_fetched = 0
+        reported_total = None
+        previous_page_identity = None
 
         for page in range(1, max_pages + 1):
             p = dict(params)
             if page > 1:
                 p["PageNumber"] = page
-            page_results = self._search_one_page(p, min_level, stats=stats)
+
+            # Per-page stats, merged into the caller's dict afterwards, so the
+            # page's own slot count can be read here instead of being inferred
+            # from a running total.
+            page_stats: dict = {}
+            page_results = self._search_one_page(p, min_level, stats=page_stats)
+            slots_fetched += page_stats.get("cards_seen", 0)
+            if page_stats.get("reported_total") is not None:
+                reported_total = page_stats["reported_total"]
             if stats is not None:
+                _merge_stats(stats, page_stats)
                 stats["pages_fetched"] = stats.get("pages_fetched", 0) + 1
+                stats["slots_fetched"] = slots_fetched
+
             if not page_results:
                 if stats is not None:
                     stats.setdefault("stopped_because", "empty_page")
                 break
 
-            fresh = 0
+            page_identity = [(r.reference, r.locations) for r in page_results]
+
             for r in page_results:
                 existing = by_ref.get(r.reference)
                 if existing is not None:
@@ -276,11 +324,19 @@ class GovUkScraper:
                     continue
                 by_ref[r.reference] = r
                 order.append(r.reference)
-                fresh += 1
 
-            if not fresh:  # nothing new on this page — pagination exhausted
+            if page_identity == previous_page_identity:
+                # The same page served twice: paging has stopped working.
                 if stats is not None:
-                    stats.setdefault("stopped_because", "repeats")
+                    stats.setdefault("stopped_because", "identical_page")
+                break
+            previous_page_identity = page_identity
+
+            if reported_total is not None and slots_fetched >= reported_total:
+                # Every slot the site claims is accounted for. Fetching further
+                # pages can only repeat what we have.
+                if stats is not None:
+                    stats.setdefault("stopped_because", "reached_site_total")
                 break
         else:
             if stats is not None:
@@ -482,6 +538,37 @@ class GovUkScraper:
 
 class ScraperError(Exception):
     pass
+
+
+# Keys accumulated by summing; everything else is merged by rule below.
+_COUNTER_KEYS = ("cards_seen", "kept", "dropped_no_ref", "dropped_below_level",
+                 "level_unparsed", "duplicate_cards", "extra_locations")
+
+
+def _merge_stats(target: dict, page: dict) -> None:
+    """Fold one page's stats into the per-search totals.
+
+    `_search_all_pages` gives each page its own dict so it can read that page's
+    slot count, then merges here. Counters add, the reported total is the
+    latest seen, and the dicts and sample list are combined rather than
+    replaced.
+    """
+    for key in _COUNTER_KEYS:
+        if key in page:
+            target[key] = target.get(key, 0) + page[key]
+    if page.get("reported_total") is not None:
+        target["reported_total"] = page["reported_total"]
+    for key in ("ref_kinds", "sources"):
+        if key in page:
+            merged = dict(target.get(key, {}))
+            for k, v in page[key].items():
+                merged[k] = merged.get(k, 0) + v
+            target[key] = merged
+    if page.get("unmatched_href_samples"):
+        samples = target.setdefault("unmatched_href_samples", [])
+        for href in page["unmatched_href_samples"]:
+            if href not in samples and len(samples) < 8:
+                samples.append(href)
 
 
 def _note_unmatched(stats: dict, card, limit: int = 8) -> None:

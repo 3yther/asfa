@@ -517,7 +517,7 @@ def test_hitting_the_page_cap_is_reported():
             "raise_for_status": lambda self: None})()
 
     stats = {}
-    s = GovUkScraper(min_interval=0)
+    s = GovUkScraper(min_interval=0, max_pages=5)
     s.session.get = get
     got = s.by_keyword("data", min_level=4, stats=stats)
 
@@ -1048,11 +1048,25 @@ def test_first_request_is_not_delayed():
     assert stamps[0] - started < 1.0
 
 
-def test_page_cap_is_not_loosened():
-    """At most 5 pages per search. Guards the cap against an accidental raise."""
-    import inspect
-    sig = inspect.signature(GovUkScraper._search_all_pages)
-    assert sig.parameters["max_pages"].default == 5
+def test_the_page_cap_is_configurable_and_defaults_to_twenty():
+    """CHANGED in Phase 1B: the cap was 5 and bound on 5 of 17 widened searches,
+    leaving 201 of 605 result slots unfetched. It is now config-driven."""
+    assert scout_config.max_pages() == 20
+    assert GovUkScraper().max_pages == 20
+    assert GovUkScraper(max_pages=3).max_pages == 3
+
+
+def test_the_page_cap_can_be_set_from_the_environment(monkeypatch):
+    monkeypatch.setenv("SCOUT_MAX_PAGES", "7")
+    assert scout_config.max_pages() == 7
+    assert GovUkScraper().max_pages == 7
+
+
+@pytest.mark.parametrize("bad", ["0", "-3", "abc", ""])
+def test_a_bad_page_cap_falls_back_to_the_default(monkeypatch, bad):
+    """A mistyped env var must not disable pagination or crash a scan."""
+    monkeypatch.setenv("SCOUT_MAX_PAGES", bad)
+    assert scout_config.max_pages() == 20
 
 
 # ── Config ───────────────────────────────────────────────────────────────────
@@ -1215,8 +1229,10 @@ def test_excluded_listings_are_not_persisted_and_are_logged(watchlist):
     row = excluded[0]
     assert row["title"] == "Security Guard Apprentice"
     assert row["employer"] == "G4S"
-    assert row["reason"] == "title_excluded"
-    assert row["detail"] == "security guard"
+    # Its stated standard is "Security operative", so the standard rule reports
+    # it — a better reason than a title guess.
+    assert row["reason"] == "non_digital_standard"
+    assert row["detail"] == "security operative"
 
 
 def test_the_exclusion_log_records_title_employer_and_reason(ctx):
@@ -1423,3 +1439,152 @@ def test_the_scan_reports_how_many_were_excluded(watchlist, monkeypatch):
     summary = apprenticeships.scan_apprenticeships()
     assert summary["excluded"] == 2
     assert summary["new"] == 1
+
+
+# ── Pagination stop conditions ──────────────────────────────────────────────
+# Measured on the "software" search: the site reported 32 slots and the scraper
+# stopped after 20 with reason "repeats", losing 12 vacancies. The old rule was
+# "this page added no NEW REFERENCES", which is wrong for a page carrying
+# further LOCATIONS of vacancies already seen — no new reference, but a
+# different page with real slots behind it.
+
+def _loc_card(ref, loc, title="Software Developer Apprentice"):
+    return (f'<li class="das-search-results__list-item">'
+            f'<h2><a href="/apprenticeship/{ref}">{title}</a></h2>'
+            f'<p class="govuk-body">ACME</p><p class="govuk-body">{loc}</p>'
+            f'<p class="govuk-body"><b>Training course</b> '
+            f'Software developer (level 4)</p></li>')
+
+
+def _paged_scraper(pages, site_total, cap=20):
+    """A scraper served `pages` in order, repeating the last one after that —
+    which is what gov.uk does for an out-of-range PageNumber."""
+    calls = {"i": 0}
+
+    def get(*_a, **_k):
+        i = calls["i"]
+        calls["i"] += 1
+        body = pages[i] if i < len(pages) else pages[-1]
+        return type("R", (), {
+            "status_code": 200,
+            "text": (f"<html><title>{site_total} results found</title>"
+                     f"<ul>{body}</ul></html>"),
+            "raise_for_status": lambda self: None})()
+
+    s = GovUkScraper(min_interval=0, max_pages=cap)
+    s.session.get = get
+    return s
+
+
+def test_a_page_of_extra_locations_does_not_stop_pagination():
+    """The regression. Page 2 repeats page 1's references with new locations;
+    pages 3 and 4 hold the rest of the vacancies."""
+    pages = [
+        "".join(_loc_card(f"VAC{i}", "London") for i in range(10)),
+        "".join(_loc_card(f"VAC{i}", "Leeds") for i in range(10)),
+        "".join(_loc_card(f"VAC{i}", "Bristol") for i in range(10, 20)),
+        "".join(_loc_card(f"VAC{i}", "Cardiff") for i in range(20, 22)),
+    ]
+    stats = {}
+    got = _paged_scraper(pages, 32).by_keyword("software", min_level=4, stats=stats)
+
+    assert len(got) == 22, "pagination stopped early and lost vacancies"
+    assert stats["slots_fetched"] == 32
+    assert stats["stopped_because"] == "reached_site_total"
+
+
+def test_pagination_stops_on_an_identical_page():
+    """gov.uk serves the same page for an out-of-range PageNumber rather than an
+    empty one, so identity of the page is the signal that paging has stopped
+    working."""
+    pages = ["".join(_loc_card(f"VAC{i}", "London") for i in range(10))]
+    stats = {}
+    got = _paged_scraper(pages, 999).by_keyword("software", min_level=4, stats=stats)
+
+    assert len(got) == 10
+    assert stats["pages_fetched"] == 2, "it must notice on the first repeat"
+    assert stats["stopped_because"] == "identical_page"
+
+
+def test_pagination_stops_once_the_site_total_is_accounted_for():
+    """Provably nothing left, so no further request is justified."""
+    pages = [
+        "".join(_loc_card(f"VAC{i}", "London") for i in range(10)),
+        "".join(_loc_card(f"VAC{i}", "London") for i in range(10, 20)),
+    ]
+    stats = {}
+    got = _paged_scraper(pages, 20).by_keyword("software", min_level=4, stats=stats)
+
+    assert len(got) == 20
+    assert stats["pages_fetched"] == 2
+    assert stats["stopped_because"] == "reached_site_total"
+
+
+def test_pagination_stops_on_an_empty_page():
+    pages = ["".join(_loc_card(f"VAC{i}", "London") for i in range(10)), ""]
+    stats = {}
+    got = _paged_scraper(pages, 999).by_keyword("software", min_level=4, stats=stats)
+
+    assert len(got) == 10
+    assert stats["stopped_because"] == "empty_page"
+
+
+def test_pagination_walks_to_the_cap_when_there_is_more():
+    pages = ["".join(_loc_card(f"VAC{i * 10 + k}", "London") for k in range(10))
+             for i in range(30)]
+    stats = {}
+    got = _paged_scraper(pages, 9999, cap=20).by_keyword(
+        "software", min_level=4, stats=stats)
+
+    assert len(got) == 200
+    assert stats["pages_fetched"] == 20
+    assert stats["stopped_because"] == "page_cap"
+
+
+def test_the_repeats_stop_reason_is_gone():
+    """It was the wrong question. Nothing should report it any more."""
+    pages = [
+        "".join(_loc_card(f"VAC{i}", "London") for i in range(10)),
+        "".join(_loc_card(f"VAC{i}", "Leeds") for i in range(10)),
+    ]
+    stats = {}
+    _paged_scraper(pages, 20).by_keyword("software", min_level=4, stats=stats)
+    assert stats["stopped_because"] != "repeats"
+
+
+def test_slot_spacing_still_holds_across_many_pages():
+    """A 20-page cap must not come at the cost of the 1 request/second floor."""
+    pages = ["".join(_loc_card(f"VAC{i * 10 + k}", "London") for k in range(10))
+             for i in range(5)]
+    stamps = []
+    s = _paged_scraper(pages, 9999, cap=5)
+    inner = s.session.get
+
+    def timed(*a, **k):
+        stamps.append(time.monotonic())
+        return inner(*a, **k)
+
+    s.session.get = timed
+    s.min_interval = 0.05
+    s._last_request_at = None
+    s.by_keyword("software", min_level=4)
+
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    assert len(stamps) == 5
+    assert min(gaps) >= 0.05, f"requests came too close together: {gaps}"
+
+
+def test_per_page_stats_are_merged_not_replaced():
+    """Each page is parsed with its own stats dict so the page's slot count can
+    be read; the totals must still add up across pages."""
+    pages = [
+        "".join(_loc_card(f"VAC{i}", "London") for i in range(10)),
+        "".join(_loc_card(f"VAC{i}", "London") for i in range(10, 20)),
+    ]
+    stats = {}
+    _paged_scraper(pages, 20).by_keyword("software", min_level=4, stats=stats)
+
+    assert stats["cards_seen"] == 20
+    assert stats["kept"] == 20
+    assert stats["ref_kinds"] == {"vac": 20}
+    assert stats["reported_total"] == 20

@@ -268,6 +268,19 @@ def _summarise(by_ref, per_search, errors, searches, use_employers,
         "kept": len(kept),
         "by_reason": dict(sorted(Counter(
             verdicts[v.reference].reason for v in dropped).items())),
+        # Which standards/phrases did the dropping, with counts. This is the
+        # safety net for the non_digital_standard rule: DIGITAL_STANDARDS is a
+        # curated list and an omission from it silently excludes a real digital
+        # role. Printing the excluded standards by frequency makes that
+        # reviewable — a name that should be digital stands out and can be added
+        # to config without a code change.
+        "by_detail": {
+            reason: dict(Counter(
+                verdicts[v.reference].detail or "(none)"
+                for v in dropped if verdicts[v.reference].reason == reason
+            ).most_common())
+            for reason in sorted({verdicts[v.reference].reason for v in dropped})
+        },
         "kept_by_reason": dict(sorted(Counter(
             verdicts[v.reference].reason for v in kept).items())),
         # Every excluded listing, with the reason — the audit trail.
@@ -553,6 +566,16 @@ def report(snap):
               f"{ex.get('excluded', 0) + ex.get('kept', 0)})")
         for reason, n in (ex.get("by_reason") or {}).items():
             print(f"    {reason:<24}{n:>5}")
+        details = ex.get("by_detail") or {}
+        if details.get("non_digital_standard"):
+            print("  excluded standards, most frequent first — CHECK THESE:")
+            print("  (a name here that should count as digital means "
+                  "DIGITAL_STANDARDS is")
+            print("   missing it; add it to config/scout_filters.json)")
+            for name, n in list(details["non_digital_standard"].items())[:20]:
+                print(f"    {name[:52]:<54}{n:>5}")
+            if len(details["non_digital_standard"]) > 20:
+                print(f"    ... and {len(details['non_digital_standard']) - 20} more")
         if ex.get("kept_by_reason"):
             print("  kept because:")
             for reason, n in ex["kept_by_reason"].items():
@@ -679,7 +702,8 @@ def main():
     ap.add_argument("--min-level", type=int, default=1,
                     help="level floor passed to the scraper (default 1 = unfiltered)")
     ap.add_argument("--max-pages", type=int, default=None,
-                    help="override the per-search page cap (default: scraper's 5)")
+                    help="override the per-search page cap "
+                         "(default: config max_pages, currently 20)")
     ap.add_argument("--out", help="write the JSON snapshot here")
     ap.add_argument("--fixture", help="count saved HTML pages in this dir, no network")
     ap.add_argument("--compare", nargs=2, metavar=("BEFORE", "AFTER"),
@@ -694,15 +718,25 @@ def main():
 
     if args.estimate:
         searches = _searches(args.employers)
-        pages = args.max_pages or 5
-        print(f"searches        : {len(searches)}")
-        print(f"max pages each  : {pages}")
-        print(f"worst-case reqs : {len(searches) * pages}")
-        print(f"min wall time   : ~{len(searches) * pages} s at 1 req/s")
-        for kind, term in searches[:12]:
+        pages = args.max_pages or scout_config.max_pages()
+        worst = len(searches) * pages
+        print(f"searches            : {len(searches)}")
+        print(f"max pages each      : {pages}"
+              f"   (SCOUT_MAX_PAGES / config max_pages)")
+        print(f"worst-case requests : {worst}")
+        print(f"worst-case time     : ~{worst}s"
+              f" (~{worst / 60:.1f} min) at 1 request/second")
+        print()
+        print("The cap is a ceiling, not a budget. A search stops as soon as the")
+        print("site's own result total is accounted for, so the realistic cost is")
+        print("far lower — only searches with more slots than the cap can reach")
+        print("walk all the way. Run without --estimate and read 'pages' in the")
+        print("per-search table for what it actually cost.")
+        print()
+        for kind, term in searches[:20]:
             print(f"    {kind}: {term}")
-        if len(searches) > 12:
-            print(f"    ... and {len(searches) - 12} more")
+        if len(searches) > 20:
+            print(f"    ... and {len(searches) - 20} more")
         return 0
 
     if args.fixture:
@@ -710,8 +744,10 @@ def main():
         snap = measure_fixture(args.fixture, min_level=args.min_level)
     else:
         searches = _searches(args.employers)
+        cap = args.max_pages or scout_config.max_pages()
         print(f"Measuring gov.uk coverage — {len(searches)} searches, "
-              f">=1s apart (worst case ~{len(searches) * (args.max_pages or 5)} requests)")
+              f">=1s apart, up to {cap} pages each "
+              f"(worst case ~{len(searches) * cap} requests)")
         snap = measure(use_employers=args.employers, min_level=args.min_level,
                        max_pages=args.max_pages)
 

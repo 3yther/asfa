@@ -13,6 +13,7 @@ therefore independent of the query. The non-circularity property itself is
 pinned below.
 """
 import importlib.util
+import json
 import os
 import sys
 
@@ -747,7 +748,8 @@ def test_the_report_counts_exclusions_with_reasons():
 
     assert ex["excluded"] == 2
     assert ex["kept"] == 1
-    assert ex["by_reason"] == {"title_excluded": 2}
+    # Both state a non-digital standard, so the standard rule reports them.
+    assert ex["by_reason"] == {"non_digital_standard": 2}
     assert ex["kept_by_reason"] == {"digital_standard": 1}
 
 
@@ -761,8 +763,8 @@ def test_every_excluded_listing_is_listed_with_title_employer_and_reason():
     row = ex["listings"][0]
     assert row["title"] == "Security Guard Apprentice"
     assert row["employer"] == "G4S"
-    assert row["reason"] == "title_excluded"
-    assert row["detail"] == "security guard"
+    assert row["reason"] == "non_digital_standard"
+    assert row["detail"] == "security operative"
     assert row["url"].endswith("/B")
 
 
@@ -777,7 +779,7 @@ def test_listings_record_the_filter_verdict():
     vacs = {"b": _v("B", "Security Guard Apprentice", "Security operative (level 4)")}
     listing = baseline._summarise(vacs, [], [], ["kw"], False)["listings"][0]
     assert listing["kept_by_filter"] is False
-    assert listing["filter_reason"] == "title_excluded"
+    assert listing["filter_reason"] == "non_digital_standard"
 
 
 def test_excluded_count_appears_on_screen(capsys):
@@ -786,7 +788,7 @@ def test_excluded_count_appears_on_screen(capsys):
     out = capsys.readouterr().out
 
     assert "excluded: 1" in out
-    assert "title_excluded" in out
+    assert "non_digital_standard" in out
     assert "Security Guard Apprentice" in out
 
 
@@ -883,3 +885,108 @@ def test_the_script_and_the_scan_share_one_filter():
 
 def test_classifier_version_was_bumped_for_the_filter_change():
     assert baseline.CLASSIFIER_VERSION >= 5
+
+
+# ── Excluded standards are reviewable ───────────────────────────────────────
+# The non_digital_standard rule leans on DIGITAL_STANDARDS, a curated list. An
+# omission from it silently excludes a real digital role, so the report has to
+# make the excluded standards readable rather than leave them as a count.
+
+def test_excluded_standards_are_broken_down_by_frequency():
+    vacs = {}
+    for i in range(3):
+        vacs[f"b{i}"] = _v(f"B{i}", "Business Administrator Apprentice",
+                           "Business administrator (level 4)")
+    for i in range(2):
+        vacs[f"m{i}"] = _v(f"M{i}", "Marketing Apprentice",
+                           "Multi-channel marketer (level 3)")
+    vacs["f"] = _v("F", "Freight Apprentice",
+                   "International freight forwarding specialist (level 3)")
+
+    detail = baseline._summarise(vacs, [], [], ["kw"], False)[
+        "exclusions"]["by_detail"]["non_digital_standard"]
+
+    assert list(detail.items()) == [
+        ("business administrator", 3),
+        ("multi-channel marketer", 2),
+        ("international freight forwarding specialist", 1),
+    ], "most frequent first, so the biggest mistake is the most visible"
+
+
+def test_excluded_standards_are_printed_for_review(capsys):
+    vacs = {"b": _v("B", "Business Administrator Apprentice",
+                    "Business administrator (level 4)")}
+    baseline.report(baseline._summarise(vacs, [], [], ["kw"], False))
+    out = capsys.readouterr().out
+
+    assert "excluded standards" in out
+    assert "CHECK THESE" in out
+    assert "business administrator" in out
+    assert "scout_filters.json" in out, "say how to fix a wrong exclusion"
+
+
+def test_by_detail_covers_every_reason_present():
+    vacs = {
+        "a": _v("A", "Business Administrator Apprentice",
+                "Business administrator (level 4)"),
+        "b": _v("B", "Security Guard Apprentice", ""),
+    }
+    detail = baseline._summarise(vacs, [], [], ["kw"], False)[
+        "exclusions"]["by_detail"]
+
+    assert "non_digital_standard" in detail
+    assert "title_excluded" in detail
+    assert detail["title_excluded"] == {"security guard": 1}
+
+
+def test_a_digital_standard_missing_from_config_can_be_added(tmp_path, monkeypatch):
+    """The escape hatch for the curated-list risk: adding the standard to config
+    reverses the exclusion without a code change."""
+    vac = _v("Z", "Telecoms Apprentice", "Telecoms field operative (level 3)")
+
+    assert baseline._summarise({"z": vac}, [], [], ["kw"], False)[
+        "exclusions"]["excluded"] == 1
+
+    path = tmp_path / "filters.json"
+    path.write_text(json.dumps(
+        {"+digital_standards": ["telecoms field operative"]}))
+    monkeypatch.setenv("SCOUT_FILTERS_PATH", str(path))
+    scout_config.settings(refresh=True)
+    try:
+        assert baseline._summarise({"z": vac}, [], [], ["kw"], False)[
+            "exclusions"]["excluded"] == 0
+    finally:
+        monkeypatch.delenv("SCOUT_FILTERS_PATH", raising=False)
+        scout_config.settings(refresh=True)
+
+
+# ── The request budget ──────────────────────────────────────────────────────
+
+def test_the_estimate_reports_the_new_budget(capsys, monkeypatch):
+    import subprocess
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run(
+        [sys.executable, os.path.join(repo, "scripts",
+                                      "scout_coverage_baseline.py"), "--estimate"],
+        capture_output=True, text=True, cwd=repo)
+
+    assert r.returncode == 0, r.stderr
+    assert "max pages each      : 20" in r.stdout
+    assert "worst-case requests : 340" in r.stdout, "17 searches x 20 pages"
+    assert "1 request/second" in r.stdout
+    assert "ceiling, not a budget" in r.stdout, \
+        "the worst case overstates the real cost; say so"
+
+
+def test_the_estimate_honours_a_page_cap_override():
+    import subprocess
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = dict(os.environ, SCOUT_MAX_PAGES="5")
+    r = subprocess.run(
+        [sys.executable, os.path.join(repo, "scripts",
+                                      "scout_coverage_baseline.py"), "--estimate"],
+        capture_output=True, text=True, cwd=repo, env=env)
+
+    assert r.returncode == 0, r.stderr
+    assert "max pages each      : 5" in r.stdout
+    assert "worst-case requests : 85" in r.stdout

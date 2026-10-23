@@ -93,8 +93,22 @@ def test_keyword_scans_env_var_still_wins(monkeypatch):
 
 def test_security_guard_is_excluded():
     """The named example. It carries the weak term "security", which must not
-    be enough to rescue it."""
+    be enough to rescue it.
+
+    Its STATED standard is "Security operative", so the standard rule reports
+    it first — a better reason than a title guess. The title rule still covers
+    the no-course case below.
+    """
     v = sc.judge("Security Guard Apprentice", "G4S", "Security operative (level 2)")
+    assert v.keep is False
+    assert v.reason == sc.REASON_NON_DIGITAL_STANDARD
+    assert v.detail == "security operative"
+
+
+def test_security_guard_without_a_course_is_caught_by_the_title_rule():
+    """Off-site listings carry no training course, so the title list is the only
+    thing standing between them and the inbox."""
+    v = sc.judge("Security Guard Apprentice", "G4S", "")
     assert v.keep is False
     assert v.reason == sc.REASON_TITLE
     assert v.detail == "security guard"
@@ -103,6 +117,12 @@ def test_security_guard_is_excluded():
 def test_food_hub_project_manager_is_excluded():
     v = sc.judge("Food Hub Project Manager", "Some Council",
                  "Project manager (level 4)")
+    assert v.keep is False
+    assert v.reason == sc.REASON_NON_DIGITAL_STANDARD
+
+
+def test_food_hub_project_manager_without_a_course_is_still_excluded():
+    v = sc.judge("Food Hub Project Manager", "Some Council", "")
     assert v.keep is False
     assert v.reason == sc.REASON_TITLE
 
@@ -181,18 +201,99 @@ def test_course_names_are_normalised(raw, expected):
 
 # ── The bias towards keeping ─────────────────────────────────────────────────
 
-def test_an_unrecognised_listing_is_kept():
+def test_an_unrecognised_listing_with_no_standard_is_kept():
     """Nothing matched either way, so it stays — and the reason records that it
-    was a guess, not a judgement."""
-    v = sc.judge("Widget Polishing Apprentice", "ACME Ltd", "Widget polishing")
+    was a guess, not a judgement.
+
+    No course text, so the standard rule cannot speak to it. A listing that DOES
+    state a non-digital standard is a different case (see below): the standard
+    is evidence, and absence of evidence is not.
+    """
+    v = sc.judge("Widget Polishing Apprentice", "ACME Ltd", "")
     assert v.keep is True
     assert v.reason == sc.KEEP_UNSURE
 
 
-def test_an_ambiguous_engineering_role_is_kept():
+def test_an_unrecognised_non_digital_standard_is_excluded():
+    """CHANGED in Phase 1B. The listing states what the apprentice will train
+    as, and it is not digital, so the search term that found it is irrelevant.
+
+    This narrows "when unsure, keep it" to "when there is NOTHING to go on,
+    keep it". The risk it carries is that DIGITAL_STANDARDS is a curated list,
+    so an omission excludes a real role — which is why the baseline report
+    prints every excluded standard by frequency for review.
+    """
+    v = sc.judge("Widget Polishing Apprentice", "ACME Ltd", "Widget polishing")
+    assert v.keep is False
+    assert v.reason == sc.REASON_NON_DIGITAL_STANDARD
+    assert v.detail == "widget polishing"
+
+
+def test_an_ambiguous_engineering_role_with_no_standard_is_kept():
+    v = sc.judge("Engineering Operative Apprentice", "Factory", "")
+    assert v.keep is True
+
+
+def test_a_stated_engineering_operative_standard_is_excluded():
+    """"engineering" is a WEAK term, so it cannot override the standard."""
     v = sc.judge("Engineering Operative Apprentice", "Factory",
                  "Engineering operative (level 4)")
+    assert v.keep is False
+    assert v.reason == sc.REASON_NON_DIGITAL_STANDARD
+
+
+# ── The non-digital-standard rule, with the examples from the data ──────────
+
+@pytest.mark.parametrize("title,course", [
+    ("Business Administrator Apprentice", "Business administrator (level 4)"),
+    ("Marketing Apprentice", "Multi-channel marketer (level 3)"),
+    ("Freight Apprentice", "International freight forwarding specialist (level 3)"),
+    ("Installer Apprentice", "Interior systems installer (level 2)"),
+    ("Warehouse Apprentice", "Supply chain warehouse operative (level 2)"),
+])
+def test_the_bulk_non_digital_standards_are_excluded(title, course):
+    """The five standards that dominated the widened run's noise."""
+    v = sc.judge(title, "Some Employer", course)
+    assert v.keep is False, f"{course!r} should not survive"
+    assert v.reason == sc.REASON_NON_DIGITAL_STANDARD
+
+
+@pytest.mark.parametrize("title,course", [
+    # a strong term in the title overrides a non-digital standard
+    ("Digital Marketing Apprentice", "Multi-channel marketer (level 3)"),
+    ("IT Apprentice", "Business administrator (level 4)"),
+    ("Software Apprentice", "Supply chain warehouse operative (level 2)"),
+    ("Data Apprentice", "Interior systems installer (level 2)"),
+])
+def test_a_strong_term_overrides_a_non_digital_standard(title, course):
+    """The override that keeps the rule from eating real roles: a digital job
+    advertised against an odd standard is still a digital job."""
+    v = sc.judge(title, "Some Employer", course)
+    assert v.keep is True, f"{title!r} was wrongly excluded"
+    assert v.reason == sc.KEEP_STRONG_TERM
+
+
+@pytest.mark.parametrize("course", [
+    "Software developer (level 4)",
+    "Cyber security technologist (level 4)",
+    "Data analyst (level 4)",
+])
+def test_a_digital_standard_is_never_touched_by_the_rule(course):
+    v = sc.judge("Apprentice", "Some Employer", course)
     assert v.keep is True
+    assert v.reason == sc.KEEP_DIGITAL_STANDARD
+
+
+def test_a_listing_with_no_course_is_not_hit_by_the_standard_rule():
+    """Off-site cross-posts carry no course. They must not all be excluded for
+    failing to state a standard they were never going to state."""
+    v = sc.judge("Software Developer Apprentice (Band 5/EO)",
+                 "Health and Safety Executive", "")
+    assert v.keep is True
+
+
+def test_a_whitespace_only_course_counts_as_no_course():
+    assert sc.judge("Apprentice", "Emp", "   ").keep is True
 
 
 def test_an_empty_listing_is_kept_not_dropped():
