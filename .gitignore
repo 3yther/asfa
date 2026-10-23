@@ -25,3 +25,14 @@ scripts/data/
 *.db-shm
 # CV PDF served by /cv — personal document, this repo is public
 static/cv/
+
+# local test venv (cloud session only)
+.venv-test/
+
+# Backup archives must never be committed. A tracked *-openclaw-backup.tar.gz
+# (an OpenClaw state dump) was removed in Phase 0a; these patterns stop any
+# archive or state dump recurring. History still carries the old blob.
+*.tar.gz
+*.tgz
+*.zip
+*-openclaw-backup*

@@ -6,6 +6,7 @@ matching, external_ref dedup, closure detection, the combined notifier, and the
 never touch gov.uk.
 """
 import os
+import time
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -394,6 +395,88 @@ def test_min_level_filters_out_lower_levels():
 def test_zero_results_short_circuits():
     html = "<html><title>0 results found</title><ul></ul></html>"
     assert GovUkScraper()._parse_search_page(html, min_level=4) == []
+
+
+# ── Scraper politeness ───────────────────────────────────────────────────────
+# A scan issues one search per employer alias plus one per keyword. The gap has
+# to hold across those search boundaries, not just between pages of one search.
+
+def _stub_requests(scraper, html, timestamps):
+    """Point the scraper's session at canned HTML, recording request times."""
+    class _Resp:
+        status_code = 200
+        text = html
+
+        def raise_for_status(self):
+            pass
+
+    def _get(*_a, **_kw):
+        timestamps.append(time.monotonic())
+        return _Resp()
+
+    scraper.session.get = _get
+
+
+def test_identifying_user_agent_is_sent():
+    """gov.uk must be able to tell who is calling, and how to reach them."""
+    ua = GovUkScraper().session.headers["User-Agent"]
+    assert "ASFA-Scout" in ua
+    assert "github.com/3yther/asfa" in ua
+
+
+def test_requests_are_spaced_within_a_search():
+    card = """
+    <li class="das-search-results__list-item">
+      <a href="/apprenticeship/VAC{n}">Apprentice Software Developer</a>
+      <p class="govuk-body">SOME LTD</p>
+      <p class="govuk-body">London</p>
+      <p class="govuk-body"><b>Training course</b> Software developer (level 4)</p>
+    </li>
+    """
+    # Distinct refs per page would need per-call HTML; one page of real results
+    # followed by the same refs makes pagination stop after page 2, which is
+    # enough to prove two requests were spaced.
+    html = f"<html><title>2 results found</title><ul>{card.format(n=1)}</ul></html>"
+    stamps = []
+    s = GovUkScraper(min_interval=0.05)
+    _stub_requests(s, html, stamps)
+    s.by_keyword("software developer")
+    assert len(stamps) >= 2
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    assert min(gaps) >= 0.05
+
+
+def test_requests_are_spaced_across_separate_searches():
+    """The regression this guards: a per-page sleep left consecutive searches
+    firing their first request back-to-back, so a scan with many aliases sent a
+    burst with no gap at all."""
+    html = "<html><title>0 results found</title><ul></ul></html>"
+    stamps = []
+    s = GovUkScraper(min_interval=0.05)
+    _stub_requests(s, html, stamps)
+    for alias in ("Amazon", "Capgemini", "BAE Systems", "JLR"):
+        s.by_employer(alias)
+    assert len(stamps) == 4
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    assert min(gaps) >= 0.05, f"searches fired too close together: {gaps}"
+
+
+def test_first_request_is_not_delayed():
+    """A fresh scraper shouldn't burn an interval before its first request."""
+    html = "<html><title>0 results found</title><ul></ul></html>"
+    stamps = []
+    s = GovUkScraper(min_interval=5.0)
+    _stub_requests(s, html, stamps)
+    started = time.monotonic()
+    s.by_keyword("data")
+    assert stamps[0] - started < 1.0
+
+
+def test_page_cap_is_not_loosened():
+    """At most 5 pages per search. Guards the cap against an accidental raise."""
+    import inspect
+    sig = inspect.signature(GovUkScraper._search_all_pages)
+    assert sig.parameters["max_pages"].default == 5
 
 
 # ── Config ───────────────────────────────────────────────────────────────────

@@ -19,8 +19,17 @@ Parsing strategy: BeautifulSoup on the search results page. The card layout
 is stable HTML with class names starting `das-search-results` / `faa-`.
 If gov.uk changes its markup, only the CSS selectors here need updating.
 
-Politeness (do not loosen): at most 5 pages per search, a 1s sleep between
-page fetches, and a descriptive User-Agent identifying the client.
+Politeness (do not loosen): at most 5 pages per search, a minimum 1s gap
+between *every* HTTP request, and a descriptive User-Agent identifying the
+client.
+
+The gap is enforced at the request layer (`_throttle`), not in the pagination
+loop. A scan issues one search per employer alias plus one per keyword, and a
+per-loop sleep only spaced out pages *within* a search — consecutive searches
+still fired their first request back-to-back, so a scan with many aliases sent
+a burst of page-1 requests with no gap at all. Throttling every request against
+the previous one closes that, and costs nothing when DB work between searches
+has already used up the interval.
 """
 from __future__ import annotations
 
@@ -42,6 +51,10 @@ USER_AGENT = "ASFA-Scout/1.0 (+https://github.com/3yther/asfa; apprenticeship wa
 
 LEVEL_RE = re.compile(r"level\s+(\d)", re.I)
 VAC_REF_RE = re.compile(r"/apprenticeship/(VAC\d+)")
+
+# Minimum seconds between any two requests this scraper makes. Floor, not a
+# target: see the module docstring.
+MIN_REQUEST_INTERVAL = 1.0
 
 
 @dataclass
@@ -69,10 +82,14 @@ class RawVacancy:
 
 
 class GovUkScraper:
-    def __init__(self, user_agent: str = USER_AGENT, timeout: int = 20):
+    def __init__(self, user_agent: str = USER_AGENT, timeout: int = 20,
+                 min_interval: float = MIN_REQUEST_INTERVAL):
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": user_agent, "Accept": "text/html"})
         self.timeout = timeout
+        self.min_interval = min_interval
+        # None until the first request, so a fresh scraper doesn't stall a second.
+        self._last_request_at: Optional[float] = None
 
     # ------------------------------------------------------------------
     # PUBLIC
@@ -96,6 +113,18 @@ class GovUkScraper:
     # ------------------------------------------------------------------
     # INTERNALS
     # ------------------------------------------------------------------
+    def _throttle(self) -> None:
+        """Block until `min_interval` has passed since the previous request.
+
+        Uses a monotonic clock so a system clock adjustment mid-scan can't turn
+        the wait into a long sleep (or skip it).
+        """
+        if self._last_request_at is not None:
+            elapsed = time.monotonic() - self._last_request_at
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+        self._last_request_at = time.monotonic()
+
     def _search_all_pages(
         self, params: dict, min_level: int, max_pages: int = 5
     ) -> list[RawVacancy]:
@@ -118,11 +147,10 @@ class GovUkScraper:
                 seen_refs.add(r.reference)
                 results.append(r)
 
-            time.sleep(1.0)  # be polite
-
         return results
 
     def _search_one_page(self, params: dict, min_level: int) -> list[RawVacancy]:
+        self._throttle()
         try:
             resp = self.session.get(SEARCH_URL, params=params, timeout=self.timeout)
             resp.raise_for_status()
