@@ -73,14 +73,17 @@ def test_multi_word_terms_are_matched_before_their_prefixes():
 
 
 @pytest.mark.parametrize("term", sc.ADDED_SEARCH_KEYWORDS)
-def test_every_added_keyword_is_in_the_search_list(term):
-    assert term in sc.search_keywords()
+def test_every_added_keyword_is_still_searched_somewhere(term):
+    """CHANGED in Phase 1D: the broad terms moved from the production scan to
+    the audit, so "is it searched" now has two possible homes."""
+    assert term in sc.audit_keywords()
 
 
-def test_the_original_six_phrases_are_kept():
-    """Widening must ADD to the search list, not replace it."""
+def test_the_original_six_phrases_are_still_audited():
+    """Widening must ADD, not replace. Four of the six are narrow enough to
+    stay in production; all six remain in the audit."""
     for phrase in sc.ORIGINAL_SEARCH_PHRASES:
-        assert phrase in sc.search_keywords()
+        assert phrase in sc.audit_keywords(), f"{phrase!r} was dropped entirely"
 
 
 def test_keyword_scans_env_var_still_wins(monkeypatch):
@@ -394,10 +397,11 @@ def test_the_shipped_config_file_is_valid_json():
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
     assert isinstance(data, dict)
+    known = set(sc._KEYS) | set(sc._SCALARS) | {"distance"}
     for key in data:
         if key.startswith("_"):
             continue
-        assert key.lstrip("+") in sc._KEYS, f"unknown config key: {key}"
+        assert key.lstrip("+") in known, f"unknown config key: {key}"
 
 
 # ── The verdict object ───────────────────────────────────────────────────────
@@ -495,15 +499,25 @@ def test_a_bad_distance_in_config_falls_back_to_the_default(isolated_config):
 
 # ── Field names we do NOT have are not guessed ──────────────────────────────
 
-def test_the_distance_and_postcode_field_names_have_no_default():
-    """Guessing a field name would send a query that looks local and is
-    silently nationwide — a worse failure than not filtering at all."""
+def test_the_field_names_have_no_PYTHON_default(isolated_config, monkeypatch):
+    """CHANGED in Phase 1D: the names are now in config/scout_filters.json,
+    verified against the live site. There is still no default in Python —
+    guessing a field name would send a query that looks local and is silently
+    nationwide, a worse failure than not filtering at all."""
+    monkeypatch.delenv("SCOUT_DISTANCE_PARAM", raising=False)
+    monkeypatch.delenv("SCOUT_POSTCODE_PARAM", raising=False)
+    monkeypatch.delenv("SCOUT_HOME_POSTCODE", raising=False)
     assert sc.distance_param() is None
     assert sc.postcode_param() is None
 
 
-def test_the_home_postcode_is_config_only_and_never_hardcoded():
+def test_the_home_postcode_is_never_hardcoded_in_python(isolated_config,
+                                                        monkeypatch):
+    """It comes from config. With config isolated there is no postcode at all,
+    which is what "never hardcoded" has to mean."""
+    monkeypatch.delenv("SCOUT_HOME_POSTCODE", raising=False)
     assert sc.home_postcode() == ""
+    assert "DA17" not in str(sc.DEFAULT_SEARCH_KEYWORDS)
 
 
 def test_the_home_postcode_can_be_configured(isolated_config):
@@ -516,3 +530,164 @@ def test_the_field_names_can_be_configured_once_known(isolated_config):
                              "postcode_param": ["location"]})
     assert sc.distance_param() == "distance"
     assert sc.postcode_param() == "location"
+
+
+# ── Standards coverage (Phase 1D audit) ─────────────────────────────────────
+
+@pytest.mark.parametrize("course", [
+    # the Level 6/7 degree standards, named explicitly
+    "Cyber security technical professional (integrated degree) (level 6)",
+    "Digital and technology solutions professional (level 6)",
+    "Digital and technology solutions specialist (level 7)",
+    "Data scientist (integrated degree) (level 6)",
+    "Network engineer (level 6)",
+    "Software engineer (level 6)",
+    "Artificial intelligence (AI) data specialist (level 7)",
+    "Machine learning engineer (level 6)",
+])
+def test_the_level_six_and_seven_degree_standards_are_recognised(course):
+    assert sc.is_digital_standard(course) is True, f"{course!r} not recognised"
+
+
+def test_business_analyst_is_recognised():
+    """The route sweep returned Business Analyst at Level 4 as a Digital-route
+    role while this list did not have it, so `judge` was excluding it. The
+    curated-list risk, realised — hence the report now prints every excluded
+    standard."""
+    assert sc.is_digital_standard("Business analyst (level 4)") is True
+
+
+@pytest.mark.parametrize("raw,expected", [
+    # brackets anywhere, not just a trailing level
+    ("Artificial intelligence (AI) data specialist (level 7)",
+     "artificial intelligence data specialist"),
+    ("Cyber security technical professional (integrated degree) (level 6)",
+     "cyber security technical professional"),
+    ("Data scientist (integrated degree)", "data scientist"),
+    ("Software developer (level 4)", "software developer"),
+])
+def test_bracketed_asides_are_stripped_from_a_standard_name(raw, expected):
+    """A trailing-level strip alone left mid-name brackets in place, so
+    "Artificial intelligence (AI) data specialist" silently failed to match."""
+    assert sc.course_name(raw) == expected
+
+
+def test_stripping_brackets_does_not_merge_distinct_standards():
+    assert sc.course_name("Business administrator (level 4)") == "business administrator"
+    assert sc.is_digital_standard("Business administrator (level 4)") is False
+
+
+# ── Narrow production terms vs broad audit terms ────────────────────────────
+
+def test_production_searches_the_narrow_terms_only():
+    """The 1C run found every one of the 34 keyword hits already inside the
+    route sweep's 42, so the broad single words were buying nothing on every
+    poll. They stay in the audit, where the question can keep being asked."""
+    assert sc.search_keywords() == list(sc.NARROW_SEARCH_KEYWORDS)
+    assert sc.NARROW_SEARCH_KEYWORDS == (
+        "cyber", "cyber security", "software developer", "developer", "devops",
+        "cloud", "network engineer", "data", "computing", "software")
+
+
+def test_the_broad_terms_are_out_of_production():
+    assert sc.BROAD_SEARCH_KEYWORDS == (
+        "engineer", "information", "IT", "technology", "digital", "systems",
+        "security")
+    for term in sc.BROAD_SEARCH_KEYWORDS:
+        assert term not in sc.search_keywords()
+
+
+def test_the_broad_terms_are_still_audited():
+    audit = sc.audit_keywords()
+    for term in sc.BROAD_SEARCH_KEYWORDS:
+        assert term in audit
+    for term in sc.NARROW_SEARCH_KEYWORDS:
+        assert term in audit
+
+
+def test_the_audit_list_has_no_duplicates():
+    audit = sc.audit_keywords()
+    assert len(audit) == len(set(audit))
+
+
+def test_keyword_scans_env_var_overrides_both_lists(monkeypatch):
+    monkeypatch.setenv("KEYWORD_SCANS", "cyber, devops")
+    assert sc.search_keywords() == ["cyber", "devops"]
+    assert sc.audit_keywords() == ["cyber", "devops"]
+    monkeypatch.delenv("KEYWORD_SCANS")
+
+
+# ── The watchlist protects against the standard rule ────────────────────────
+
+def test_the_watchlist_ships_with_the_named_employers():
+    wl = sc.settings()["watchlist_employers"]
+    for name in ("thales", "bae systems", "babcock", "airbus", "leonardo",
+                 "gchq", "ncsc", "dstl", "cavendish nuclear"):
+        assert name in wl
+
+
+@pytest.mark.parametrize("employer", [
+    "BAE SYSTEMS PLC", "Thales UK", "Babcock International Group",
+    "Airbus Operations Ltd", "Leonardo MW Ltd", "GCHQ", "NCSC",
+    "DSTL", "Cavendish Nuclear Limited",
+])
+def test_a_watched_employer_is_kept_for_review_not_excluded(employer):
+    """Never silently drop a watched employer's listing: a defence firm posting
+    against an odd standard is the case most worth a look."""
+    v = sc.judge("Project Manager Apprentice", employer,
+                 "Business administrator (level 4)")
+    assert v.keep is True
+    assert v.reason == sc.KEEP_WATCHLIST_REVIEW
+    assert v.review is True
+    assert v.detail == "business administrator", "the standard must be named"
+    assert v.watchlist
+
+
+def test_an_unwatched_employer_with_the_same_listing_is_excluded():
+    """The protection has to be specific, or it is not a filter at all."""
+    v = sc.judge("Project Manager Apprentice", "Random Ltd",
+                 "Business administrator (level 4)")
+    assert v.keep is False
+    assert v.reason == sc.REASON_NON_DIGITAL_STANDARD
+
+
+def test_the_watchlist_does_not_resurrect_a_title_exclusion():
+    """It guards against the STANDARD rule only. A watched employer's security
+    guard vacancy is still a security guard vacancy."""
+    v = sc.judge("Security Guard Apprentice", "BAE SYSTEMS PLC", "")
+    assert v.keep is False
+    assert v.reason == sc.REASON_TITLE
+
+
+def test_a_watched_employer_with_a_digital_standard_needs_no_review():
+    v = sc.judge("Apprentice", "BAE SYSTEMS PLC",
+                 "Cyber security technologist (level 4)")
+    assert v.keep is True
+    assert v.reason == sc.KEEP_DIGITAL_STANDARD
+    assert v.review is False
+
+
+def test_the_watchlist_is_replaceable_from_config(isolated_config):
+    """It is a starting point; the real list comes from the spreadsheet."""
+    _write(isolated_config, {"watchlist_employers": ["acme defence"]})
+    assert sc.judge("Project Manager Apprentice", "ACME Defence Ltd",
+                    "Business administrator (level 4)").review is True
+    assert sc.judge("Project Manager Apprentice", "BAE SYSTEMS PLC",
+                    "Business administrator (level 4)").keep is False
+
+
+def test_the_verdict_carries_the_review_flag_for_the_log():
+    d = sc.judge("Project Manager Apprentice", "Thales UK",
+                 "Business administrator (level 4)").as_dict()
+    assert d["review"] is True
+    assert d["watchlist"] == "thales"
+
+
+# ── The verified distance/postcode field names ─────────────────────────────
+
+def test_the_verified_field_names_are_configured():
+    """location=DA17&distance=20 returned 2 results on the live site."""
+    assert sc.distance_param() == "distance"
+    assert sc.postcode_param() == "location"
+    assert sc.home_postcode() == "DA17"
+    assert sc.search_distance() == 20

@@ -6,12 +6,30 @@
     "which is usually what you want for exclusions.",
     "Re-read automatically when this file's mtime changes — no redeploy needed.",
     "",
-    "Keys: search_keywords, digital_standards, strong_digital_terms,",
-    "weak_digital_terms, title_exclusions, employer_exclusions.",
+    "Keys: search_keywords (production), audit_keywords (measurement only),",
+    "digital_standards, strong_digital_terms, weak_digital_terms,",
+    "title_exclusions, employer_exclusions, watchlist_employers,",
+    "distance_param, postcode_param, home_postcode, distance, max_pages.",
     "",
     "Run scripts/scout_coverage_baseline.py after editing: the report prints",
     "'excluded: N' with every dropped listing and its reason, so an over-eager",
     "exclusion shows up immediately."
+  ],
+
+  "_filters_note": [
+    "gov.uk's own filter field names, verified against the live site:",
+    "  location=DA17&distance=20  ->  2 results",
+    "Distance must be one of 2, 5, 10, 15, 20, 30, 40, all."
+  ],
+  "distance_param": ["distance"],
+  "postcode_param": ["location"],
+  "home_postcode": ["DA17"],
+  "distance": 20,
+
+  "_watchlist_note": [
+    "Employers whose listings are never silently dropped by the standard rule;",
+    "they surface in the report's 'review' group instead. Replace this with your",
+    "spreadsheet's employers — it overrides the built-in list entirely."
   ],
 
   "+title_exclusions": [],

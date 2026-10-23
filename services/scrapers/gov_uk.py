@@ -166,6 +166,11 @@ class RawVacancy:
     # here, rather than discarded — which is what the old per-page dedup did.
     # `location` stays the first one seen, so existing callers are unaffected.
     locations: tuple = ()
+    # True when the near-home pass also returned this vacancy. A TAG, never a
+    # filter: a role outside the radius is still a role, and quietly dropping
+    # it would hide the degree apprenticeships that are worth relocating or
+    # commuting for. Set by the caller after the near-home sweep.
+    near_home: bool = False
 
     def __post_init__(self):
         # Seed from `location` so a single-location vacancy still reports
@@ -227,6 +232,23 @@ class GovUkScraper:
         """Broad keyword search — useful for spotting new employers."""
         return self._search_all_pages(
             self.search_params(keyword), min_level, stats=stats)
+
+    def by_route_near_home(self, min_level: int = 1,
+                           stats: Optional[dict] = None) -> list[RawVacancy]:
+        """The same route sweep, narrowed to the configured radius from home.
+
+        Used only to TAG listings as near_home; the nationwide sweep is what
+        decides what Scout knows about. Returns [] when no postcode is
+        configured, since a distance with no centre is meaningless.
+        """
+        postcode = scout_config.home_postcode()
+        if not postcode:
+            logger.info("gov_uk: no home_postcode configured — "
+                        "skipping the near-home pass")
+            return []
+        return self.by_route(min_level=min_level,
+                             distance=scout_config.search_distance(),
+                             postcode=postcode, stats=stats)
 
     def by_route(self, min_level: int = 1, distance=None, postcode: str = "",
                  stats: Optional[dict] = None) -> list[RawVacancy]:

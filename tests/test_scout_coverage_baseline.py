@@ -1153,3 +1153,132 @@ def test_the_sweep_is_the_first_search_issued():
 def test_the_sweep_can_be_skipped():
     searches = baseline._searches(use_employers=False, route_sweep=False)
     assert all(kind != "route" for kind, _ in searches)
+
+
+# ── Near-home tagging: a TAG, never a filter ────────────────────────────────
+
+def _nv(ref, title, emp, course="Software developer (level 4)", level=4,
+        near=False):
+    v = RawVacancy(reference=ref, title=title, employer_name_raw=emp,
+                   training_course=course, level=level, location="London",
+                   url=f"https://example.test/{ref}")
+    v.near_home = near
+    return v
+
+
+def test_near_home_listings_are_counted():
+    vacs = {"a": _nv("A", "Cyber Apprentice", "BT",
+                     "Cyber security technologist (level 4)", near=True),
+            "b": _nv("B", "Cloud Apprentice", "AWS",
+                     "Cloud engineer (level 4)")}
+    t = baseline._summarise(vacs, [], [], ["kw"], False)["totals"]
+    assert t["near_home"] == 1
+
+
+def test_a_far_listing_is_kept_not_filtered():
+    """A role outside the radius is still a role — a degree apprenticeship is
+    worth commuting or relocating for, so distance only ever tags."""
+    vacs = {"far": _nv("FAR", "Cyber Apprentice", "BT",
+                       "Cyber security technologist (level 4)", near=False)}
+    snap = baseline._summarise(vacs, [], [], ["kw"], False)
+
+    assert snap["totals"]["unique_results"] == 1
+    assert snap["totals"]["near_home"] == 0
+    assert snap["listings"][0]["kept_by_filter"] is True
+    assert snap["listings"][0]["near_home"] is False
+
+
+def test_listings_carry_the_near_home_tag():
+    vacs = {"a": _nv("A", "Cyber Apprentice", "BT",
+                     "Cyber security technologist (level 4)", near=True)}
+    assert baseline._summarise(vacs, [], [], ["kw"], False)[
+        "listings"][0]["near_home"] is True
+
+
+def test_the_near_home_pass_is_a_separate_search():
+    searches = baseline._searches(use_employers=False)
+    kinds = [k for k, _ in searches]
+    assert "route" in kinds
+    assert "near_home" in kinds
+    assert kinds.index("route") < kinds.index("near_home"), \
+        "the nationwide sweep decides what we know; near-home only tags it"
+
+
+def test_the_near_home_count_is_reported(capsys):
+    vacs = {"a": _nv("A", "Cyber Apprentice", "BT",
+                     "Cyber security technologist (level 4)", near=True)}
+    baseline.report(baseline._summarise(vacs, [], [], ["kw"], False))
+    out = capsys.readouterr().out
+    assert "near home" in out
+    assert "nothing is filtered on distance" in out
+
+
+# ── The review group ────────────────────────────────────────────────────────
+
+def test_watchlist_listings_are_surfaced_for_review_not_excluded():
+    vacs = {
+        "a": _nv("A", "Project Manager Apprentice", "BAE SYSTEMS PLC",
+                 "Business administrator (level 4)"),
+        "b": _nv("B", "Project Manager Apprentice", "Random Ltd",
+                 "Business administrator (level 4)"),
+    }
+    snap = baseline._summarise(vacs, [], [], ["kw"], False)
+
+    assert snap["totals"]["needs_review"] == 1
+    assert snap["exclusions"]["excluded"] == 1, "the unwatched one still goes"
+    review = snap["review_listings"]
+    assert len(review) == 1
+    assert review[0]["employer"] == "BAE SYSTEMS PLC"
+    assert review[0]["standard"] == "business administrator", \
+        "the standard must be named so the call can be made"
+    assert review[0]["watchlist"] == "bae systems"
+
+
+def test_the_review_group_is_printed_with_the_standard(capsys):
+    vacs = {"a": _nv("A", "Engineering Apprentice", "Thales UK",
+                     "Engineering operative (level 4)", near=True)}
+    baseline.report(baseline._summarise(vacs, [], [], ["kw"], False))
+    out = capsys.readouterr().out
+
+    assert "REVIEW — watchlist employers whose standard is not digital" in out
+    assert "Thales UK" in out
+    assert "engineering operative" in out
+    assert "watchlist: thales" in out
+    assert "[near home]" in out
+
+
+def test_no_review_group_when_nothing_needs_one(capsys):
+    vacs = {"a": _nv("A", "Cyber Apprentice", "BT",
+                     "Cyber security technologist (level 4)")}
+    baseline.report(baseline._summarise(vacs, [], [], ["kw"], False))
+    assert "REVIEW —" not in capsys.readouterr().out
+
+
+# ── Every excluded standard is printed ──────────────────────────────────────
+
+def test_all_excluded_standards_are_printed_not_a_head(capsys):
+    """A truncated list is how a wrongly excluded standard stays hidden."""
+    vacs = {}
+    for i in range(55):
+        vacs[f"x{i}"] = _nv(f"X{i}", f"Trade Apprentice {i}", "Emp",
+                            f"Made up standard {i} (level 3)", level=3)
+    snap = baseline._summarise(vacs, [], [], ["kw"], False)
+    assert snap["exclusions"]["excluded"] == 55
+
+    baseline.report(snap)
+    out = capsys.readouterr().out
+
+    for i in range(55):
+        assert f"made up standard {i}" in out, f"standard {i} was truncated away"
+    assert "(55 distinct standards excluded)" in out
+    assert "... and" not in out.split("excluded standards")[1].split(
+        "kept because")[0], "the standards list must not be truncated"
+
+
+def test_the_audit_searches_the_broad_terms():
+    terms = [t for kind, t in baseline._searches(use_employers=False)
+             if kind == "keyword"]
+    for broad in scout_config.BROAD_SEARCH_KEYWORDS:
+        assert broad in terms, f"the audit must still ask about {broad!r}"
+    for narrow in scout_config.NARROW_SEARCH_KEYWORDS:
+        assert narrow in terms

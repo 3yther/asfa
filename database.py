@@ -2106,7 +2106,11 @@ def get_nutrition_trends(days: int = 7, end_date: str = None) -> dict:
     code path powers 7-day trends and the 30-day energy-balance view."""
     days = max(1, min(90, int(days)))
     if end_date is None:
-        end_date = datetime.now().strftime("%Y-%m-%d")
+        # today_str(), not datetime.now(): meals are written against APP_TZ, so
+        # a window ending on the CONTAINER's date asked for a different day.
+        # Between 23:00 UTC and midnight while London is on BST the two are
+        # different dates, and the chart's newest column read back empty.
+        end_date = today_str()
     end = datetime.strptime(end_date, "%Y-%m-%d")
     dates = [(end - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
              for i in range(days)]
@@ -3441,6 +3445,12 @@ def init_apprenticeships():
         _add_column(cur, "scout_jobs", "status", "TEXT DEFAULT 'open'")
         _add_column(cur, "scout_jobs", "last_seen", dt_t)
         _add_column(cur, "scout_jobs", "alerted", "INTEGER DEFAULT 0")
+        # Near-home tag from the radius-limited route pass. Nullable and
+        # defaulted, so every existing row reads back as "not known to be near".
+        _add_column(cur, "scout_jobs", "near_home", "INTEGER DEFAULT 0")
+        # Kept despite a non-digital standard because the employer is watched.
+        _add_column(cur, "scout_jobs", "needs_review", "INTEGER DEFAULT 0")
+        _add_column(cur, "scout_jobs", "review_standard", "TEXT")
 
         # Rows that predate the column (SQLite backfills the DEFAULT, but a
         # pre-existing NULL from an earlier partial run would break filtering).

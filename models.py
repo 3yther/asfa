@@ -143,6 +143,13 @@ class ScoutJob(db.Model):
     status = db.Column(db.String(20), default="open")  # open | closed
     last_seen = db.Column(db.DateTime)
     alerted = db.Column(db.Integer, default=0)
+    # 1 when the near-home route pass also returned this vacancy. A TAG, not a
+    # filter: nothing is dropped for being outside the radius.
+    near_home = db.Column(db.Integer, default=0)
+    # 1 when the relevance filter would have dropped this on its standard but
+    # the employer is on the watchlist, so it was kept for a human to judge.
+    needs_review = db.Column(db.Integer, default=0)
+    review_standard = db.Column(db.String(300))
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     # NULL = active, a timestamp = archived into history. Added by

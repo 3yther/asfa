@@ -43,6 +43,10 @@ _SHORT_ALIAS_LEN = 3
 # look new, and mailing all of them would train the user to ignore the alert.
 _BASELINE_KEY = "apprenticeship_alert_baseline_done"
 
+# A new role is alerted at this level or above, or when its level is unknown.
+# Below it, the listing is still persisted and still on the dashboard.
+_ALERT_MIN_LEVEL = 4
+
 
 def keyword_scans() -> list:
     """The search terms, from services/scout_config (KEYWORD_SCANS still wins).
@@ -113,7 +117,7 @@ def match_employer(raw_name: str, employers=None):
 # ── Persistence ──────────────────────────────────────────────────────────────
 
 def _persist_vacancies(raws, employer, new_bucket, employers=None,
-                       excluded=None) -> int:
+                       excluded=None, alert_skipped=None) -> int:
     """Insert new apprenticeships, refresh last_seen on ones we already have.
 
     Dedup is by `external_ref` (the gov.uk VAC reference, or a namespaced id for
@@ -198,7 +202,17 @@ def _persist_vacancies(raws, employer, new_bucket, employers=None,
         new_count += 1
         # A watchlist match earns a star, not the right to be alerted at all.
         row.starred = bool(matched)
-        new_bucket.append(row)
+        row.needs_review = bool(getattr(verdict, "review", False))
+        row.review_standard = verdict.detail if row.needs_review else ""
+        # The keyword passes no longer apply a level floor, so Level 2/3 roles
+        # are now PERSISTED — they are real listings and worth having on the
+        # dashboard. They are not ALERTED: the rule is a new Level 4+ digital
+        # role, plus the level-unknown group. Alerting Level 2 would undo the
+        # reason the floor existed.
+        if row.level is None or row.level >= _ALERT_MIN_LEVEL:
+            new_bucket.append(row)
+        elif alert_skipped is not None:
+            alert_skipped.append(row.external_ref)
     orm.session.commit()
     return new_count
 
@@ -296,9 +310,12 @@ def scan_apprenticeships() -> dict:
     level = min_level()
     summary = {"employers_scanned": 0, "keywords_scanned": 0, "new": 0,
                "closed": 0, "alerted": 0, "excluded": 0, "errors": [],
-               "baseline_run": False, "route_scanned": 0, "route_found": 0}
+               "baseline_run": False, "route_scanned": 0, "route_found": 0,
+               "near_home_found": 0, "near_home_tagged": 0,
+               "not_alerted_below_level": 0}
     new_bucket = []
     excluded = []
+    alert_skipped = []
 
     employers = Employer.query.filter_by(watching=True).all()
 
@@ -317,7 +334,8 @@ def scan_apprenticeships() -> dict:
             new_count = _persist_vacancies(raws, employer=emp,
                                            new_bucket=new_bucket,
                                            employers=employers,
-                                           excluded=excluded)
+                                           excluded=excluded,
+                                           alert_skipped=alert_skipped)
             summary["employers_scanned"] += 1
             summary["new"] += new_count
             _log_scan("employer", alias, len(raws), new_count, duration_ms)
@@ -339,17 +357,46 @@ def scan_apprenticeships() -> dict:
         new_count = _persist_vacancies(raws, employer=None,
                                        new_bucket=new_bucket,
                                        employers=employers,
-                                       excluded=excluded)
+                                       excluded=excluded,
+                                       alert_skipped=alert_skipped)
         summary["route_scanned"] = 1
         summary["route_found"] = len(raws)
         summary["new"] += new_count
         _log_scan("route", "digital L4+", len(raws), new_count, duration_ms)
 
+    # ---- Near-home pass: TAG only, never filter ----
+    # The same route query narrowed to the configured radius from home. A role
+    # outside the radius is still a role — a degree apprenticeship is worth
+    # commuting or relocating for — so this only marks what is close, and
+    # nothing is dropped for being far.
+    try:
+        near = scraper.by_route_near_home(min_level=1)
+    except ScraperError as e:
+        summary["errors"].append(f"near_home: {e}")
+        near = []
+    if near:
+        near_refs = {r.reference for r in near}
+        summary["near_home_found"] = len(near_refs)
+        tagged = (ScoutJob.query
+                  .filter(ScoutJob.listing_type == "apprenticeship",
+                          ScoutJob.external_ref.in_(near_refs))
+                  .all())
+        for row in tagged:
+            row.near_home = 1
+        if tagged:
+            orm.session.commit()
+        summary["near_home_tagged"] = len(tagged)
+
     # ---- Keyword scans (surface employers we don't track by name) ----
     for kw in keyword_scans():
         started = time.time()
         try:
-            raws = scraper.by_keyword(kw, min_level=level)
+            # NO level filter on the keyword passes. The route sweep already
+            # covers Level 4+ for anything gov.uk tagged to the Digital route;
+            # these passes exist to catch what it cannot see, above all the
+            # off-site Civil Service cross-posts, which carry no course and so
+            # no readable level. A level floor here would discard exactly those.
+            raws = scraper.by_keyword(kw, min_level=1)
         except ScraperError as e:
             summary["errors"].append(f"kw:{kw}: {e}")
             _log_scan("keyword", kw, 0, 0,
@@ -359,7 +406,8 @@ def scan_apprenticeships() -> dict:
         new_count = _persist_vacancies(raws, employer=None,
                                        new_bucket=new_bucket,
                                        employers=employers,
-                                       excluded=excluded)
+                                       excluded=excluded,
+                                       alert_skipped=alert_skipped)
         summary["keywords_scanned"] += 1
         summary["new"] += new_count
         _log_scan("keyword", kw, len(raws), new_count, duration_ms)
@@ -377,6 +425,7 @@ def scan_apprenticeships() -> dict:
     try:
         db.log_scout_exclusions(excluded)
         summary["excluded"] = len(excluded)
+        summary["not_alerted_below_level"] = len(alert_skipped)
     except Exception as e:
         logger.error("apprenticeships: exclusion log failed: %s", e)
 

@@ -83,6 +83,9 @@ def judge(vacancy):
 
 # The route sweep's label, used to attribute vacancies to it in `found_by`.
 ROUTE_TERM = "[route sweep] digital, Level 4+"
+# The same sweep narrowed to the configured radius from home. Its only job is to
+# TAG listings as near_home — nothing is filtered on it.
+NEAR_HOME_TERM = "[route sweep] near home"
 
 
 def _searches(use_employers: bool, route_sweep: bool = True):
@@ -92,12 +95,15 @@ def _searches(use_employers: bool, route_sweep: bool = True):
     wording, so it is the baseline the keyword searches get measured against
     rather than the other way round.
     """
-    from services import apprenticeships
-
     out = []
     if route_sweep:
         out.append(("route", ROUTE_TERM))
-    out += [("keyword", kw) for kw in apprenticeships.keyword_scans()]
+        if scout_config.home_postcode():
+            out.append(("near_home", NEAR_HOME_TERM))
+    # The AUDIT list: narrow + broad. The production scan searches the narrow
+    # terms only; the audit keeps asking whether the broad ones would find
+    # anything the route sweep misses, without production paying for the answer.
+    out += [("keyword", kw) for kw in scout_config.audit_keywords()]
     if use_employers:
         import app as app_module
         from models import Employer
@@ -134,7 +140,9 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True,
             print(f"  [{i}/{len(searches)}] {kind}: {term} ... ", end="", flush=True)
         stats = {}
         try:
-            if kind == "route":
+            if kind == "near_home":
+                raws = scraper.by_route_near_home(min_level=1, stats=stats)
+            elif kind == "route":
                 # No search term: the route filter selects the listings. Also no
                 # local level floor — gov.uk has already filtered via levelIds,
                 # so re-filtering here would only discard listings whose level
@@ -152,6 +160,10 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True,
         fresh = sum(1 for r in raws if r.reference not in by_ref)
         for r in raws:
             by_ref.setdefault(r.reference, r)
+            if kind == "near_home":
+                # A tag on whatever we already hold, never a filter: a role
+                # outside the radius stays in the results untouched.
+                by_ref[r.reference].near_home = True
             # Which terms found this vacancy, so "only the widened terms find
             # it" can be answered without a second run.
             found_by.setdefault(r.reference, []).append(term)
@@ -343,6 +355,18 @@ def _summarise(by_ref, per_search, errors, searches, use_employers,
               "url": by_ref[r].url} for r in refs if r in by_ref),
             key=lambda d: (d["level"] is None, -(d["level"] or 0), d["title"]))
 
+    # Watchlist listings kept despite a non-digital standard. Surfaced with the
+    # standard named, because the whole point is that a human decides.
+    review_listings = sorted(
+        ({"ref": v.reference, "title": v.title,
+          "employer": v.employer_name_raw,
+          "watchlist": verdicts[v.reference].watchlist,
+          "standard": verdicts[v.reference].detail,
+          "level": v.level, "near_home": bool(getattr(v, "near_home", False)),
+          "url": v.url}
+         for v in vacs if verdicts[v.reference].review),
+        key=lambda d: (d["watchlist"] or "", d["title"]))
+
     route_comparison = {
         "ran": sweep_row is not None,
         "sweep_slots_reported": (sweep_row or {}).get("site_reported_total"),
@@ -458,9 +482,13 @@ def _summarise(by_ref, per_search, errors, searches, use_employers,
                 if v.source == SOURCE_FINDAPPRENTICESHIP),
             "multi_location_listings": sum(
                 1 for v in vacs if v.location_count > 1),
+            "near_home": sum(1 for v in vacs if getattr(v, "near_home", False)),
+            "needs_review": sum(
+                1 for v in vacs if verdicts[v.reference].review),
         },
         "coverage": coverage,
         "exclusions": exclusions,
+        "review_listings": review_listings,
         "route_comparison": route_comparison,
         "by_keyword": by_keyword,
         "only_new_keywords_found": len(only_new_refs),
@@ -487,6 +515,8 @@ def _summarise(by_ref, per_search, errors, searches, use_employers,
                 "digital_route": digital_route(v),
                 "kept_by_filter": verdicts[v.reference].keep,
                 "filter_reason": verdicts[v.reference].reason,
+                "near_home": bool(getattr(v, "near_home", False)),
+                "needs_review": verdicts[v.reference].review,
                 "found_by": sorted(set(found_by.get(v.reference, []))),
                 "source": v.source,
                 "url": v.url,
@@ -557,6 +587,8 @@ def report(snap):
     print(f"    off-site listings        : {t.get('external_listings', 0)}")
     print(f"  multi-location roles       : {t.get('multi_location_listings', 0)}"
           f"   (merged from several cards)")
+    print(f"  near home                  : {t.get('near_home', 0)}"
+          f"   (tagged only — nothing is filtered on distance)")
 
     if snap.get("by_source"):
         print()
@@ -679,6 +711,21 @@ def report(snap):
                 print(f"    ... and {len(rows) - 25} more "
                       f"(full list in the JSON snapshot)")
 
+    review = snap.get("review_listings") or []
+    if review:
+        print()
+        print(f"REVIEW — watchlist employers whose standard is not digital "
+              f"({len(review)}):")
+        print("  (kept on purpose: a watched employer posting against an odd")
+        print("   standard is the case most worth a human glance)")
+        for d in review:
+            near = "  [near home]" if d.get("near_home") else ""
+            lvl = d["level"] if d["level"] is not None else "?"
+            print(f"    L{str(lvl):<3} {d['employer'][:26]:<28}{d['title'][:34]:<36}"
+                  f"{near}")
+            print(f"         standard: {d['standard'][:56]}"
+                  f"   (watchlist: {d['watchlist']})")
+
     ex = snap.get("exclusions") or {}
     if ex:
         print()
@@ -693,21 +740,24 @@ def report(snap):
             print("  (a name here that should count as digital means "
                   "DIGITAL_STANDARDS is")
             print("   missing it; add it to config/scout_filters.json)")
-            for name, n in list(details["non_digital_standard"].items())[:20]:
-                print(f"    {name[:52]:<54}{n:>5}")
-            if len(details["non_digital_standard"]) > 20:
-                print(f"    ... and {len(details['non_digital_standard']) - 20} more")
+            # ALL of them, not a head. A truncated list is how a wrongly
+            # excluded standard stays hidden — the point of this section is that
+            # every name is readable.
+            for name, n in details["non_digital_standard"].items():
+                print(f"    {name[:66]:<68}{n:>5}")
+            print(f"    ({len(details['non_digital_standard'])} distinct "
+                  f"standards excluded)")
         if ex.get("kept_by_reason"):
             print("  kept because:")
             for reason, n in ex["kept_by_reason"].items():
                 print(f"    {reason:<24}{n:>5}")
         if ex.get("listings"):
             print("  what was dropped (title | employer | reason):")
-            for d in ex["listings"][:25]:
+            for d in ex["listings"][:60]:
                 print(f"    {d['title'][:38]:<40}{d['employer'][:22]:<24}"
                       f"{d['reason']}:{d['detail'][:18]}")
-            if len(ex["listings"]) > 25:
-                print(f"    ... and {len(ex['listings']) - 25} more "
+            if len(ex["listings"]) > 60:
+                print(f"    ... and {len(ex['listings']) - 60} more "
                       f"(full list in the JSON snapshot)")
 
     bykw = snap.get("by_keyword") or {}
@@ -768,12 +818,15 @@ def compare(a_path, b_path):
         print()
 
     keys = ("unique_results", "level_4_plus", "level_6_plus", "level_unknown",
-            "external_listings", "multi_location_listings", "digital_route",
+            "external_listings", "multi_location_listings", "near_home",
+            "needs_review", "digital_route",
             "digital_route_and_level_4_plus", "route_unclassified")
     label = {"unique_results": "unique listings", "level_4_plus": "Level 4+",
              "level_6_plus": "Level 6+", "level_unknown": "level unknown",
              "external_listings": "off-site listings",
              "multi_location_listings": "multi-location roles",
+             "near_home": "near home",
+             "needs_review": "needs review",
              "digital_route": "digital route",
              "digital_route_and_level_4_plus": "digital route AND L4+",
              "route_unclassified": "course text missing"}

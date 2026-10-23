@@ -34,7 +34,15 @@ _H = {"X-CSRF-Token": "tok"}
 
 
 def _today():
-    return datetime.now().strftime("%Y-%m-%d")
+    """Today in APP_TZ, which is what the writers — and now the trends window —
+    key their rows on.
+
+    Not `datetime.now()`: that is the container clock. Between 23:00 UTC and
+    midnight UTC while London is on BST they are different DAYS. This helper
+    used to agree with a bug in get_nutrition_trends rather than with the app,
+    which is why fixing the helper first made the test fail.
+    """
+    return db.today_str()
 
 
 def _shift(date_str, delta):
@@ -326,3 +334,39 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_14_trends_window_uses_the_app_timezone():
+    """Regression for database.py:2109. The window defaulted to
+    `datetime.now()` — the container clock — while meals are written against
+    APP_TZ. Between 23:00 UTC and midnight during BST those are different
+    DAYS, so the newest column of the chart read back empty.
+    """
+    c = _client()
+    _clear()
+    r = c.get("/api/nutrition/trends?days=7")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["dates"][-1] == db.today_str()
+    print("  14. trends window uses APP_TZ  OK")
+
+
+def test_15_trends_still_honours_an_explicit_end_date():
+    """The fix must only change the DEFAULT."""
+    c = _client()
+    _clear()
+    r = c.get("/api/nutrition/trends?days=3&end=2026-01-15")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    t = r.get_json()
+    assert t["dates"] == ["2026-01-13", "2026-01-14", "2026-01-15"], t["dates"]
+    print("  15. explicit end date still honoured  OK")
+
+
+def test_16_a_meal_logged_today_appears_in_the_newest_column():
+    """The user-visible symptom: log a meal, see it on the chart."""
+    c = _client()
+    _clear()
+    _log(c, _today(), "Today meal", 30, 30, 10, calories=400)
+    t = c.get("/api/nutrition/trends?days=7").get_json()
+    assert t["dates"][-1] == _today()
+    assert t["protein"][-1] == 30, t["protein"]
+    print("  16. today's meal lands in the newest column  OK")

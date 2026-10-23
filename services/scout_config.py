@@ -64,24 +64,51 @@ ORIGINAL_SEARCH_PHRASES = (
     "devops",
 )
 
-# The widened set. Single broad words pull in noise on purpose — the exclusion
-# rules below are what make that affordable, and a wide net plus an auditable
-# exclusion log beats a narrow net that silently misses roles.
-ADDED_SEARCH_KEYWORDS = (
+# NARROW terms: specific enough that nearly everything they return is relevant.
+# These run in the PRODUCTION scan alongside the route sweep, because the sweep
+# cannot see a listing gov.uk has not tagged to the Digital route — notably the
+# off-site Civil Service cross-posts, which carry no level and no course.
+NARROW_SEARCH_KEYWORDS = (
     "cyber",
-    "software",
-    "digital",
-    "technology",
-    "security",
-    "IT",
-    "systems",
+    "cyber security",
+    "software developer",
     "developer",
+    "devops",
+    "cloud",
+    "network engineer",
+    "data",
     "computing",
-    "information",
-    "engineer",
+    "software",
 )
 
-DEFAULT_SEARCH_KEYWORDS = ORIGINAL_SEARCH_PHRASES + ADDED_SEARCH_KEYWORDS
+# BROAD terms: single words that return mostly noise. They stay in the
+# measurement tool's audit mode and are deliberately OUT of the production scan.
+# The 1D run showed the keyword passes found 34 vacancies, every one of them
+# already inside the route sweep's 42 — so the broad terms were paying a large
+# request budget and an exclusion-log tail for nothing the sweep did not have.
+# Keeping them in the audit is what will show if that ever stops being true.
+BROAD_SEARCH_KEYWORDS = (
+    "engineer",
+    "information",
+    "IT",
+    "technology",
+    "digital",
+    "systems",
+    "security",
+)
+
+# Every term the ADDED keyword list introduced, narrow and broad together.
+ADDED_SEARCH_KEYWORDS = tuple(
+    t for t in NARROW_SEARCH_KEYWORDS + BROAD_SEARCH_KEYWORDS
+    if t not in ORIGINAL_SEARCH_PHRASES)
+
+# What the production scan searches: the narrow terms only.
+DEFAULT_SEARCH_KEYWORDS = tuple(dict.fromkeys(NARROW_SEARCH_KEYWORDS))
+
+# What the audit measures: narrow + broad + the original six, de-duplicated and
+# in a stable order.
+AUDIT_SEARCH_KEYWORDS = tuple(dict.fromkeys(
+    ORIGINAL_SEARCH_PHRASES + NARROW_SEARCH_KEYWORDS + BROAD_SEARCH_KEYWORDS))
 
 # ── Relevance signals ────────────────────────────────────────────────────────
 
@@ -127,6 +154,12 @@ DEFAULT_DIGITAL_STANDARDS = (
     "cloud network specialist",
     "games programmer",
     "games developer",
+    # Added in Phase 1D. The route sweep returned Business Analyst at Level 4
+    # as a Digital-route role while this list did not have it, so `judge` was
+    # excluding it as a non-digital standard — the curated-list risk, realised.
+    "business analyst",
+    "data communications technician",
+    "digital accessibility specialist",
 )
 
 # Words that mean "this is a technical role" on their own. Presence of one
@@ -196,6 +229,28 @@ DEFAULT_TITLE_EXCLUSIONS = (
 # from what the exclusion log actually shows, not for guesses shipped in code.
 DEFAULT_EMPLOYER_EXCLUSIONS = ()
 
+# Employers whose listings must never be silently dropped by the standard rule.
+# A defence employer posting against an odd standard is exactly the case worth
+# a human glance, so those listings are KEPT and surfaced in a "review" group
+# with the standard named, rather than excluded.
+#
+# This is the CONFIG watchlist, used by `judge`, which is a pure function and
+# cannot query the database. The separate Employer table still drives the star
+# on alerts. Replace this list with your own employers in
+# config/scout_filters.json; matched as a case-insensitive substring, so keep
+# entries distinctive.
+DEFAULT_WATCHLIST_EMPLOYERS = (
+    "thales",
+    "bae systems",
+    "babcock",
+    "airbus",
+    "leonardo",
+    "gchq",
+    "ncsc",
+    "dstl",
+    "cavendish nuclear",
+)
+
 # ── Reasons recorded in the exclusion log ────────────────────────────────────
 
 REASON_TITLE = "title_excluded"
@@ -209,6 +264,9 @@ REASON_NON_DIGITAL_STANDARD = "non_digital_standard"
 KEEP_DIGITAL_STANDARD = "digital_standard"
 KEEP_STRONG_TERM = "strong_digital_term"
 KEEP_UNSURE = "kept_unsure"
+# Kept despite a non-digital standard, because the employer is watched. Needs a
+# human glance, so it is surfaced in its own group rather than mixed in.
+KEEP_WATCHLIST_REVIEW = "watchlist_review"
 
 
 # ── Loading the overrides ────────────────────────────────────────────────────
@@ -250,11 +308,13 @@ _KEYS = {
     "postcode_param": (),
     "home_postcode": (),
     "search_keywords": DEFAULT_SEARCH_KEYWORDS,
+    "audit_keywords": AUDIT_SEARCH_KEYWORDS,
     "digital_standards": DEFAULT_DIGITAL_STANDARDS,
     "strong_digital_terms": DEFAULT_STRONG_DIGITAL_TERMS,
     "weak_digital_terms": DEFAULT_WEAK_DIGITAL_TERMS,
     "title_exclusions": DEFAULT_TITLE_EXCLUSIONS,
     "employer_exclusions": DEFAULT_EMPLOYER_EXCLUSIONS,
+    "watchlist_employers": DEFAULT_WATCHLIST_EMPLOYERS,
 }
 
 
@@ -410,7 +470,7 @@ def max_pages() -> int:
 
 
 def search_keywords() -> list:
-    """Terms to search gov.uk with.
+    """Terms the PRODUCTION scan searches gov.uk with: the narrow ones.
 
     KEYWORD_SCANS still wins if it is set, so an operator can pin the search
     list from the environment without editing anything.
@@ -419,6 +479,21 @@ def search_keywords() -> list:
     if env:
         return [k.strip() for k in env.split(",") if k.strip()]
     return list(settings()["search_keywords"])
+
+
+def audit_keywords() -> list:
+    """Every term, narrow and broad, for the coverage measurement only.
+
+    Kept separate from `search_keywords` so the audit can keep asking whether
+    the broad terms would find anything the route sweep misses, without the
+    production scan paying for the answer on every poll.
+    """
+    env = os.environ.get("KEYWORD_SCANS")
+    if env:
+        return [k.strip() for k in env.split(",") if k.strip()]
+    configured = list(settings()["search_keywords"])
+    broad = [t for t in settings()["audit_keywords"] if t not in configured]
+    return configured + broad
 
 
 # ── Matching ─────────────────────────────────────────────────────────────────
@@ -463,10 +538,22 @@ def _pattern_for(key: str) -> re.Pattern:
 
 _COURSE_LEVEL_RE = re.compile(r"\s*[\(\[]?\s*(level|lvl)\s*\d+\s*[\)\]]?\s*$", re.I)
 
+# Bracketed asides anywhere in a standard's name. gov.uk writes them mid-name as
+# well as at the end — "Artificial intelligence (AI) data specialist",
+# "Cyber security technical professional (integrated degree)" — so a trailing
+# level strip alone left the middle ones in place and the match silently failed.
+_COURSE_BRACKET_RE = re.compile(r"\s*[\(\[][^)\]]*[\)\]]")
+
 
 def course_name(course: str) -> str:
-    """A training-course string reduced to its standard name."""
-    return " ".join(_COURSE_LEVEL_RE.sub("", (course or "").strip()).split()).casefold()
+    """A training-course string reduced to its standard name.
+
+    Lower-cased, trailing level suffix removed, bracketed asides removed, inner
+    whitespace collapsed.
+    """
+    text = _COURSE_LEVEL_RE.sub("", (course or "").strip())
+    text = _COURSE_BRACKET_RE.sub(" ", text)
+    return " ".join(text.split()).casefold()
 
 
 def is_digital_standard(course: str) -> bool:
@@ -496,6 +583,23 @@ def matched_title_exclusion(title: str):
     return m.group(1).lower() if m else None
 
 
+def matched_watchlist_employer(employer: str):
+    """The watchlist entry this employer matches, or None.
+
+    Substring, case-insensitive, for the same reason as the exclusion list: a
+    company name is not a sentence, and "bae systems" should match
+    "BAE SYSTEMS PLC".
+    """
+    name = (employer or "").casefold()
+    if not name:
+        return None
+    for term in settings()["watchlist_employers"]:
+        t = term.strip().casefold()
+        if t and t in name:
+            return t
+    return None
+
+
 def matched_employer_exclusion(employer: str):
     """Employer exclusions are substrings, not whole words.
 
@@ -518,14 +622,20 @@ def matched_employer_exclusion(employer: str):
 class Verdict:
     """Why a listing was kept or dropped. Carries the reason for the log."""
 
-    __slots__ = ("keep", "reason", "detail", "digital", "terms")
+    __slots__ = ("keep", "reason", "detail", "digital", "terms",
+                 "watchlist", "review")
 
-    def __init__(self, keep, reason, detail="", digital=False, terms=()):
+    def __init__(self, keep, reason, detail="", digital=False, terms=(),
+                 watchlist=None, review=False):
         self.keep = keep
         self.reason = reason
         self.detail = detail
         self.digital = digital
         self.terms = tuple(terms)
+        # The watchlist entry matched, when one was what saved the listing.
+        self.watchlist = watchlist
+        # True when a human should look at this rather than trust the filter.
+        self.review = review
 
     def __repr__(self):
         return (f"Verdict(keep={self.keep}, reason={self.reason!r}, "
@@ -533,7 +643,8 @@ class Verdict:
 
     def as_dict(self):
         return {"keep": self.keep, "reason": self.reason, "detail": self.detail,
-                "digital": self.digital, "terms": list(self.terms)}
+                "digital": self.digital, "terms": list(self.terms),
+                "watchlist": self.watchlist, "review": self.review}
 
 
 def judge(title: str, employer: str = "", course: str = "") -> Verdict:
@@ -584,6 +695,13 @@ def judge(title: str, employer: str = "", course: str = "") -> Verdict:
     if stated and not strong:
         # The standard is known (there is course text) and step 1 already
         # established it is not a Digital one.
+        watched = matched_watchlist_employer(employer)
+        if watched:
+            # Never silently drop a watched employer's listing. A defence firm
+            # posting against an odd standard is the case most worth a look.
+            return Verdict(True, KEEP_WATCHLIST_REVIEW, detail=stated,
+                           digital=bool(terms), terms=terms,
+                           watchlist=watched, review=True)
         return Verdict(False, REASON_NON_DIGITAL_STANDARD, detail=stated,
                        digital=bool(terms), terms=terms)
 
