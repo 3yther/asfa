@@ -38,6 +38,7 @@ import time
 from dataclasses import dataclass, asdict
 from datetime import date
 from typing import Optional
+from urllib.parse import urlsplit, urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -50,7 +51,20 @@ SEARCH_URL = BASE_URL + "/apprenticeships"
 USER_AGENT = "ASFA-Scout/1.0 (+https://github.com/3yther/asfa; apprenticeship watcher)"
 
 LEVEL_RE = re.compile(r"level\s+(\d)", re.I)
+
+# The reference format this scraper was written against.
 VAC_REF_RE = re.compile(r"/apprenticeship/(VAC\d+)")
+
+# Any trailing path segment that looks like an id (has a digit in it). Used to
+# derive a stable reference from a detail link whose shape VAC_REF_RE does not
+# cover, so an unrecognised format costs us the tidy reference and NOT the
+# listing. Dropping 16 of 21 "software developer" results for failing a regex
+# is the single largest source of the coverage gap measured on 2026-10-23.
+ID_SEGMENT_RE = re.compile(r"^(?=[^/]*\d)([A-Za-z0-9][A-Za-z0-9._-]*)$")
+
+# Hrefs that are never a vacancy's identity.
+_NON_DETAIL_HREF_RE = re.compile(
+    r"^\s*(#|mailto:|tel:|javascript:|data:)", re.I)
 
 # The site's own result count, from the <title> ("47 results found").
 #
@@ -232,7 +246,7 @@ class GovUkScraper:
         vacancies: list[RawVacancy] = []
         seen_in_page = set()
         for card in cards:
-            v = self._parse_card(card)
+            v = self._parse_card(card, stats=stats)
             if not v:
                 # No parseable /apprenticeship/VAC… link. Counted, because a
                 # reference format this regex doesn't cover would drop real
@@ -255,16 +269,23 @@ class GovUkScraper:
             stats["kept"] = stats.get("kept", 0) + len(vacancies)
         return vacancies
 
-    def _parse_card(self, card) -> Optional[RawVacancy]:
-        # Reference from URL
-        link = card.find("a", href=VAC_REF_RE)
+    def _parse_card(self, card, stats: Optional[dict] = None) -> Optional[RawVacancy]:
+        # Reference from the card's title link. Prefer the VAC form this scraper
+        # was built for; otherwise derive a stable id rather than discard the
+        # listing (see reference_from_href).
+        link = card.find("a", href=VAC_REF_RE) or _primary_link(card)
         if not link:
             return None
-        m = VAC_REF_RE.search(link["href"])
-        if not m:
+        reference, kind = reference_from_href(link.get("href", ""))
+        if not reference:
             return None
-        reference = m.group(1)
-        url = BASE_URL + link["href"]
+        if stats is not None:
+            kinds = stats.setdefault("ref_kinds", {})
+            kinds[kind] = kinds.get(kind, 0) + 1
+
+        # urljoin handles both a site-relative href and an absolute one, so a
+        # fully-qualified link can't become BASE_URL + "https://...".
+        url = urljoin(BASE_URL + "/", link["href"].strip())
 
         # Title
         title = link.get_text(strip=True)
@@ -352,24 +373,79 @@ class ScraperError(Exception):
     pass
 
 
-def _note_unmatched(stats: dict, card) -> None:
-    """Record a sample of the hrefs on a dropped card.
+def _note_unmatched(stats: dict, card, limit: int = 8) -> None:
+    """Record EVERY href on a dropped card, unfiltered.
 
-    The point is to make an unknown reference format visible instead of
-    guessable. VAC_REF_RE only matches `/apprenticeship/VAC<digits>`; if gov.uk
-    also serves numeric-only references, or a different path, those listings are
-    dropped silently and a scrape just looks small. A handful of real hrefs
-    answers that immediately.
+    The previous version kept only hrefs containing "apprentice" — it filtered
+    by a guess about the very format it existed to discover. A card linking to
+    e.g. /vacancy/<id> was dropped AND left unsampled, so the diagnostic read
+    "16 dropped, 0 samples" and said nothing. Record everything and let the
+    reader judge; a handful of raw hrefs is cheap.
     """
     samples = stats.setdefault("unmatched_href_samples", [])
-    if len(samples) >= 5:
-        return
     for a in card.find_all("a", href=True):
-        href = a["href"]
-        if "apprentice" in href.lower() and href not in samples:
+        if len(samples) >= limit:
+            return
+        href = (a["href"] or "").strip()
+        if href and href not in samples:
             samples.append(href)
-            if len(samples) >= 5:
-                return
+
+
+def _primary_link(card):
+    """The anchor that identifies this card: its title link.
+
+    Prefers an anchor inside a heading, which is where the job title sits in
+    gov.uk's card markup. Falls back to the first anchor with real text that is
+    not a fragment or mailto, so a "save this vacancy" control or an icon-only
+    link cannot become the listing's identity.
+    """
+    for level in ("h1", "h2", "h3", "h4"):
+        for heading in card.find_all(level):
+            a = heading.find("a", href=True)
+            if a and not _NON_DETAIL_HREF_RE.match(a["href"] or ""):
+                return a
+    for a in card.find_all("a", href=True):
+        href = a["href"] or ""
+        if _NON_DETAIL_HREF_RE.match(href):
+            continue
+        if a.get_text(strip=True):
+            return a
+    return None
+
+
+def reference_from_href(href: str):
+    """(reference, kind) for a vacancy detail link, or (None, None).
+
+    kind is reported in the scrape stats so an unexpected format shows up as a
+    count rather than as a quiet shortfall:
+
+      "vac"     /apprenticeship/VAC1000123     -> VAC1000123
+      "id"      /vacancy/1000284512            -> 1000284512
+      "path"    /something/with-no-id-segment  -> the normalised path
+
+    Falling back to the path keeps the listing: `external_ref` only has to be
+    stable per listing for dedup to work, and a detail URL is.
+    """
+    if not href:
+        return None, None
+    href = href.strip()
+    if _NON_DETAIL_HREF_RE.match(href):
+        return None, None
+
+    m = VAC_REF_RE.search(href)
+    if m:
+        return m.group(1), "vac"
+
+    path = urlsplit(href).path.rstrip("/")
+    if not path:
+        return None, None
+
+    segments = [s for s in path.split("/") if s]
+    if segments:
+        last = segments[-1]
+        if ID_SEGMENT_RE.match(last):
+            return last, "id"
+    return path.lower(), "path"
 
 
 # ----------------------------------------------------------------------

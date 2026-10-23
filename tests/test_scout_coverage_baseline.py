@@ -206,9 +206,9 @@ def test_fixture_mode_dedupes_across_pages(tmp_path):
     assert s["totals"]["digital_route"] == 2
 
 
-def test_fixture_mode_surfaces_dropped_references(tmp_path):
-    """The offline path has to expose the same diagnostics as a live run, or it
-    cannot be used to reproduce a coverage gap."""
+def test_fixture_mode_keeps_a_numeric_reference(tmp_path):
+    """A numeric reference used to be dropped here. The offline path has to
+    reflect the fix, or it cannot be used to reproduce a coverage gap."""
     (tmp_path / "p.html").write_text(
         '<html><title>1 result found</title><ul>'
         '<li class="das-search-results__list-item">'
@@ -218,9 +218,23 @@ def test_fixture_mode_surfaces_dropped_references(tmp_path):
         '</li></ul></html>')
 
     s = baseline.measure_fixture(str(tmp_path), min_level=1)
+    assert s["totals"]["unique_results"] == 1
+    assert s["coverage"]["total_dropped_no_ref"] == 0
+    assert s["coverage"]["ref_kinds"] == {"id": 1}
+
+
+def test_fixture_mode_surfaces_genuinely_unusable_cards(tmp_path):
+    """A card with no usable detail link is still counted and sampled."""
+    (tmp_path / "p.html").write_text(
+        '<html><title>1 result found</title><ul>'
+        '<li class="das-search-results__list-item">'
+        '<a href="#save">Save</a>'
+        '<p class="govuk-body">ACME</p></li></ul></html>')
+
+    s = baseline.measure_fixture(str(tmp_path), min_level=1)
     assert s["totals"]["unique_results"] == 0
     assert s["coverage"]["total_dropped_no_ref"] == 1
-    assert "/apprenticeship/1234567" in s["coverage"]["unmatched_href_samples"]
+    assert "#save" in s["coverage"]["unmatched_href_samples"]
 
 
 def test_measurement_writes_no_database_rows(tmp_path):
@@ -243,3 +257,166 @@ def test_measurement_writes_no_database_rows(tmp_path):
     with db.get_db() as conn:
         after = conn.cursor().execute("SELECT COUNT(*) FROM scout_jobs").fetchone()[0]
     assert after == before
+
+
+# ── --compare must tolerate older snapshots ──────────────────────────────────
+# A v3 snapshot carries `digital` (the old circular title-keyword metric) and no
+# `digital_route`, `coverage` or `query_params_sent`. Comparing one against a v4
+# snapshot has to work: those files are the only record of the earlier runs.
+
+def _v3_snapshot():
+    return {
+        "classifier_version": 3,
+        "searches_issued": 6,
+        "employer_sweep": False,
+        "errors": [],
+        "totals": {"unique_results": 43, "level_4_plus": 19, "level_6_plus": 3,
+                   "digital": 42, "digital_and_level_4_plus": 19,
+                   "level_unknown": 0},
+        "by_level": {"4": 16},
+        "per_search": [],
+        "listings": [{"ref": "VAC1", "title": "Cyber Apprentice", "level": 4,
+                      "employer": "BT"}],
+    }
+
+
+def _v4_snapshot():
+    s = baseline._summarise({}, [], [], ["a"] * 6, False)
+    s["totals"].update(unique_results=61, level_4_plus=28, level_6_plus=5,
+                       digital_route=44, digital_route_and_level_4_plus=24,
+                       route_unclassified=2)
+    s["listings"] = [{"ref": "VAC1", "title": "Cyber Apprentice", "level": 4,
+                      "employer": "BT"},
+                     {"ref": "1000284512", "title": "SW Eng", "level": 4,
+                      "employer": "ACME"}]
+    return s
+
+
+def _write(tmp_path, name, obj):
+    import json
+    p = tmp_path / name
+    p.write_text(json.dumps(obj))
+    return str(p)
+
+
+def test_compare_handles_a_v3_snapshot_without_digital_route(tmp_path, capsys):
+    a = _write(tmp_path, "v3.json", _v3_snapshot())
+    b = _write(tmp_path, "v4.json", _v4_snapshot())
+
+    baseline.compare(a, b)          # must not raise
+    out = capsys.readouterr().out
+
+    # Classifier-independent metrics still diff.
+    assert "+18" in out, "unique listings delta should still be computed"
+    assert "+9" in out, "Level 4+ delta should still be computed"
+    # Classifier-dependent ones are marked, not diffed.
+    assert "n/c" in out
+    assert "classifier versions differ (3 vs 4)" in out
+
+
+def test_compare_names_the_legacy_metric_rather_than_dropping_it(tmp_path, capsys):
+    a = _write(tmp_path, "v3.json", _v3_snapshot())
+    b = _write(tmp_path, "v4.json", _v4_snapshot())
+    baseline.compare(a, b)
+    out = capsys.readouterr().out
+    assert "legacy title-keyword" in out
+    assert "42" in out, "the old value should still be visible, just labelled"
+
+
+def test_compare_still_diffs_digital_within_one_version(tmp_path, capsys):
+    b = _v4_snapshot()
+    a = _v4_snapshot()
+    a["totals"]["digital_route"] = 30
+    pa = _write(tmp_path, "a.json", a)
+    pb = _write(tmp_path, "b.json", b)
+
+    baseline.compare(pa, pb)
+    out = capsys.readouterr().out
+    assert "+14" in out, "same classifier version must diff the digital metric"
+    assert "classifier versions differ" not in out
+
+
+def test_compare_reports_newly_found_listings(tmp_path, capsys):
+    a = _write(tmp_path, "v3.json", _v3_snapshot())
+    b = _write(tmp_path, "v4.json", _v4_snapshot())
+    baseline.compare(a, b)
+    out = capsys.readouterr().out
+    assert "newly found : 1" in out
+    assert "SW Eng" in out
+
+
+def test_compare_survives_a_snapshot_with_no_listings_key(tmp_path, capsys):
+    a = _v3_snapshot(); del a["listings"]
+    pa = _write(tmp_path, "a.json", a)
+    pb = _write(tmp_path, "b.json", _v4_snapshot())
+    baseline.compare(pa, pb)        # must not raise
+    assert "newly found" in capsys.readouterr().out
+
+
+# ── Dropped-href samples reach the screen ────────────────────────────────────
+
+def test_dropped_href_samples_are_printed_next_to_their_search(capsys):
+    """The last run reported "DROPPED 16" with no sign of what. The samples now
+    print against the search that produced them, not only in a summary."""
+    card = ('<li class="das-search-results__list-item">'
+            '<a href="#save">Save</a><p class="govuk-body">ACME</p></li>')
+    html = f"<html><title>1 result found</title><ul>{card}</ul></html>"
+
+    class _Resp:
+        status_code = 200
+        text = html
+
+        def raise_for_status(self):
+            pass
+
+    import services.apprenticeships as appr
+    from services.scrapers.gov_uk import GovUkScraper
+
+    real_init = GovUkScraper.__init__
+
+    def patched_init(self, *a, **k):
+        real_init(self, *a, **k)
+        self.min_interval = 0
+        self.session.get = lambda *_a, **_k: _Resp()
+
+    orig_keywords = appr.keyword_scans
+    GovUkScraper.__init__ = patched_init
+    appr.keyword_scans = lambda: ["software developer"]
+    try:
+        baseline.measure(use_employers=False, min_level=1, verbose=True)
+    finally:
+        GovUkScraper.__init__ = real_init
+        appr.keyword_scans = orig_keywords
+
+    out = capsys.readouterr().out
+    assert "DROPPED 1" in out
+    assert "could not parse" in out
+    assert "#save" in out, "the actual href must be on screen"
+
+
+def test_non_vac_reference_formats_are_flagged_on_screen(capsys):
+    snap = baseline._summarise(
+        {}, [{"term": "software developer", "returned": 21,
+              "site_reported_total": 21, "pages_fetched": 1, "cards_seen": 21,
+              "dropped_no_ref": 0, "dropped_below_level": 0,
+              "stopped_because": "repeats", "ref_kinds": {"vac": 5, "id": 16},
+              "unmatched_href_samples": []}],
+        [], ["a"], False)
+    baseline.report(snap)
+    out = capsys.readouterr().out
+    assert "reference formats seen" in out
+    assert "id=16" in out and "vac=5" in out
+
+
+def test_report_says_so_when_drops_had_no_captured_hrefs(capsys):
+    """Distinguishes "nothing captured" from "nothing dropped" — the ambiguity
+    that made the last report unreadable."""
+    snap = baseline._summarise(
+        {}, [{"term": "x", "returned": 0, "site_reported_total": 5,
+              "pages_fetched": 1, "cards_seen": 5, "dropped_no_ref": 5,
+              "dropped_below_level": 0, "stopped_because": "empty_page",
+              "ref_kinds": {}, "unmatched_href_samples": []}],
+        [], ["a"], False)
+    baseline.report(snap)
+    out = capsys.readouterr().out
+    assert "none captured" in out

@@ -191,6 +191,7 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True):
                "dropped_below_level": stats.get("dropped_below_level", 0),
                "level_unparsed": stats.get("level_unparsed", 0),
                "stopped_because": stats.get("stopped_because"),
+               "ref_kinds": stats.get("ref_kinds", {}),
                "unmatched_href_samples": stats.get("unmatched_href_samples", [])}
         per_search.append(row)
         if verbose:
@@ -199,8 +200,33 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True):
             drop = (f"  DROPPED {row['dropped_no_ref']} unparseable"
                     if row["dropped_no_ref"] else "")
             print(f"{len(raws)} ({fresh} new){gap}{drop}")
+            # Print the samples HERE, next to the search that produced them.
+            # Burying them in a summary is how the last run reported "16
+            # dropped" with no sign of what was dropped.
+            if row["dropped_no_ref"]:
+                if row["unmatched_href_samples"]:
+                    print(f"      hrefs we could not parse "
+                          f"({len(row['unmatched_href_samples'])} sampled):")
+                    for h in row["unmatched_href_samples"]:
+                        print(f"        {h}")
+                else:
+                    print("      (no hrefs captured on the dropped cards — the "
+                          "cards may carry no anchor at all)")
+            if row["ref_kinds"]:
+                kinds = ", ".join(f"{k}={v}" for k, v in sorted(row["ref_kinds"].items()))
+                if set(row["ref_kinds"]) - {"vac"}:
+                    print(f"      reference formats: {kinds}"
+                          f"   <-- non-VAC references present")
 
     return _summarise(by_ref, per_search, errors, searches, use_employers)
+
+
+def _merge_counts(dicts):
+    out = {}
+    for d in dicts:
+        for k, v in (d or {}).items():
+            out[k] = out.get(k, 0) + v
+    return dict(sorted(out.items()))
 
 
 def _summarise(by_ref, per_search, errors, searches, use_employers):
@@ -230,6 +256,7 @@ def _summarise(by_ref, per_search, errors, searches, use_employers):
             1 for r in per_search if r.get("stopped_because") == "page_cap"),
         "unmatched_href_samples": sorted({
             h for r in per_search for h in r.get("unmatched_href_samples", [])}),
+        "ref_kinds": _merge_counts(r.get("ref_kinds", {}) for r in per_search),
     }
 
     return {
@@ -291,6 +318,7 @@ def measure_fixture(fixture_dir, min_level=1):
                            "dropped_below_level": stats.get("dropped_below_level", 0),
                            "level_unparsed": stats.get("level_unparsed", 0),
                            "stopped_because": None,
+                           "ref_kinds": stats.get("ref_kinds", {}),
                            "unmatched_href_samples": stats.get("unmatched_href_samples", [])})
     return _summarise(by_ref, per_search, [], names, False)
 
@@ -332,10 +360,16 @@ def report(snap):
     print(f"    dropped, below min level   : {c.get('total_dropped_below_level')}")
     print(f"    searches hitting page cap  : {c.get('searches_stopped_at_page_cap')}"
           f" / {snap['searches_issued']}")
+    if c.get("ref_kinds"):
+        kinds = ", ".join(f"{k}={v}" for k, v in c["ref_kinds"].items())
+        print(f"    reference formats seen      : {kinds}")
     if c.get("unmatched_href_samples"):
-        print("    sample hrefs we could NOT parse (reference format?):")
-        for h in c["unmatched_href_samples"][:5]:
+        print("    hrefs we could NOT parse (all captured, unfiltered):")
+        for h in c["unmatched_href_samples"]:
             print(f"        {h}")
+    elif c.get("total_dropped_no_ref"):
+        print("    hrefs we could NOT parse    : none captured — the dropped")
+        print("                                  cards carry no anchor at all")
 
     print()
     print("per search:")
@@ -369,31 +403,60 @@ def report(snap):
             print(f"    {e['kind']} {e['term']}: {e['error'][:110]}")
 
 
+# Metrics whose definition changed with CLASSIFIER_VERSION 4. A snapshot from
+# before that carries the old circular `digital` key instead, and the two are
+# not the same measurement, so they are shown as n/c rather than diffed.
+_CLASSIFIER_DEPENDENT = ("digital_route", "digital_route_and_level_4_plus",
+                         "route_unclassified")
+
+
 def compare(a_path, b_path):
     a = json.load(open(a_path))
     b = json.load(open(b_path))
-    if a.get("classifier_version") != b.get("classifier_version"):
-        print(f"WARNING: classifier versions differ "
-              f"({a.get('classifier_version')} vs {b.get('classifier_version')}) "
-              f"— these numbers are not comparable.")
+    av, bv = a.get("classifier_version"), b.get("classifier_version")
+    mixed = av != bv
+    if mixed:
+        print(f"NOTE: classifier versions differ ({av} vs {bv}).")
+        print("      Level and count metrics are still comparable — they do not")
+        print("      depend on the classifier. The digital metrics are not, and")
+        print("      are shown as n/c. Version 4 replaced a title-keyword match")
+        print("      with one based on the apprenticeship standard.")
         print()
+
     keys = ("unique_results", "level_4_plus", "level_6_plus", "digital_route",
             "digital_route_and_level_4_plus", "route_unclassified")
     label = {"unique_results": "unique listings", "level_4_plus": "Level 4+",
              "level_6_plus": "Level 6+", "digital_route": "digital route",
              "digital_route_and_level_4_plus": "digital route AND L4+",
              "route_unclassified": "course text missing"}
+
     print(f"{'metric':<26}{'before':>9}{'after':>9}{'delta':>9}")
     print("-" * 53)
     for k in keys:
-        before, after = a["totals"][k], b["totals"][k]
-        print(f"{label[k]:<26}{before:>9}{after:>9}{after - before:>+9}")
-    a_refs = {x["ref"] for x in a["listings"]}
-    b_refs = {x["ref"] for x in b["listings"]}
+        before = (a.get("totals") or {}).get(k)
+        after = (b.get("totals") or {}).get(k)
+        if before is None and after is None:
+            continue            # neither snapshot has it; nothing to say
+        if before is None or after is None or (mixed and k in _CLASSIFIER_DEPENDENT):
+            b_s = "-" if before is None else str(before)
+            a_s = "-" if after is None else str(after)
+            print(f"{label[k]:<26}{b_s:>9}{a_s:>9}{'n/c':>9}")
+        else:
+            print(f"{label[k]:<26}{before:>9}{after:>9}{after - before:>+9}")
+
+    # An older snapshot's circular metric, named so it is not mistaken for the
+    # new one rather than quietly omitted.
+    for snap, side in ((a, "before"), (b, "after")):
+        legacy = (snap.get("totals") or {}).get("digital")
+        if legacy is not None:
+            print(f"{'  (legacy title-keyword ' + side + ')':<26}{legacy:>9}"
+                  f"{'':>9}{'n/c':>9}")
+    a_refs = {x["ref"] for x in a.get("listings", [])}
+    b_refs = {x["ref"] for x in b.get("listings", [])}
     print()
     print(f"newly found : {len(b_refs - a_refs)}")
     print(f"lost        : {len(a_refs - b_refs)}")
-    for x in b["listings"]:
+    for x in b.get("listings", []):
         if x["ref"] in (b_refs - a_refs):
             lvl = x["level"] if x["level"] is not None else "?"
             print(f"    + L{lvl} {x['title'][:58]}  ({x['employer'][:28]})")

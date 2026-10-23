@@ -16,7 +16,8 @@ import database as db
 from models import Employer, ScanLog, ScoutJob
 from models import db as orm
 from services import apprenticeships, scout_notify
-from services.scrapers.gov_uk import GovUkScraper, RawVacancy, _parse_uk_date
+from services.scrapers.gov_uk import (GovUkScraper, RawVacancy, _parse_uk_date,
+                                      reference_from_href)
 
 
 @pytest.fixture
@@ -441,10 +442,10 @@ def test_reported_total_reads_the_sites_own_count(title, expected):
 
 # ── Parse diagnostics ────────────────────────────────────────────────────────
 
-def test_unparseable_references_are_counted_not_silently_dropped():
-    """A listing whose link isn't /apprenticeship/VAC<digits> used to vanish
-    without trace, which is indistinguishable from the site having fewer
-    results. The samples are what identify an unknown reference format."""
+def test_a_page_mixing_reference_formats_keeps_everything():
+    """Was: the numeric card here was dropped and the VAC one kept. Both are
+    kept now, and the format mix is reported so a new shape is visible as a
+    count rather than as a quiet shortfall."""
     cards = """
     <li class="das-search-results__list-item">
       <a href="/apprenticeship/1234567">Data Apprentice</a>
@@ -463,10 +464,11 @@ def test_unparseable_references_are_counted_not_silently_dropped():
     stats = {}
     parsed = GovUkScraper()._parse_search_page(html, min_level=4, stats=stats)
 
-    assert len(parsed) == 1
+    assert len(parsed) == 2
     assert stats["cards_seen"] == 2
-    assert stats["dropped_no_ref"] == 1
-    assert "/apprenticeship/1234567" in stats["unmatched_href_samples"]
+    assert stats.get("dropped_no_ref", 0) == 0
+    assert stats["ref_kinds"] == {"id": 1, "vac": 1}
+    assert {v.reference for v in parsed} == {"1234567", "VAC9"}
 
 
 def test_stats_record_the_sites_total_and_why_pagination_stopped():
@@ -510,6 +512,124 @@ def test_hitting_the_page_cap_is_reported():
     assert len(got) == 50
     assert stats["pages_fetched"] == 5
     assert stats["stopped_because"] == "page_cap"
+
+
+# ── Reference parsing: the main source of the coverage gap ───────────────────
+# Measured 2026-10-23: gov.uk reported 21 results for "software developer" and
+# the scraper kept 5, dropping 16 whose detail links did not match
+# /apprenticeship/VAC<digits>. A listing must not be lost over its link shape.
+
+@pytest.mark.parametrize("href,expected_ref,expected_kind", [
+    # The format the scraper was written against.
+    ("/apprenticeship/VAC1000123", "VAC1000123", "vac"),
+    ("/apprenticeship/VAC1000123?searchTerm=data&page=2", "VAC1000123", "vac"),
+    ("/apprenticeship/VAC1000123#details", "VAC1000123", "vac"),
+    ("https://www.findapprenticeship.service.gov.uk/apprenticeship/VAC1000123",
+     "VAC1000123", "vac"),
+    # Numeric ids, and other paths, which used to be dropped outright.
+    ("/apprenticeship/1000284512", "1000284512", "id"),
+    ("/vacancy/1000284512", "1000284512", "id"),
+    ("/vacancies/1000284512", "1000284512", "id"),
+    ("/find-an-apprenticeship/1234", "1234", "id"),
+    ("/apprenticeships/VAC1000123", "VAC1000123", "id"),
+    ("/apprenticeship/1000284512/", "1000284512", "id"),
+    # No id-shaped segment: fall back to the path, which is still stable.
+    ("/apprenticeship/some-slug", "/apprenticeship/some-slug", "path"),
+])
+def test_reference_is_derived_from_any_detail_link(href, expected_ref, expected_kind):
+    ref, kind = reference_from_href(href)
+    assert ref == expected_ref
+    assert kind == expected_kind
+
+
+@pytest.mark.parametrize("href", ["#", "", "   ", "mailto:a@b.c", "javascript:void(0)",
+                                  "tel:+441234567890"])
+def test_non_detail_hrefs_yield_no_reference(href):
+    """A utility control must never become a listing's identity."""
+    assert reference_from_href(href) == (None, None)
+
+
+def _card(href, title="Apprentice Software Developer", emp="IBM UK",
+          course="Software developer (level 4)"):
+    return (f'<li class="das-search-results__list-item">'
+            f'<h2 class="das-search-results__heading">'
+            f'<a href="{href}">{title}</a></h2>'
+            f'<p class="govuk-body">{emp}</p>'
+            f'<p class="govuk-body">London</p>'
+            f'<p class="govuk-body"><b>Training course</b> {course}</p></li>')
+
+
+def test_the_measured_shortfall_is_recovered():
+    """The exact shape reported on 2026-10-23: site says 21, 5 on the VAC
+    format and 16 on another. Previously 5 were kept; all 21 must be now."""
+    cards = [_card(f"/apprenticeship/VAC100{i}") for i in range(5)]
+    cards += [_card(f"/vacancy/10002845{i:02d}") for i in range(16)]
+    html = f"<html><title>21 results found</title><ul>{''.join(cards)}</ul></html>"
+
+    stats = {}
+    got = GovUkScraper()._parse_search_page(html, min_level=4, stats=stats)
+
+    assert len(got) == 21, "listings are still being dropped on link shape"
+    assert stats.get("dropped_no_ref", 0) == 0
+    assert stats["ref_kinds"] == {"vac": 5, "id": 16}
+    assert len({v.reference for v in got}) == 21, "references must stay unique"
+
+
+def test_urls_stay_absolute_for_every_link_shape():
+    """`url` is what the Apply link opens, so a relative href must be joined to
+    the site root and an absolute one must not be doubled up."""
+    for href in ("/vacancy/1000284512",
+                 "/apprenticeship/VAC1",
+                 "https://www.findapprenticeship.service.gov.uk/apprenticeship/VAC1"):
+        html = f"<html><title>1 result found</title><ul>{_card(href)}</ul></html>"
+        v = GovUkScraper()._parse_search_page(html, min_level=4)[0]
+        assert v.url.startswith("https://www.findapprenticeship.service.gov.uk/")
+        assert "https://www.findapprenticeship.service.gov.uk/https" not in v.url
+
+
+def test_dropped_card_hrefs_are_captured_unfiltered():
+    """The diagnostic's own bug: it only recorded hrefs containing
+    "apprentice", filtering by a guess about the format it existed to find. A
+    card linking to /vacancy/<id> was dropped AND unsampled, so the report read
+    "16 dropped, 0 samples" and said nothing."""
+    card = ('<li class="das-search-results__list-item">'
+            '<a href="#save">Save</a>'
+            '<p class="govuk-body">ACME</p></li>')
+    html = f"<html><title>1 result found</title><ul>{card}</ul></html>"
+    stats = {}
+    got = GovUkScraper()._parse_search_page(html, min_level=4, stats=stats)
+
+    assert got == []
+    assert stats["dropped_no_ref"] == 1
+    assert "#save" in stats["unmatched_href_samples"], \
+        "every href on a dropped card must be captured, not just matching ones"
+
+
+def test_a_card_with_no_anchor_at_all_is_dropped_cleanly():
+    card = ('<li class="das-search-results__list-item">'
+            '<p class="govuk-body">ACME</p>'
+            '<p class="govuk-body"><b>Training course</b> Software developer (level 4)</p>'
+            '</li>')
+    html = f"<html><title>1 result found</title><ul>{card}</ul></html>"
+    stats = {}
+    assert GovUkScraper()._parse_search_page(html, min_level=4, stats=stats) == []
+    assert stats["dropped_no_ref"] == 1
+
+
+def test_the_title_link_wins_over_a_utility_link():
+    """Identity comes from the heading link, not whichever anchor is first."""
+    card = ('<li class="das-search-results__list-item">'
+            '<a href="/save/999">Save this vacancy</a>'
+            '<h2 class="das-search-results__heading">'
+            '<a href="/vacancy/1000284512">Apprentice Software Developer</a></h2>'
+            '<p class="govuk-body">IBM UK</p>'
+            '<p class="govuk-body">London</p>'
+            '<p class="govuk-body"><b>Training course</b> Software developer (level 4)</p>'
+            '</li>')
+    html = f"<html><title>1 result found</title><ul>{card}</ul></html>"
+    v = GovUkScraper()._parse_search_page(html, min_level=4)[0]
+    assert v.reference == "1000284512"
+    assert v.title == "Apprentice Software Developer"
 
 
 # ── The query actually sent ──────────────────────────────────────────────────
