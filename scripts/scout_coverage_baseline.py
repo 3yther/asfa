@@ -34,102 +34,49 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from services import scout_config  # noqa: E402
 from services.scrapers.gov_uk import (GovUkScraper, ScraperError,  # noqa: E402
                                       SOURCE_FINDAPPRENTICESHIP)
 
 # ── Classifying a listing as digital ─────────────────────────────────────────
-# CLASSIFIER_VERSION 4 replaces a title-keyword match, which was circular: it
-# scored titles found BY tech keywords against those same tech keywords, so it
-# could only ever return ~100%. A baseline of "42 of 43 are digital" measured
-# the search, not the corpus.
+# The lists and the keep/drop decision live in services/scout_config, shared
+# with the production scan. If the two filtered differently these numbers would
+# describe something the app does not do.
 #
-# The replacement classifies on the APPRENTICESHIP STANDARD (gov.uk's "Training
-# course" field), which the employer picks from a fixed national catalogue when
-# posting. It is not derived from the query, so the same listing classifies the
-# same way however it was found — which is what makes a before/after comparison
-# across different keyword sets meaningful.
-#
-# Snapshots record CLASSIFIER_VERSION, and --compare refuses to treat two
-# versions as comparable.
-CLASSIFIER_VERSION = 4
+# CLASSIFIER_VERSION 5: filtering moved into scout_config and the report now
+# carries exclusion counts. The digital signal is still the apprenticeship
+# STANDARD rather than a title keyword match — scoring titles found BY tech
+# keywords against those same keywords could only ever return ~100%.
+CLASSIFIER_VERSION = 5
 
-# Standards on the Digital route of the national catalogue, as they appear in
-# the "Training course" field (lower-cased, level suffix stripped). Matched on
-# the standard NAME, so a listing titled "Apprentice (Ref 8812)" still
-# classifies correctly from its course.
-#
-# NOT VERIFIED against gov.uk's own route filter — that needs the live site, and
-# a `routeIds`-style query parameter would give the authoritative answer. Until
-# then this is a curated list and `route_unclassified` below reports how much it
-# fails to cover, so its blind spots are visible instead of silent.
-DIGITAL_STANDARDS = (
-    "cyber security technologist",
-    "cyber security technician",
-    "cyber security engineer",
-    "cyber security technical professional",
-    "software developer",
-    "software development technician",
-    "software engineer",
-    "software tester",
-    "data analyst",
-    "data engineer",
-    "data scientist",
-    "data technician",
-    "network engineer",
-    "network cable installer",
-    "digital and technology solutions professional",
-    "digital and technology solutions specialist",
-    "digital support technician",
-    "digital service designer",
-    "digital user experience professional",
-    "digital product manager",
-    "digital marketer",
-    "information communications technician",
-    "it solutions technician",
-    "it support technician",
-    "computer science",
-    "unified communications technician",
-    "unified communications trouble shooter",
-    "devops engineer",
-    "artificial intelligence data specialist",
-    "machine learning engineer",
-    "cloud engineer",
-    "cloud network specialist",
-    "games programmer",
-    "games developer",
-)
-
-# Level suffixes and decoration gov.uk appends to a course name.
-_COURSE_CLEAN_RE = re.compile(
-    r"\s*[\(\[]?\s*(level|lvl)\s*\d+\s*[\)\]]?\s*$", re.I)
+DIGITAL_STANDARDS = tuple(scout_config.settings()["digital_standards"])
 
 
 def course_name(vacancy) -> str:
-    """The standard name, lower-cased with any trailing level suffix removed."""
-    raw = (vacancy.training_course or "").strip()
-    raw = _COURSE_CLEAN_RE.sub("", raw)
-    return " ".join(raw.split()).casefold()
+    return scout_config.course_name(vacancy.training_course)
 
 
 def digital_route(vacancy) -> bool:
     """True when the listing's apprenticeship standard is a Digital one.
 
-    Query-independent: it reads only the standard the employer selected.
+    Query-independent: reads only the standard the employer selected.
     """
-    name = course_name(vacancy)
-    if not name:
-        return False
-    return any(name == s or name.startswith(s) for s in DIGITAL_STANDARDS)
+    return scout_config.is_digital_standard(vacancy.training_course)
 
 
 def route_unclassified(vacancy) -> bool:
     """No course text, so the standard cannot be read either way.
 
     Reported separately rather than counted as non-digital: these are the
-    listings the metric genuinely cannot speak to, and lumping them in with
-    "not digital" would overstate the classifier's reach.
+    listings the metric genuinely cannot speak to.
     """
     return not course_name(vacancy)
+
+
+def judge(vacancy):
+    """The keep/drop verdict the production scan would reach for this listing."""
+    return scout_config.judge(vacancy.title, vacancy.employer_name_raw,
+                              vacancy.training_course)
 
 
 # ── Measurement ──────────────────────────────────────────────────────────────
@@ -164,6 +111,7 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True):
             _o(params, lvl, _c, stats=stats))
 
     by_ref = {}
+    found_by = {}
     per_search = []
     errors = []
 
@@ -183,6 +131,9 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True):
         fresh = sum(1 for r in raws if r.reference not in by_ref)
         for r in raws:
             by_ref.setdefault(r.reference, r)
+            # Which terms found this vacancy, so "only the widened terms find
+            # it" can be answered without a second run.
+            found_by.setdefault(r.reference, []).append(term)
         row = {"kind": kind, "term": term,
                "returned": len(raws), "new_to_run": fresh,
                "site_reported_total": stats.get("reported_total"),
@@ -223,7 +174,8 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True):
                     print(f"      reference formats: {kinds}"
                           f"   <-- non-VAC references present")
 
-    return _summarise(by_ref, per_search, errors, searches, use_employers)
+    return _summarise(by_ref, per_search, errors, searches, use_employers,
+                      found_by=found_by)
 
 
 # ── Likely cross-post detection (FLAG ONLY — Phase 2 owns dedupe) ────────────
@@ -300,9 +252,52 @@ def _merge_counts(dicts):
     return dict(sorted(out.items()))
 
 
-def _summarise(by_ref, per_search, errors, searches, use_employers):
+def _summarise(by_ref, per_search, errors, searches, use_employers,
+               found_by=None):
     vacs = list(by_ref.values())
+    found_by = found_by or {}
     levels = Counter(v.level if v.level is not None else "unknown" for v in vacs)
+
+    # What the production relevance filter would drop, and why. Run over the
+    # same listings the scan would see, so "excluded: N" is the real number.
+    verdicts = {v.reference: judge(v) for v in vacs}
+    kept = [v for v in vacs if verdicts[v.reference].keep]
+    dropped = [v for v in vacs if not verdicts[v.reference].keep]
+    exclusions = {
+        "excluded": len(dropped),
+        "kept": len(kept),
+        "by_reason": dict(sorted(Counter(
+            verdicts[v.reference].reason for v in dropped).items())),
+        "kept_by_reason": dict(sorted(Counter(
+            verdicts[v.reference].reason for v in kept).items())),
+        # Every excluded listing, with the reason — the audit trail.
+        "listings": sorted(
+            ({"ref": v.reference, "title": v.title,
+              "employer": v.employer_name_raw,
+              "course": v.training_course,
+              "reason": verdicts[v.reference].reason,
+              "detail": verdicts[v.reference].detail,
+              "url": v.url} for v in dropped),
+            key=lambda d: (d["reason"], d["title"])),
+    }
+
+    # Per-keyword attribution: which terms found what, and which vacancies only
+    # the widened terms reach. Computed from one run rather than by diffing two.
+    original = set(scout_config.ORIGINAL_SEARCH_PHRASES)
+    only_new_refs = {ref for ref, terms in found_by.items()
+                     if not (set(terms) & original)}
+    by_keyword = {}
+    for ref, terms in found_by.items():
+        for term in set(terms):
+            entry = by_keyword.setdefault(term, {
+                "distinct_vacancies": 0, "new_vs_original_six": 0,
+                "is_original_phrase": term in original})
+            entry["distinct_vacancies"] += 1
+            if ref in only_new_refs:
+                entry["new_vs_original_six"] += 1
+    by_keyword = dict(sorted(
+        by_keyword.items(),
+        key=lambda kv: (-kv[1]["distinct_vacancies"], kv[0])))
     lvl4plus = [v for v in vacs if v.level is not None and v.level >= 4]
     lvl6plus = [v for v in vacs if v.level is not None and v.level >= 6]
     digital = [v for v in vacs if digital_route(v)]
@@ -387,6 +382,10 @@ def _summarise(by_ref, per_search, errors, searches, use_employers):
                 1 for v in vacs if v.location_count > 1),
         },
         "coverage": coverage,
+        "exclusions": exclusions,
+        "by_keyword": by_keyword,
+        "only_new_keywords_found": len(only_new_refs),
+        "original_phrases": list(scout_config.ORIGINAL_SEARCH_PHRASES),
         "by_level": {str(k): v for k, v in sorted(
             levels.items(), key=lambda kv: (kv[0] == "unknown", kv[0]))},
         "by_source": {k: v for k, v in sorted(
@@ -407,6 +406,9 @@ def _summarise(by_ref, per_search, errors, searches, use_employers):
                 "course": v.training_course,
                 "course_normalised": course_name(v),
                 "digital_route": digital_route(v),
+                "kept_by_filter": verdicts[v.reference].keep,
+                "filter_reason": verdicts[v.reference].reason,
+                "found_by": sorted(set(found_by.get(v.reference, []))),
                 "source": v.source,
                 "url": v.url,
             } for v in vacs),
@@ -543,6 +545,40 @@ def report(snap):
                               for d in digital_set) else " "
             print(f"  {star} {course[:52]:<54}{n:>4}")
 
+    ex = snap.get("exclusions") or {}
+    if ex:
+        print()
+        print(f"excluded: {ex.get('excluded', 0)}"
+              f"   (kept {ex.get('kept', 0)} of "
+              f"{ex.get('excluded', 0) + ex.get('kept', 0)})")
+        for reason, n in (ex.get("by_reason") or {}).items():
+            print(f"    {reason:<24}{n:>5}")
+        if ex.get("kept_by_reason"):
+            print("  kept because:")
+            for reason, n in ex["kept_by_reason"].items():
+                print(f"    {reason:<24}{n:>5}")
+        if ex.get("listings"):
+            print("  what was dropped (title | employer | reason):")
+            for d in ex["listings"][:25]:
+                print(f"    {d['title'][:38]:<40}{d['employer'][:22]:<24}"
+                      f"{d['reason']}:{d['detail'][:18]}")
+            if len(ex["listings"]) > 25:
+                print(f"    ... and {len(ex['listings']) - 25} more "
+                      f"(full list in the JSON snapshot)")
+
+    bykw = snap.get("by_keyword") or {}
+    if bykw:
+        print()
+        print(f"per keyword — {snap.get('only_new_keywords_found', 0)} vacancies "
+              f"are reachable ONLY via the widened terms:")
+        print(f"    {'term':<24}{'uniq':>6}{'new':>6}  origin")
+        for term, d in bykw.items():
+            origin = "original six" if d["is_original_phrase"] else "added"
+            print(f"    {term[:23]:<24}{d['distinct_vacancies']:>6}"
+                  f"{d['new_vs_original_six']:>6}  {origin}")
+        print("    uniq = distinct vacancies this term found | "
+              "new = of those, not found by any original phrase")
+
     groups = snap.get("likely_duplicate_groups") or []
     if groups:
         cross = sum(1 for g in groups if g["cross_source"])
@@ -619,6 +655,11 @@ def compare(a_path, b_path):
         if legacy is not None:
             print(f"{'  (legacy title-keyword ' + side + ')':<26}{legacy:>9}"
                   f"{'':>9}{'n/c':>9}")
+    for snap_, side in ((a, "before"), (b, "after")):
+        exc = (snap_.get("exclusions") or {}).get("excluded")
+        if exc is not None:
+            print(f"{'  excluded (' + side + ')':<26}{exc:>9}{'':>9}{'n/c':>9}")
+
     a_refs = {x["ref"] for x in a.get("listings", [])}
     b_refs = {x["ref"] for x in b.get("listings", [])}
     print()

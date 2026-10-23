@@ -1,6 +1,7 @@
 import calendar
 import hashlib
 import json
+import logging
 import os
 import random
 import re
@@ -9,6 +10,8 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger("asfa.database")
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -3226,6 +3229,24 @@ def _ensure_scout_tables():
             created_at TEXT,
             updated_at TEXT
         )""",
+        # Listings the relevance filter dropped. Kept so a wide keyword net is
+        # auditable instead of a black box: the bias is to keep anything
+        # uncertain, and this is how you check what that bias actually cost.
+        # One row per external_ref — a listing excluded on every scan must not
+        # grow the log without bound.
+        """CREATE TABLE IF NOT EXISTS scout_exclusions (
+            external_ref TEXT PRIMARY KEY,
+            title TEXT,
+            employer TEXT,
+            reason TEXT,
+            detail TEXT,
+            course TEXT,
+            url TEXT,
+            listing_type TEXT,
+            first_excluded_at TEXT,
+            last_excluded_at TEXT,
+            times_seen INTEGER DEFAULT 1
+        )""",
     ]
     with get_db() as conn:
         cur = conn.cursor()
@@ -3751,6 +3772,95 @@ def get_scout_pipeline_reminders(days: int = 7) -> list:
             f"AND date_applied IS NOT NULL AND date_applied <= {ph} "
             f"ORDER BY date_applied ASC", (cutoff,))
         return [dict(r) for r in cur.fetchall()]
+
+
+# ── Scout relevance-filter exclusion log ────────────────────────────────────
+
+def log_scout_exclusions(rows) -> int:
+    """Record listings the relevance filter dropped. Returns rows newly logged.
+
+    Upserts on external_ref: a listing excluded on every scan bumps a counter
+    rather than adding a row, so the log stays a catalogue of what was dropped
+    instead of a per-scan transcript. Never raises — a failure to log must not
+    abort a scan.
+    """
+    if not rows:
+        return 0
+    _ensure_scout_tables()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    inserted = 0
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            ph = "%s" if USE_POSTGRES else "?"
+            for r in rows:
+                ref = (r.get("external_ref") or "").strip()
+                if not ref:
+                    continue
+                cur.execute(
+                    f"SELECT times_seen FROM scout_exclusions "
+                    f"WHERE external_ref = {ph}", (ref,))
+                existing = cur.fetchone()
+                if existing:
+                    cur.execute(
+                        f"UPDATE scout_exclusions SET last_excluded_at = {ph}, "
+                        f"times_seen = times_seen + 1, reason = {ph}, "
+                        f"detail = {ph} WHERE external_ref = {ph}",
+                        (now, r.get("reason"), r.get("detail"), ref))
+                    continue
+                cur.execute(
+                    f"INSERT INTO scout_exclusions (external_ref, title, employer, "
+                    f"reason, detail, course, url, listing_type, "
+                    f"first_excluded_at, last_excluded_at, times_seen) "
+                    f"VALUES ({','.join([ph] * 11)})",
+                    (ref, r.get("title"), r.get("employer"), r.get("reason"),
+                     r.get("detail"), r.get("course"), r.get("url"),
+                     r.get("listing_type", "apprenticeship"), now, now, 1))
+                inserted += 1
+    except Exception as e:
+        logger.warning("log_scout_exclusions failed: %s", e)
+        return 0
+    return inserted
+
+
+def get_scout_exclusions(limit: int = 200, listing_type=None) -> list:
+    """The exclusion log, most recently excluded first."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if listing_type:
+            cur.execute(
+                f"SELECT * FROM scout_exclusions WHERE listing_type = {ph} "
+                f"ORDER BY last_excluded_at DESC, external_ref LIMIT {ph}",
+                (listing_type, limit))
+        else:
+            cur.execute(
+                f"SELECT * FROM scout_exclusions "
+                f"ORDER BY last_excluded_at DESC, external_ref LIMIT {ph}",
+                (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def count_scout_exclusions(listing_type=None) -> dict:
+    """{"total": N, "by_reason": {reason: n}} — the "excluded: N" the UI shows."""
+    _ensure_scout_tables()
+    out = {"total": 0, "by_reason": {}}
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if listing_type:
+            cur.execute(
+                f"SELECT reason, COUNT(*) AS n FROM scout_exclusions "
+                f"WHERE listing_type = {ph} GROUP BY reason", (listing_type,))
+        else:
+            cur.execute("SELECT reason, COUNT(*) AS n FROM scout_exclusions "
+                        "GROUP BY reason")
+        for row in cur.fetchall():
+            r = dict(row)
+            out["by_reason"][r["reason"] or "(none)"] = r["n"]
+    out["total"] = sum(out["by_reason"].values())
+    return out
 
 
 def preview_job_pipeline_cleanup(days: int = 14) -> dict:

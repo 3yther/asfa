@@ -15,7 +15,7 @@ import app as app_module
 import database as db
 from models import Employer, ScanLog, ScoutJob
 from models import db as orm
-from services import apprenticeships, scout_notify
+from services import apprenticeships, scout_config, scout_notify
 from services.scrapers.gov_uk import (GovUkScraper, RawVacancy, _parse_uk_date,
                                       clean_title, reference_from_href)
 
@@ -117,15 +117,24 @@ def test_dedup_by_external_ref(watchlist):
     assert first_seen is not None
 
 
-def test_only_matched_employers_are_queued_for_alert(watchlist):
-    """Unmatched gov.uk noise is persisted for the record but never alerts."""
+def test_both_watched_and_unwatched_employers_are_queued_for_alert(watchlist):
+    """CHANGED in Phase 1: a Level 4+ digital role is alerted whoever posts it.
+
+    This used to assert that only watchlist matches reached the bucket, which
+    meant a genuine role from an employer not on the list was persisted and then
+    never mentioned. The watchlist now earns a STAR instead of gatekeeping.
+    """
     raws = [
         _raw("VAC900010", "AMAZON UK SERVICES LTD."),
         _raw("VAC900011", "CTRL O LTD"),
     ]
     bucket = []
     assert apprenticeships._persist_vacancies(raws, None, bucket, watchlist) == 2
-    assert [r.external_ref for r in bucket] == ["VAC900010"]
+    assert sorted(r.external_ref for r in bucket) == ["VAC900010", "VAC900011"]
+
+    starred = {r.external_ref: r.starred for r in bucket}
+    assert starred["VAC900010"] is True, "watchlist match should be starred"
+    assert starred["VAC900011"] is False
 
     noise = ScoutJob.query.filter_by(external_ref="VAC900011").one()
     assert noise.employer_id is None
@@ -267,7 +276,10 @@ def test_combined_email_groups_by_source_with_badges(watchlist):
         [scout_notify._as_row(j, scout_notify.JOB) for j in jobs],
         [scout_notify._as_row(a, scout_notify.APPRENTICESHIP) for a in appr])
 
-    assert "Jobs (1)" in html and "Apprenticeships (1)" in html
+    # The apprenticeship group is now split by level, so an unknown level is
+    # labelled rather than implied (see _without_level).
+    assert "Jobs (1)" in html
+    assert "Apprenticeships \u00b7 Level 4+ (1)" in html
     assert ">JOB\n" in html or "JOB" in html
     assert "APPRENTICESHIP" in html
     # The fields the decision actually gets made on.
@@ -1046,10 +1058,17 @@ def test_page_cap_is_not_loosened():
 # ── Config ───────────────────────────────────────────────────────────────────
 
 def test_keyword_scans_default_and_override(monkeypatch):
+    """CHANGED in Phase 1: the default list is the widened one from
+    services/scout_config, which keeps the original six and adds to them."""
     monkeypatch.delenv("KEYWORD_SCANS", raising=False)
-    assert apprenticeships.keyword_scans() == [
-        "cyber security", "software developer", "data", "cloud",
-        "network engineer", "devops"]
+    terms = apprenticeships.keyword_scans()
+
+    for phrase in scout_config.ORIGINAL_SEARCH_PHRASES:
+        assert phrase in terms, f"the original phrase {phrase!r} was dropped"
+    for added in scout_config.ADDED_SEARCH_KEYWORDS:
+        assert added in terms, f"the added keyword {added!r} is missing"
+    assert len(terms) == len(scout_config.ORIGINAL_SEARCH_PHRASES) + len(
+        scout_config.ADDED_SEARCH_KEYWORDS)
 
     monkeypatch.setenv("KEYWORD_SCANS", "cyber security, devops ,")
     assert apprenticeships.keyword_scans() == ["cyber security", "devops"]
@@ -1149,3 +1168,258 @@ def test_a_merged_multi_location_vacancy_persists_as_one_row(watchlist):
     assert len(rows) == 1
     assert rows[0].location == "Bootle"
     assert len(bucket) == 1, "one vacancy must produce one alert, not four"
+
+
+# ── Alerting on any Level 4+ digital role, not just the watchlist ───────────
+
+def _appr_raw(ref, title, employer, course="Software developer (level 4)",
+              level=4, location="London"):
+    return RawVacancy(reference=ref, title=title, employer_name_raw=employer,
+                      training_course=course, level=level, location=location,
+                      url=f"https://example.test/{ref}")
+
+
+def test_unwatched_employers_are_now_alerted_too(watchlist):
+    """The widened rule: a Level 4+ digital role matters whoever posts it.
+    Previously only watchlist matches reached the alert bucket."""
+    raws = [_appr_raw("VAC-A1", "Software Developer Apprentice", "SOME RANDOM LTD")]
+    bucket = []
+    assert apprenticeships._persist_vacancies(
+        raws, employer=None, new_bucket=bucket, excluded=[]) == 1
+    assert len(bucket) == 1
+    assert bucket[0].starred is False
+
+
+def test_watchlist_matches_are_starred(watchlist):
+    raws = [_appr_raw("VAC-A2", "Software Developer Apprentice", "AMAZON UK SERVICES")]
+    bucket = []
+    apprenticeships._persist_vacancies(raws, employer=None, new_bucket=bucket,
+                                       employers=watchlist, excluded=[])
+    assert len(bucket) == 1
+    assert bucket[0].starred is True
+
+
+def test_excluded_listings_are_not_persisted_and_are_logged(watchlist):
+    raws = [
+        _appr_raw("VAC-A3", "Security Guard Apprentice", "G4S",
+                  course="Security operative (level 4)"),
+        _appr_raw("VAC-A4", "Software Developer Apprentice", "IBM UK"),
+    ]
+    bucket, excluded = [], []
+    inserted = apprenticeships._persist_vacancies(
+        raws, employer=None, new_bucket=bucket, excluded=excluded)
+
+    assert inserted == 1, "the excluded listing must not be persisted"
+    assert ScoutJob.query.filter_by(external_ref="VAC-A3").count() == 0
+    assert len(excluded) == 1
+    row = excluded[0]
+    assert row["title"] == "Security Guard Apprentice"
+    assert row["employer"] == "G4S"
+    assert row["reason"] == "title_excluded"
+    assert row["detail"] == "security guard"
+
+
+def test_the_exclusion_log_records_title_employer_and_reason(ctx):
+    db.log_scout_exclusions([{
+        "external_ref": "VAC-LOG1", "title": "Security Guard Apprentice",
+        "employer": "G4S", "reason": "title_excluded",
+        "detail": "security guard", "course": "Security operative",
+        "url": "https://example.test/x", "listing_type": "apprenticeship"}])
+
+    rows = db.get_scout_exclusions(limit=50)
+    row = next(r for r in rows if r["external_ref"] == "VAC-LOG1")
+    assert row["title"] == "Security Guard Apprentice"
+    assert row["employer"] == "G4S"
+    assert row["reason"] == "title_excluded"
+
+
+def test_the_exclusion_log_is_one_row_per_listing(ctx):
+    """A listing excluded on every scan must bump a counter, not add a row —
+    otherwise the log becomes a per-scan transcript."""
+    entry = {"external_ref": "VAC-LOG2", "title": "Kitchen Assistant",
+             "employer": "Greggs", "reason": "title_excluded",
+             "detail": "kitchen assistant"}
+    assert db.log_scout_exclusions([entry]) == 1
+    assert db.log_scout_exclusions([entry]) == 0
+    assert db.log_scout_exclusions([entry]) == 0
+
+    rows = [r for r in db.get_scout_exclusions(limit=200)
+            if r["external_ref"] == "VAC-LOG2"]
+    assert len(rows) == 1
+    assert rows[0]["times_seen"] == 3
+
+
+def test_exclusion_counts_are_grouped_by_reason(ctx):
+    db.log_scout_exclusions([
+        {"external_ref": "VAC-C1", "title": "a", "employer": "e",
+         "reason": "title_excluded", "detail": "d"},
+        {"external_ref": "VAC-C2", "title": "b", "employer": "e",
+         "reason": "title_excluded", "detail": "d"},
+        {"external_ref": "VAC-C3", "title": "c", "employer": "e",
+         "reason": "employer_excluded", "detail": "d"},
+    ])
+    counts = db.count_scout_exclusions()
+    assert counts["total"] >= 3
+    assert counts["by_reason"]["title_excluded"] >= 2
+    assert counts["by_reason"]["employer_excluded"] >= 1
+
+
+# ── One alert per vacancy, not per location or per search ───────────────────
+
+def test_one_vacancy_found_by_several_searches_is_persisted_once(watchlist):
+    raw = _appr_raw("VAC-DEDUP", "Software Developer Apprentice", "IBM UK")
+    bucket = []
+    assert apprenticeships._persist_vacancies(
+        [raw], employer=None, new_bucket=bucket, excluded=[]) == 1
+    # a later keyword scan returns the same vacancy
+    assert apprenticeships._persist_vacancies(
+        [raw], employer=None, new_bucket=bucket, excluded=[]) == 0
+    assert len(bucket) == 1, "a re-found vacancy must not alert again"
+
+
+def test_the_notifier_dedupes_by_reference():
+    from services import scout_notify
+    rows = [
+        {"external_ref": "VAC9", "title": "Cyber Apprentice", "company": "BT",
+         "location": "London", "level": 4, "starred": False, "url": "u"},
+        {"external_ref": "VAC9", "title": "Cyber Apprentice", "company": "BT",
+         "location": "Leeds", "level": 4, "starred": True, "url": "u"},
+        {"external_ref": "VAC8", "title": "Data Apprentice", "company": "IBM",
+         "location": "Leeds", "level": 6, "starred": False, "url": "u"},
+    ]
+    out = scout_notify._dedupe_by_reference(
+        [scout_notify._as_row(r, scout_notify.APPRENTICESHIP) for r in rows])
+
+    assert len(out) == 2
+    vac9 = next(r for r in out if r["reference"] == "VAC9")
+    assert vac9["starred"] is True, "the starred copy must win the merge"
+
+
+def test_rows_without_a_reference_are_not_folded_together():
+    from services import scout_notify
+    rows = [{"title": "A", "company": "x", "url": "u"},
+            {"title": "B", "company": "x", "url": "u"}]
+    out = scout_notify._dedupe_by_reference(
+        [scout_notify._as_row(r, scout_notify.JOB) for r in rows])
+    assert len(out) == 2
+
+
+# ── Level-unknown roles are grouped and labelled ────────────────────────────
+
+def test_the_email_labels_the_level_unknown_group():
+    from services import scout_notify
+    rows = [
+        {"external_ref": "VAC1", "title": "Cyber Apprentice", "company": "BT",
+         "location": "London", "level": 4, "starred": True, "url": "u",
+         "training_course": "Cyber security technologist"},
+        {"external_ref": "jcode:2017911",
+         "title": "Software Developer Apprentice (Band 5/EO)",
+         "company": "Health and Safety Executive", "location": "Bootle",
+         "level": None, "starred": False, "url": "u"},
+    ]
+    html = scout_notify.render_email(
+        [], [scout_notify._as_row(r, scout_notify.APPRENTICESHIP) for r in rows],
+        urgent=True)
+
+    assert "Level 4+ (1)" in html
+    assert "level unknown (off-site listing) (1)" in html
+    assert "&amp;middot;" not in html, "the heading separator is double-escaped"
+
+
+def test_the_star_is_rendered_for_watchlist_rows():
+    from services import scout_notify
+    starred = scout_notify._as_row(
+        {"external_ref": "VAC1", "title": "Cyber Apprentice", "company": "BT",
+         "location": "London", "level": 4, "starred": True, "url": "u"},
+        scout_notify.APPRENTICESHIP)
+    plain = dict(starred, starred=False)
+
+    assert "&#9733;" in scout_notify._render_row(starred)
+    assert "&#9733;" not in scout_notify._render_row(plain)
+
+
+# ── The first run is a silent baseline ──────────────────────────────────────
+
+def test_the_first_scan_sends_nothing_and_marks_everything_seen(watchlist, monkeypatch):
+    """Widening the keywords makes every role already on the site look new.
+    Mailing ~50 at once would teach the user to ignore the alert."""
+    db.kv_set(apprenticeships._BASELINE_KEY, "")
+    sent = []
+    monkeypatch.setattr("services.scout_notify.alert_new_listings",
+                        lambda **kw: sent.append(kw) or True)
+    monkeypatch.setattr(apprenticeships, "keyword_scans", lambda: ["software developer"])
+
+    raws = [_appr_raw(f"VAC-B{i}", "Software Developer Apprentice", "IBM UK")
+            for i in range(5)]
+    monkeypatch.setattr(GovUkScraper, "by_keyword",
+                        lambda self, kw, min_level=4, stats=None: raws)
+    monkeypatch.setattr(GovUkScraper, "by_employer",
+                        lambda self, a, min_level=4, stats=None: [])
+
+    summary = apprenticeships.scan_apprenticeships()
+
+    assert summary["baseline_run"] is True
+    assert summary["alerted"] == 0
+    assert sent == [], "the first run must not send an alert"
+    rows = ScoutJob.query.filter(ScoutJob.external_ref.like("VAC-B%")).all()
+    assert len(rows) == 5
+    assert all(r.alerted == 1 for r in rows), "baseline rows must be marked seen"
+    assert db.kv_get(apprenticeships._BASELINE_KEY) == "1"
+
+
+def test_the_second_scan_alerts_on_genuinely_new_roles(watchlist, monkeypatch):
+    db.kv_set(apprenticeships._BASELINE_KEY, "1")
+    sent = []
+    monkeypatch.setattr("services.scout_notify.alert_new_listings",
+                        lambda **kw: sent.append(kw) or True)
+    monkeypatch.setattr(apprenticeships, "keyword_scans", lambda: ["software developer"])
+
+    raws = [_appr_raw("VAC-NEW1", "Software Developer Apprentice", "IBM UK")]
+    monkeypatch.setattr(GovUkScraper, "by_keyword",
+                        lambda self, kw, min_level=4, stats=None: raws)
+    monkeypatch.setattr(GovUkScraper, "by_employer",
+                        lambda self, a, min_level=4, stats=None: [])
+
+    summary = apprenticeships.scan_apprenticeships()
+
+    assert summary["baseline_run"] is False
+    assert summary["alerted"] == 1
+    assert len(sent) == 1
+    assert len(sent[0]["apprenticeships"]) == 1
+
+
+def test_an_empty_first_scan_still_closes_the_baseline(watchlist, monkeypatch):
+    """Otherwise the first genuinely-new role would be swallowed as baseline."""
+    db.kv_set(apprenticeships._BASELINE_KEY, "")
+    monkeypatch.setattr(apprenticeships, "keyword_scans", lambda: ["devops"])
+    monkeypatch.setattr(GovUkScraper, "by_keyword",
+                        lambda self, kw, min_level=4, stats=None: [])
+    monkeypatch.setattr(GovUkScraper, "by_employer",
+                        lambda self, a, min_level=4, stats=None: [])
+
+    summary = apprenticeships.scan_apprenticeships()
+    assert summary["baseline_run"] is True
+    assert db.kv_get(apprenticeships._BASELINE_KEY) == "1"
+
+
+def test_the_scan_reports_how_many_were_excluded(watchlist, monkeypatch):
+    db.kv_set(apprenticeships._BASELINE_KEY, "1")
+    monkeypatch.setattr("services.scout_notify.alert_new_listings", lambda **kw: True)
+    monkeypatch.setattr(apprenticeships, "keyword_scans", lambda: ["security"])
+
+    raws = [
+        _appr_raw("VAC-X1", "Security Guard Apprentice", "G4S",
+                  course="Security operative (level 4)"),
+        _appr_raw("VAC-X2", "Food Hub Project Manager", "Council",
+                  course="Project manager (level 4)"),
+        _appr_raw("VAC-X3", "Cyber Security Apprentice", "BT",
+                  course="Cyber security technologist (level 4)"),
+    ]
+    monkeypatch.setattr(GovUkScraper, "by_keyword",
+                        lambda self, kw, min_level=4, stats=None: raws)
+    monkeypatch.setattr(GovUkScraper, "by_employer",
+                        lambda self, a, min_level=4, stats=None: [])
+
+    summary = apprenticeships.scan_apprenticeships()
+    assert summary["excluded"] == 2
+    assert summary["new"] == 1

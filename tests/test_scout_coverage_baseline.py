@@ -20,6 +20,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from services import scout_config  # noqa: E402
 from services.scrapers.gov_uk import RawVacancy  # noqa: E402
 
 _SPEC_PATH = os.path.join(
@@ -311,7 +312,8 @@ def test_compare_handles_a_v3_snapshot_without_digital_route(tmp_path, capsys):
     assert "+9" in out, "Level 4+ delta should still be computed"
     # Classifier-dependent ones are marked, not diffed.
     assert "n/c" in out
-    assert "classifier versions differ (3 vs 4)" in out
+    assert ("classifier versions differ (3 vs "
+            f"{baseline.CLASSIFIER_VERSION})") in out
 
 
 def test_compare_names_the_legacy_metric_rather_than_dropping_it(tmp_path, capsys):
@@ -721,3 +723,163 @@ def test_per_search_table_shows_slots_consumed_by_duplicates(capsys):
     assert "cards that repeated a vacancy" in out
     # uniq 14, slots 21, cards 21, dup 7 on the row
     assert "14" in out and "21" in out and "7" in out
+
+
+# ── Exclusion counts and per-keyword attribution ────────────────────────────
+# The measurement tool filters with services/scout_config, the same module the
+# production scan uses, so "excluded: N" is the number the app would really
+# drop rather than a second opinion.
+
+def _v(ref, title, course="Software developer (level 4)", level=4, employer="Emp"):
+    return RawVacancy(reference=ref, title=title, employer_name_raw=employer,
+                      training_course=course, level=level, location="London",
+                      url=f"https://example.test/{ref}")
+
+
+def test_the_report_counts_exclusions_with_reasons():
+    vacs = {
+        "a": _v("A", "Cyber Security Apprentice",
+                "Cyber security technologist (level 4)"),
+        "b": _v("B", "Security Guard Apprentice", "Security operative (level 4)"),
+        "c": _v("C", "Food Hub Project Manager", "Project manager (level 4)"),
+    }
+    ex = baseline._summarise(vacs, [], [], ["kw"], False)["exclusions"]
+
+    assert ex["excluded"] == 2
+    assert ex["kept"] == 1
+    assert ex["by_reason"] == {"title_excluded": 2}
+    assert ex["kept_by_reason"] == {"digital_standard": 1}
+
+
+def test_every_excluded_listing_is_listed_with_title_employer_and_reason():
+    """The audit trail the wide net depends on."""
+    vacs = {"b": _v("B", "Security Guard Apprentice",
+                    "Security operative (level 4)", employer="G4S")}
+    ex = baseline._summarise(vacs, [], [], ["kw"], False)["exclusions"]
+
+    assert len(ex["listings"]) == 1
+    row = ex["listings"][0]
+    assert row["title"] == "Security Guard Apprentice"
+    assert row["employer"] == "G4S"
+    assert row["reason"] == "title_excluded"
+    assert row["detail"] == "security guard"
+    assert row["url"].endswith("/B")
+
+
+def test_a_strong_term_keeps_a_listing_the_title_list_would_drop():
+    vacs = {"a": _v("A", "Digital Project Manager Apprentice", course="")}
+    ex = baseline._summarise(vacs, [], [], ["kw"], False)["exclusions"]
+    assert ex["excluded"] == 0
+    assert ex["kept_by_reason"] == {"strong_digital_term": 1}
+
+
+def test_listings_record_the_filter_verdict():
+    vacs = {"b": _v("B", "Security Guard Apprentice", "Security operative (level 4)")}
+    listing = baseline._summarise(vacs, [], [], ["kw"], False)["listings"][0]
+    assert listing["kept_by_filter"] is False
+    assert listing["filter_reason"] == "title_excluded"
+
+
+def test_excluded_count_appears_on_screen(capsys):
+    vacs = {"b": _v("B", "Security Guard Apprentice", "Security operative (level 4)")}
+    baseline.report(baseline._summarise(vacs, [], [], ["kw"], False))
+    out = capsys.readouterr().out
+
+    assert "excluded: 1" in out
+    assert "title_excluded" in out
+    assert "Security Guard Apprentice" in out
+
+
+# ── Per-keyword attribution ─────────────────────────────────────────────────
+
+def test_per_keyword_attribution_counts_distinct_vacancies():
+    vacs = {"a": _v("A", "Cyber Security Apprentice",
+                    "Cyber security technologist (level 4)"),
+            "b": _v("B", "Software Developer Apprentice")}
+    found_by = {"A": ["cyber security", "cyber"], "B": ["software"]}
+
+    bykw = baseline._summarise(vacs, [], [], ["kw"], False,
+                               found_by=found_by)["by_keyword"]
+
+    assert bykw["cyber security"]["distinct_vacancies"] == 1
+    assert bykw["cyber"]["distinct_vacancies"] == 1
+    assert bykw["software"]["distinct_vacancies"] == 1
+
+
+def test_vacancies_only_the_widened_terms_reach_are_counted():
+    """The number the widening has to justify itself with."""
+    vacs = {"a": _v("A", "Cyber Security Apprentice",
+                    "Cyber security technologist (level 4)"),
+            "b": _v("B", "Systems Engineer Apprentice", course=""),
+            "c": _v("C", "IT Support Apprentice",
+                    "Information communications technician (level 4)")}
+    found_by = {
+        "A": ["cyber security"],      # an original phrase found it
+        "B": ["systems"],             # widened only
+        "C": ["IT", "information"],   # widened only
+    }
+    snap = baseline._summarise(vacs, [], [], ["kw"], False, found_by=found_by)
+
+    assert snap["only_new_keywords_found"] == 2
+    assert snap["by_keyword"]["systems"]["new_vs_original_six"] == 1
+    assert snap["by_keyword"]["cyber security"]["new_vs_original_six"] == 0
+
+
+def test_original_phrases_are_marked_as_such():
+    found_by = {"A": ["cyber security"], "B": ["cyber"]}
+    vacs = {"a": _v("A", "a"), "b": _v("B", "b")}
+    bykw = baseline._summarise(vacs, [], [], ["kw"], False,
+                               found_by=found_by)["by_keyword"]
+
+    assert bykw["cyber security"]["is_original_phrase"] is True
+    assert bykw["cyber"]["is_original_phrase"] is False
+
+
+def test_a_vacancy_found_by_both_an_original_and_a_new_term_is_not_new():
+    """It was already reachable, so the widening gets no credit for it."""
+    vacs = {"a": _v("A", "a")}
+    snap = baseline._summarise(vacs, [], [], ["kw"], False,
+                               found_by={"A": ["cyber security", "cyber"]})
+    assert snap["only_new_keywords_found"] == 0
+
+
+def test_listings_record_which_terms_found_them():
+    vacs = {"a": _v("A", "a")}
+    listing = baseline._summarise(vacs, [], [], ["kw"], False,
+                                  found_by={"A": ["cyber", "cyber security",
+                                                  "cyber"]})["listings"][0]
+    assert listing["found_by"] == ["cyber", "cyber security"]
+
+
+def test_per_keyword_table_appears_on_screen(capsys):
+    vacs = {"a": _v("A", "a"), "b": _v("B", "b")}
+    baseline.report(baseline._summarise(
+        vacs, [], [], ["kw"], False,
+        found_by={"A": ["cyber security"], "B": ["systems"]}))
+    out = capsys.readouterr().out
+
+    assert "per keyword" in out
+    assert "original six" in out
+    assert "added" in out
+    assert "not found by any original phrase" in out
+
+
+def test_the_script_searches_the_widened_list():
+    """The tool must measure what the app would actually search."""
+    terms = [t for kind, t in baseline._searches(use_employers=False)]
+    for phrase in scout_config.ORIGINAL_SEARCH_PHRASES:
+        assert phrase in terms
+    for added in scout_config.ADDED_SEARCH_KEYWORDS:
+        assert added in terms
+
+
+def test_the_script_and_the_scan_share_one_filter():
+    """If these diverged, the before/after numbers would describe something the
+    app does not do."""
+    from services import apprenticeships
+    assert baseline.scout_config is scout_config
+    assert apprenticeships.scout_config is scout_config
+
+
+def test_classifier_version_was_bumped_for_the_filter_change():
+    assert baseline.CLASSIFIER_VERSION >= 5

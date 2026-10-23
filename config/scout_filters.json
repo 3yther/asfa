@@ -1,0 +1,20 @@
+{
+  "_README": [
+    "Scout's editable filter lists. Defaults live in services/scout_config.py;",
+    "this file overrides them, so these lists can be tuned without a code change.",
+    "A key REPLACES the built-in list. A key prefixed with '+' APPENDS to it,",
+    "which is usually what you want for exclusions.",
+    "Re-read automatically when this file's mtime changes — no redeploy needed.",
+    "",
+    "Keys: search_keywords, digital_standards, strong_digital_terms,",
+    "weak_digital_terms, title_exclusions, employer_exclusions.",
+    "",
+    "Run scripts/scout_coverage_baseline.py after editing: the report prints",
+    "'excluded: N' with every dropped listing and its reason, so an over-eager",
+    "exclusion shows up immediately."
+  ],
+
+  "+title_exclusions": [],
+
+  "+employer_exclusions": []
+}
