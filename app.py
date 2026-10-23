@@ -2348,8 +2348,13 @@ def api_gym_session_start():
     # Backfill the whole session under a simulated clock (date + start_time).
     sim = db.get_simulated_time()
     date = _log_date(d.get("date"))
+    # The fallback must be LOCAL (APP_TZ), not the container clock. It is stored
+    # naive, and _minutes_between reads a naive start_time as already-local — so
+    # a naive UTC value written here would be re-read as London and over-report
+    # every duration by the BST offset. gym.js sends an aware toISOString(), so
+    # this path is only reached by a caller that omits start_time.
     start_time = sim.isoformat() if sim is not None else (
-        d.get("start_time") or datetime.now().isoformat())
+        d.get("start_time") or db.now_local().replace(tzinfo=None).isoformat())
     notes = d.get("notes", "")
     session_id = db.create_session(routine_id, date, start_time, notes)
     return jsonify({"ok": True, "session_id": session_id,

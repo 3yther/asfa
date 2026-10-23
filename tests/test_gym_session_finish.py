@@ -58,10 +58,23 @@ def _exercise_id():
     raise AssertionError("no non-cardio exercise in the library")
 
 
+def _local_now():
+    """Now as a NAIVE datetime in APP_TZ — what the server stores.
+
+    Not `datetime.now()`: that is the *container* clock. `_minutes_between`
+    reads a naive `start_time` as already-local (APP_TZ), so building fixtures
+    from the container clock only lines up on a machine that happens to be set
+    to Europe/London. On a UTC box — CI, Railway — every duration in this file
+    came out an hour wrong for the half of the year BST is in effect, which
+    looks like a product bug and is not one.
+    """
+    return db.now_local().replace(tzinfo=None)
+
+
 def _browser_end_time(dt=None):
     """What gym.js actually sends: `new Date().toISOString()` — UTC with a Z."""
-    dt = dt or datetime.now()
-    return dt.astimezone(db.APP_TZ).astimezone(
+    dt = dt or _local_now()
+    return dt.replace(tzinfo=db.APP_TZ).astimezone(
         __import__("datetime").timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -93,7 +106,7 @@ def test_2_logging_a_set_against_an_unknown_session_is_refused():
 
 def test_3_active_session_is_found_after_the_day_it_started():
     """The reported session: opened Monday, still open on Saturday."""
-    monday = datetime.now() - timedelta(days=4, hours=1)
+    monday = _local_now() - timedelta(days=4, hours=1)
     sid = db.create_session(None, monday.date().isoformat(), monday.isoformat())
     db.log_set(sid, _exercise_id(), 1, "working", 60, 8)
 
@@ -113,7 +126,7 @@ def test_3_active_session_is_found_after_the_day_it_started():
 
 
 def test_4_a_closed_session_is_not_reported_as_active():
-    start = datetime.now() - timedelta(minutes=45)
+    start = _local_now() - timedelta(minutes=45)
     sid = db.create_session(None, start.date().isoformat(), start.isoformat())
     _client().post(f"/api/gym/sessions/{sid}/end",
                    json={"end_time": _browser_end_time()}, headers=_HDRS)
@@ -124,7 +137,7 @@ def test_4_a_closed_session_is_not_reported_as_active():
 # ── 3. Duration survives the browser's Z-suffixed timestamp ─────────────────
 
 def test_5_duration_is_real_for_a_browser_finish():
-    start = datetime.now() - timedelta(minutes=75)
+    start = _local_now() - timedelta(minutes=75)
     sid = db.create_session(None, start.date().isoformat(), start.isoformat())
     db.log_set(sid, _exercise_id(), 1, "working", 60, 10)
 
@@ -138,7 +151,7 @@ def test_5_duration_is_real_for_a_browser_finish():
 
 def test_6_efficiency_is_reported_now_that_duration_is_not_zero():
     """Efficiency is volume ÷ duration, so duration = 0 silently nulled it."""
-    start = datetime.now() - timedelta(minutes=60)
+    start = _local_now() - timedelta(minutes=60)
     sid = db.create_session(None, start.date().isoformat(), start.isoformat())
     db.log_set(sid, _exercise_id(), 1, "working", 100, 10)   # 1000 kg
 
@@ -150,7 +163,7 @@ def test_6_efficiency_is_reported_now_that_duration_is_not_zero():
 
 
 def test_7_explicit_duration_from_the_client_still_wins():
-    start = datetime.now() - timedelta(minutes=90)
+    start = _local_now() - timedelta(minutes=90)
     sid = db.create_session(None, start.date().isoformat(), start.isoformat())
     r = _client().post(f"/api/gym/sessions/{sid}/end",
                        json={"end_time": _browser_end_time(), "duration": 42},
@@ -159,7 +172,7 @@ def test_7_explicit_duration_from_the_client_still_wins():
 
 
 def test_8_unparseable_timestamps_degrade_to_zero_not_a_500():
-    sid = db.create_session(None, datetime.now().date().isoformat(), "not-a-date")
+    sid = db.create_session(None, _local_now().date().isoformat(), "not-a-date")
     r = _client().post(f"/api/gym/sessions/{sid}/end",
                        json={"end_time": _browser_end_time()}, headers=_HDRS)
     assert r.status_code == 200
@@ -168,8 +181,8 @@ def test_8_unparseable_timestamps_degrade_to_zero_not_a_500():
 
 def test_9_duration_is_never_negative():
     """Clock skew between phone and server must not write a negative duration."""
-    start = datetime.now() + timedelta(minutes=30)      # "starts" in the future
-    sid = db.create_session(None, datetime.now().date().isoformat(), start.isoformat())
+    start = _local_now() + timedelta(minutes=30)      # "starts" in the future
+    sid = db.create_session(None, _local_now().date().isoformat(), start.isoformat())
     r = _client().post(f"/api/gym/sessions/{sid}/end",
                        json={"end_time": _browser_end_time()}, headers=_HDRS)
     assert r.get_json()["duration_minutes"] == 0

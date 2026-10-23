@@ -52,9 +52,28 @@ def _nutrition_adherence(start: str, end: str):
 
 
 def _avg_sleep(start: str, end: str):
-    by_day = db.get_sleep_hours_by_day(days=21)  # dict {date: hours}
+    """Mean sleep hours over [start, end], or None if nothing was logged.
+
+    `get_sleep_hours_by_day` is a lookback from TODAY, not a date-range query,
+    so the window has to be wide enough to still contain `start`. It was pinned
+    at 21 days, which meant reviewing a week more than three weeks old silently
+    returned None — the rows were simply never fetched, so "no data logged" and
+    "outside the lookback" were indistinguishable. The split weeks are fixed
+    calendar dates, so every week ages out of a 21-day window eventually.
+    """
+    by_day = db.get_sleep_hours_by_day(days=_lookback_days(start))
     vals = [float(v) for d, v in by_day.items() if start <= d <= end and v]
     return round(sum(vals) / len(vals), 1) if vals else None
+
+
+def _lookback_days(start: str, floor: int = 21) -> int:
+    """How many days back from today `start` is, at least `floor`.
+
+    The floor keeps behaviour identical for recent weeks. A `start` in the
+    future falls back to it too, since there is nothing earlier to reach.
+    """
+    s = datetime.strptime(start, "%Y-%m-%d").date()
+    return max((db.now_local().date() - s).days + 1, floor)
 
 
 def generate_weekly_split_review(week_num: int = 1, user_id=None) -> dict:
