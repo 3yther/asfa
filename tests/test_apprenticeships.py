@@ -17,7 +17,7 @@ from models import Employer, ScanLog, ScoutJob
 from models import db as orm
 from services import apprenticeships, scout_notify
 from services.scrapers.gov_uk import (GovUkScraper, RawVacancy, _parse_uk_date,
-                                      reference_from_href)
+                                      clean_title, reference_from_href)
 
 
 @pytest.fixture
@@ -537,16 +537,19 @@ def test_hitting_the_page_cap_is_reported():
     ("/apprenticeship/some-slug", "/apprenticeship/some-slug", "path"),
 ])
 def test_reference_is_derived_from_any_detail_link(href, expected_ref, expected_kind):
-    ref, kind = reference_from_href(href)
+    ref, kind, source = reference_from_href(href)
     assert ref == expected_ref
     assert kind == expected_kind
+    assert source == "findapprenticeship", \
+        "these are all on-site links; see the external cases below"
 
 
 @pytest.mark.parametrize("href", ["#", "", "   ", "mailto:a@b.c", "javascript:void(0)",
                                   "tel:+441234567890"])
 def test_non_detail_hrefs_yield_no_reference(href):
     """A utility control must never become a listing's identity."""
-    assert reference_from_href(href) == (None, None)
+    ref, kind, _source = reference_from_href(href)
+    assert (ref, kind) == (None, None)
 
 
 def _card(href, title="Apprentice Software Developer", emp="IBM UK",
@@ -630,6 +633,158 @@ def test_the_title_link_wins_over_a_utility_link():
     v = GovUkScraper()._parse_search_page(html, min_level=4)[0]
     assert v.reference == "1000284512"
     assert v.title == "Apprentice Software Developer"
+
+
+# ── External cross-posts: identity lives in the query string ─────────────────
+# gov.uk lists some public-sector roles off-site. Civil Service Jobs puts every
+# vacancy on the SAME path (/csr/viewjob.cgi) and distinguishes them only by
+# ?jcode=. Stripping the query gave 16 cards one reference, and the in-page
+# dedup then kept exactly one of them — the second half of the coverage gap.
+
+# The real URL from after-reffix.json.
+HSE_CSJOBS_URL = ("https://www.civilservicejobs.service.gov.uk"
+                  "/csr/viewjob.cgi?jcode=2017911")
+HSE_VAC_REF = "VAC2000060231"
+
+
+def test_the_real_civil_service_url_keeps_its_jcode():
+    ref, kind, source = reference_from_href(HSE_CSJOBS_URL)
+    assert ref == "jcode:2017911"
+    assert kind == "jcode"
+    assert source == "civil_service"
+
+
+def test_two_jcodes_on_the_same_path_stay_distinct():
+    """The collapse itself: same host, same path, different vacancies."""
+    a = reference_from_href(HSE_CSJOBS_URL)
+    b = reference_from_href("https://www.civilservicejobs.service.gov.uk"
+                            "/csr/viewjob.cgi?jcode=2017912")
+    assert a.reference != b.reference
+    assert {a.reference, b.reference} == {"jcode:2017911", "jcode:2017912"}
+
+
+def test_a_page_of_civil_service_cross_posts_is_not_collapsed():
+    cards = "".join(
+        f'<li class="das-search-results__list-item">'
+        f'<h2><a href="https://www.civilservicejobs.service.gov.uk'
+        f'/csr/viewjob.cgi?jcode=20179{i:02d}">'
+        f'Software Developer Apprentice (Band 5/EO) (opens in new tab)</a></h2>'
+        f'<p class="govuk-body">Health and Safety Executive</p>'
+        f'<p class="govuk-body">Bootle</p></li>'
+        for i in range(16))
+    html = f"<html><title>16 results found</title><ul>{cards}</ul></html>"
+
+    stats = {}
+    got = GovUkScraper()._parse_search_page(html, min_level=4, stats=stats)
+
+    assert len(got) == 16, "cross-posts collapsed to one reference again"
+    assert len({v.reference for v in got}) == 16
+    assert stats["sources"] == {"civil_service": 16}
+
+
+def test_external_reference_ignores_tracking_parameters():
+    """Two links to ONE vacancy must not become two listings."""
+    plain = reference_from_href(HSE_CSJOBS_URL)
+    tracked = reference_from_href(HSE_CSJOBS_URL + "&utm_source=newsletter&gclid=xyz")
+    assert plain.reference == tracked.reference
+
+
+def test_external_reference_ignores_parameter_order_and_scheme():
+    a = reference_from_href("https://example.test/jobs/view?b=2&a=1")
+    b = reference_from_href("http://example.test/jobs/view?a=1&b=2")
+    assert a.reference == b.reference
+    assert a.source == "other"
+
+
+def test_an_external_link_with_no_id_parameter_uses_the_whole_url():
+    ref, kind, source = reference_from_href("https://careers.example.test/roles/sw-dev")
+    assert kind == "url"
+    assert ref == "careers.example.test/roles/sw-dev"
+    assert source == "other"
+
+
+def test_an_onsite_vac_reference_is_unaffected_by_a_query_string():
+    """On-site identity stays the VAC reference, so search params in a link
+    cannot split one listing into several."""
+    a = reference_from_href(f"/apprenticeship/{HSE_VAC_REF}")
+    b = reference_from_href(f"/apprenticeship/{HSE_VAC_REF}?searchTerm=data&PageNumber=2")
+    assert a.reference == b.reference == HSE_VAC_REF
+    assert a.source == "findapprenticeship"
+
+
+def test_external_and_onsite_references_cannot_collide():
+    """External refs are namespaced, so a jcode can't be read as a gov.uk id."""
+    external = reference_from_href(
+        "https://www.civilservicejobs.service.gov.uk/csr/viewjob.cgi?jcode=1000284512")
+    onsite = reference_from_href("/apprenticeship/1000284512")
+    assert external.reference != onsite.reference
+
+
+# ── "(opens in new tab)" is not part of the job title ────────────────────────
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Software Developer Apprentice (Band 5/EO) (opens in new tab)",
+     "Software Developer Apprentice (Band 5/EO)"),
+    ("Cyber Apprentice (opens in new tab)", "Cyber Apprentice"),
+    ("Cyber Apprentice (opens in a new tab)", "Cyber Apprentice"),
+    ("Cyber Apprentice (opens in new window)", "Cyber Apprentice"),
+    ("Cyber Apprentice (Opens In New Tab)", "Cyber Apprentice"),
+    ("Data Apprentice", "Data Apprentice"),
+    ("", ""),
+])
+def test_opens_in_new_tab_is_stripped(raw, expected):
+    assert clean_title(raw) == expected
+
+
+def test_parsed_titles_are_cleaned():
+    card = (f'<li class="das-search-results__list-item">'
+            f'<h2><a href="{HSE_CSJOBS_URL}">Software Developer Apprentice '
+            f'(Band 5/EO) (opens in new tab)</a></h2>'
+            f'<p class="govuk-body">Health and Safety Executive</p>'
+            f'<p class="govuk-body">Bootle</p></li>')
+    html = f"<html><title>1 result found</title><ul>{card}</ul></html>"
+    v = GovUkScraper()._parse_search_page(html, min_level=4)[0]
+    assert v.title == "Software Developer Apprentice (Band 5/EO)"
+    assert "opens in new tab" not in v.title.lower()
+
+
+# ── A missing level is reported, never a reason to drop ──────────────────────
+
+def test_external_listings_with_no_level_survive_a_level_filter():
+    """Cross-posts carry no training course, so no level can be parsed. Dropping
+    them would silently discard every off-site public-sector apprenticeship."""
+    card = (f'<li class="das-search-results__list-item">'
+            f'<h2><a href="{HSE_CSJOBS_URL}">Software Developer Apprentice</a></h2>'
+            f'<p class="govuk-body">Health and Safety Executive</p>'
+            f'<p class="govuk-body">Bootle</p></li>')
+    html = f"<html><title>1 result found</title><ul>{card}</ul></html>"
+
+    for floor in (1, 4, 6, 7):
+        stats = {}
+        got = GovUkScraper()._parse_search_page(html, min_level=floor, stats=stats)
+        assert len(got) == 1, f"dropped at min_level={floor}"
+        assert got[0].level is None
+        assert stats["level_unparsed"] == 1
+        assert stats.get("dropped_below_level", 0) == 0
+
+
+def test_a_known_level_below_the_floor_is_still_filtered():
+    """The level filter must keep working for listings that DO state a level."""
+    card = ('<li class="das-search-results__list-item">'
+            '<h2><a href="/apprenticeship/VAC1">Apprentice</a></h2>'
+            '<p class="govuk-body">ACME</p><p class="govuk-body">London</p>'
+            '<p class="govuk-body"><b>Training course</b> '
+            'Digital support technician (level 3)</p></li>')
+    html = f"<html><title>1 result found</title><ul>{card}</ul></html>"
+    stats = {}
+    assert GovUkScraper()._parse_search_page(html, min_level=4, stats=stats) == []
+    assert stats["dropped_below_level"] == 1
+
+
+def test_source_defaults_to_findapprenticeship_for_relative_links():
+    assert reference_from_href("/apprenticeship/VAC1").source == "findapprenticeship"
+    assert RawVacancy(reference="VAC1", title="t",
+                      employer_name_raw="e").source == "findapprenticeship"
 
 
 # ── The query actually sent ──────────────────────────────────────────────────
@@ -786,3 +941,52 @@ def test_existing_job_rows_default_to_listing_type_job(ctx):
     row = ScoutJob.query.filter_by(url="https://example.com/legacy").one()
     assert row.listing_type == "job"
     assert row.external_ref is None
+
+
+# ── Off-site cross-posts reach the database ─────────────────────────────────
+# A behaviour change worth pinning: these listings used to collapse to one row
+# (shared reference) and now persist individually, with level NULL.
+
+def test_external_cross_posts_persist_as_separate_rows(watchlist):
+    emp = Employer.query.filter_by(name="BAE Systems").first()
+    raws = [
+        RawVacancy(reference=f"jcode:201791{i}",
+                   title=f"Software Developer Apprentice (Band 5/EO)",
+                   employer_name_raw="BAE SYSTEMS PLC",
+                   location="Bootle", level=None, training_course="",
+                   source="civil_service",
+                   url=("https://www.civilservicejobs.service.gov.uk"
+                        f"/csr/viewjob.cgi?jcode=201791{i}"))
+        for i in range(3)
+    ]
+    bucket = []
+    inserted = apprenticeships._persist_vacancies(raws, employer=emp,
+                                                  new_bucket=bucket)
+
+    assert inserted == 3, "cross-posts collapsed into one row"
+    rows = ScoutJob.query.filter(
+        ScoutJob.external_ref.like("jcode:%")).all()
+    assert len({r.external_ref for r in rows}) == 3
+    assert all(r.level is None for r in rows)
+    # scout_jobs.source is the PROVIDER (where Scout found it), per CLAUDE.md.
+    # Finding a role via gov.uk does not stop being gov.uk because the detail
+    # page is hosted elsewhere.
+    assert all(r.source == "gov_uk" for r in rows)
+
+
+def test_persisting_an_external_listing_is_idempotent(watchlist):
+    # A reference no other test in this module uses: _persist_vacancies dedups
+    # on external_ref against the whole table, so a shared value here would
+    # make the result depend on test order.
+    ref = "jcode:4242424"
+    raw = RawVacancy(reference=ref,
+                     title="Software Developer Apprentice",
+                     employer_name_raw="UNKNOWN DEPT",
+                     level=None, training_course="", source="civil_service",
+                     url=("https://www.civilservicejobs.service.gov.uk"
+                          f"/csr/viewjob.cgi?jcode=4242424"))
+    assert apprenticeships._persist_vacancies([raw], employer=None,
+                                              new_bucket=[]) == 1
+    assert apprenticeships._persist_vacancies([raw], employer=None,
+                                              new_bucket=[]) == 0
+    assert ScoutJob.query.filter_by(external_ref=ref).count() == 1

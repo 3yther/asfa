@@ -420,3 +420,174 @@ def test_report_says_so_when_drops_had_no_captured_hrefs(capsys):
     baseline.report(snap)
     out = capsys.readouterr().out
     assert "none captured" in out
+
+
+# ── Source field and off-site listings ───────────────────────────────────────
+
+def _ext(ref, title, employer, jcode, level=None):
+    return RawVacancy(
+        reference=ref, title=title, employer_name_raw=employer,
+        training_course="", level=level, source="civil_service",
+        url=f"https://www.civilservicejobs.service.gov.uk/csr/viewjob.cgi?jcode={jcode}")
+
+
+def _native(ref, title, employer, course="Software developer (level 4)", level=4):
+    return RawVacancy(
+        reference=ref, title=title, employer_name_raw=employer,
+        training_course=course, level=level, source="findapprenticeship",
+        url=f"https://www.findapprenticeship.service.gov.uk/apprenticeship/{ref}")
+
+
+def test_summary_splits_level_unknown_by_source():
+    """An off-site listing has no level because the system has none to give.
+    An on-site listing with no level means the parse missed something. Those are
+    different problems and must not share one number."""
+    vacs = {
+        "a": _native("VAC1", "Software Developer Apprentice", "IBM"),
+        "b": _ext("jcode:2017911", "Software Developer Apprentice", "HSE", 2017911),
+        "c": _native("VAC2", "Apprentice", "ACME", course="", level=None),
+    }
+    t = baseline._summarise(vacs, [], [], ["kw"], False)["totals"]
+
+    assert t["level_unknown"] == 2
+    assert t["external_level_unknown"] == 1
+    assert t["onsite_level_unknown"] == 1
+    assert t["external_listings"] == 1
+    assert t["level_4_plus"] == 1
+
+
+def test_summary_counts_by_source():
+    vacs = {
+        "a": _native("VAC1", "Software Developer Apprentice", "IBM"),
+        "b": _ext("jcode:1", "Data Apprentice", "HSE", 1),
+        "c": _ext("jcode:2", "Cyber Apprentice", "DWP", 2),
+    }
+    s = baseline._summarise(vacs, [], [], ["kw"], False)
+    assert s["by_source"] == {"civil_service": 2, "findapprenticeship": 1}
+
+
+def test_listings_carry_their_source():
+    vacs = {"b": _ext("jcode:2017911", "Software Developer Apprentice", "HSE", 2017911)}
+    s = baseline._summarise(vacs, [], [], ["kw"], False)
+    assert s["listings"][0]["source"] == "civil_service"
+
+
+def test_off_site_listings_are_never_counted_as_level_4_plus():
+    """They must be visible, but a null level is not evidence of Level 4."""
+    vacs = {"b": _ext("jcode:1", "Software Developer Apprentice", "HSE", 1)}
+    t = baseline._summarise(vacs, [], [], ["kw"], False)["totals"]
+    assert t["level_4_plus"] == 0
+    assert t["unique_results"] == 1
+    assert t["level_unknown"] == 1
+
+
+# ── Likely cross-posts: FLAG ONLY. Phase 2 owns dedupe. ──────────────────────
+
+def test_the_hse_pair_is_flagged_as_a_likely_duplicate():
+    """The real cross-post: one HSE role listed natively with a VAC reference
+    and a level, and again off-site with neither."""
+    native = _native("VAC2000060231", "Software Developer Apprentice",
+                     "Health and Safety Executive")
+    external = _ext("jcode:2017911",
+                    "Software Developer Apprentice (Band 5/EO)",
+                    "Health and Safety Executive", 2017911)
+
+    groups = baseline.likely_duplicate_groups([native, external])
+
+    assert len(groups) == 1, f"expected one group, got {groups}"
+    g = groups[0]
+    assert g["cross_source"] is True
+    assert sorted(g["sources"]) == ["civil_service", "findapprenticeship"]
+    assert {m["ref"] for m in g["members"]} == {"VAC2000060231", "jcode:2017911"}
+
+
+def test_flagging_does_not_merge_anything():
+    """Both rows must survive into the snapshot — Phase 2 decides what merges."""
+    vacs = {
+        "a": _native("VAC2000060231", "Software Developer Apprentice",
+                     "Health and Safety Executive"),
+        "b": _ext("jcode:2017911", "Software Developer Apprentice (Band 5/EO)",
+                  "Health and Safety Executive", 2017911),
+    }
+    s = baseline._summarise(vacs, [], [], ["kw"], False)
+
+    assert s["totals"]["unique_results"] == 2, "a flag must not collapse rows"
+    assert len(s["listings"]) == 2
+    assert len(s["likely_duplicate_groups"]) == 1
+
+
+def test_two_different_roles_at_one_employer_do_not_group():
+    """The near-miss that must not merge: same employer, different jobs."""
+    a = _native("VAC1", "Software Developer Apprentice", "Health and Safety Executive")
+    b = _native("VAC2", "Data Analyst Apprentice", "Health and Safety Executive")
+    assert baseline.likely_duplicate_groups([a, b]) == []
+
+
+def test_the_same_role_at_two_employers_does_not_group():
+    a = _native("VAC1", "Software Developer Apprentice", "IBM UK")
+    b = _native("VAC2", "Software Developer Apprentice", "Capgemini UK")
+    assert baseline.likely_duplicate_groups([a, b]) == []
+
+
+def test_grade_suffixes_do_not_prevent_a_match():
+    """"(Band 5/EO)" is a grade, not a different job."""
+    a = _native("VAC1", "Software Developer Apprentice", "HSE")
+    b = _ext("jcode:1", "Software Developer Apprentice (Band 5/EO)", "HSE", 1)
+    assert len(baseline.likely_duplicate_groups([a, b])) == 1
+
+
+def test_employer_suffixes_do_not_prevent_a_match():
+    a = _native("VAC1", "Software Developer Apprentice", "IBM UK Ltd")
+    b = _native("VAC2", "Software Developer Apprentice", "IBM")
+    assert len(baseline.likely_duplicate_groups([a, b])) == 1
+
+
+def test_a_generic_title_alone_does_not_group():
+    """Two bare "Apprentice" rows share no distinguishing token, so grouping on
+    them would sweep unrelated roles together."""
+    a = _native("VAC1", "Apprentice", "HSE")
+    b = _ext("jcode:1", "Apprentice (Band 5/EO)", "HSE", 1)
+    assert baseline.likely_duplicate_groups([a, b]) == []
+
+
+def test_one_listing_is_never_a_group():
+    a = _native("VAC1", "Software Developer Apprentice", "HSE")
+    assert baseline.likely_duplicate_groups([a]) == []
+
+
+def test_the_same_reference_twice_is_not_a_duplicate_group():
+    """A group needs two distinct references, not one row seen twice."""
+    a = _native("VAC1", "Software Developer Apprentice", "HSE")
+    assert baseline.likely_duplicate_groups([a, a]) == []
+
+
+def test_duplicate_groups_are_reported_on_screen(capsys):
+    vacs = {
+        "a": _native("VAC2000060231", "Software Developer Apprentice",
+                     "Health and Safety Executive"),
+        "b": _ext("jcode:2017911", "Software Developer Apprentice (Band 5/EO)",
+                  "Health and Safety Executive", 2017911),
+    }
+    baseline.report(baseline._summarise(vacs, [], [], ["kw"], False))
+    out = capsys.readouterr().out
+
+    assert "likely cross-posts" in out
+    assert "nothing merged" in out
+    assert "cross-source" in out
+    assert "jcode:2017911" in out
+    assert "VAC2000060231" in out
+    assert "Phase 2 owns dedupe" in out
+
+
+def test_report_shows_level_unknown_split_from_level_4_plus(capsys):
+    vacs = {
+        "a": _native("VAC1", "Software Developer Apprentice", "IBM"),
+        "b": _ext("jcode:1", "Software Developer Apprentice", "HSE", 1),
+    }
+    baseline.report(baseline._summarise(vacs, [], [], ["kw"], False))
+    out = capsys.readouterr().out
+
+    assert "level unknown — counted separately, NEVER dropped" in out
+    assert "of which off-site" in out
+    assert "by source:" in out
+    assert "civil_service" in out

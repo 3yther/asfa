@@ -37,8 +37,8 @@ import re
 import time
 from dataclasses import dataclass, asdict
 from datetime import date
-from typing import Optional
-from urllib.parse import urlsplit, urljoin
+from typing import NamedTuple, Optional
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -65,6 +65,59 @@ ID_SEGMENT_RE = re.compile(r"^(?=[^/]*\d)([A-Za-z0-9][A-Za-z0-9._-]*)$")
 # Hrefs that are never a vacancy's identity.
 _NON_DETAIL_HREF_RE = re.compile(
     r"^\s*(#|mailto:|tel:|javascript:|data:)", re.I)
+
+# Where a listing's detail page lives. gov.uk cross-posts public-sector roles to
+# external recruitment systems, and those links carry their identity in the
+# QUERY STRING, not the path.
+HOST_FINDAPPRENTICESHIP = "findapprenticeship.service.gov.uk"
+HOST_CIVIL_SERVICE = "civilservicejobs.service.gov.uk"
+
+SOURCE_FINDAPPRENTICESHIP = "findapprenticeship"
+SOURCE_CIVIL_SERVICE = "civil_service"
+SOURCE_OTHER = "other"
+
+# Query parameters that identify a vacancy on an external system, most specific
+# first. `jcode` is Civil Service Jobs: every one of the 16 dropped "software
+# developer" cards was /csr/viewjob.cgi?jcode=<n>, so stripping the query made
+# them all the same reference and the in-page dedup kept exactly one.
+EXTERNAL_ID_PARAMS = ("jcode", "vacancyref", "vacancyid", "jobid", "jobref",
+                      "requisitionid", "id")
+
+# Analytics parameters, which differ between two links to the SAME vacancy and
+# so must not reach the reference.
+_TRACKING_PARAMS = ("utm_source", "utm_medium", "utm_campaign", "utm_term",
+                    "utm_content", "gclid", "fbclid", "mc_cid", "mc_eid",
+                    "_ga", "msclkid")
+
+# gov.uk appends this to the link text of an off-site listing. It is screen
+# reader guidance, not part of the job title.
+OPENS_IN_NEW_TAB_RE = re.compile(
+    r"\s*\(\s*opens?\s+in\s+(?:a\s+)?new\s+(?:tab|window)\s*\)\s*", re.I)
+
+
+def clean_title(text: str) -> str:
+    """Strip gov.uk's "(opens in new tab)" suffix and tidy whitespace."""
+    return " ".join(OPENS_IN_NEW_TAB_RE.sub(" ", text or "").split())
+
+
+def _source_for_host(host: str) -> str:
+    host = (host or "").lower().removeprefix("www.")
+    if not host or host.endswith(HOST_FINDAPPRENTICESHIP):
+        return SOURCE_FINDAPPRENTICESHIP
+    if host.endswith(HOST_CIVIL_SERVICE):
+        return SOURCE_CIVIL_SERVICE
+    return SOURCE_OTHER
+
+
+def _canonical_query(query: str) -> str:
+    """Query string with tracking params dropped and the rest ordered.
+
+    Ordering matters: two links to one vacancy that differ only in parameter
+    order must produce one reference, or the same role alerts twice.
+    """
+    pairs = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True)
+             if k.lower() not in _TRACKING_PARAMS]
+    return urlencode(sorted(pairs))
 
 # The site's own result count, from the <title> ("47 results found").
 #
@@ -95,6 +148,11 @@ class RawVacancy:
     start_date: Optional[date] = None
     posted_text: str = ""
     url: str = ""
+    # Which system hosts the detail page: findapprenticeship / civil_service /
+    # other. gov.uk cross-posts public-sector roles off-site, and those listings
+    # carry no level or training course, so a caller has to be able to tell them
+    # apart rather than treat a missing level as bad parsing.
+    source: str = SOURCE_FINDAPPRENTICESHIP
 
     def as_dict(self):
         d = asdict(self)
@@ -276,19 +334,21 @@ class GovUkScraper:
         link = card.find("a", href=VAC_REF_RE) or _primary_link(card)
         if not link:
             return None
-        reference, kind = reference_from_href(link.get("href", ""))
+        reference, kind, source = reference_from_href(link.get("href", ""))
         if not reference:
             return None
         if stats is not None:
             kinds = stats.setdefault("ref_kinds", {})
             kinds[kind] = kinds.get(kind, 0) + 1
+            sources = stats.setdefault("sources", {})
+            sources[source] = sources.get(source, 0) + 1
 
         # urljoin handles both a site-relative href and an absolute one, so a
         # fully-qualified link can't become BASE_URL + "https://...".
         url = urljoin(BASE_URL + "/", link["href"].strip())
 
-        # Title
-        title = link.get_text(strip=True)
+        # Title, less gov.uk's "(opens in new tab)" screen-reader suffix.
+        title = clean_title(link.get_text(strip=True))
 
         # The card has a series of <p class="govuk-body"> paragraphs after the h2.
         # First one is employer name (unlabelled), rest have <b>Label</b> value.
@@ -366,6 +426,7 @@ class GovUkScraper:
             start_date=start_date,
             posted_text=posted_text,
             url=url,
+            source=source,
         )
 
 
@@ -413,39 +474,78 @@ def _primary_link(card):
     return None
 
 
-def reference_from_href(href: str):
-    """(reference, kind) for a vacancy detail link, or (None, None).
+class LinkIdentity(NamedTuple):
+    """How a card's detail link identifies its vacancy.
 
-    kind is reported in the scrape stats so an unexpected format shows up as a
-    count rather than as a quiet shortfall:
+    `kind` is reported in the scrape stats so an unexpected link shape shows up
+    as a count rather than as a quiet shortfall:
 
-      "vac"     /apprenticeship/VAC1000123     -> VAC1000123
-      "id"      /vacancy/1000284512            -> 1000284512
-      "path"    /something/with-no-id-segment  -> the normalised path
+      "vac"    /apprenticeship/VAC1000123                  -> VAC1000123
+      "id"     /vacancy/1000284512                         -> 1000284512
+      "jcode"  …/viewjob.cgi?jcode=2017911                 -> jcode:2017911
+      "url"    external, no recognised id param            -> host/path?query
+      "path"   on-site, no id segment at all               -> the path
+    """
+    reference: Optional[str]
+    kind: Optional[str]
+    source: str = SOURCE_FINDAPPRENTICESHIP
 
-    Falling back to the path keeps the listing: `external_ref` only has to be
-    stable per listing for dedup to work, and a detail URL is.
+
+def reference_from_href(href: str) -> LinkIdentity:
+    """Identify the vacancy a detail link points at.
+
+    On-site links keep their existing treatment. For an EXTERNAL link the query
+    string is part of the identity and must not be discarded: gov.uk cross-posts
+    public-sector roles to systems like Civil Service Jobs, where every vacancy
+    shares the path `/csr/viewjob.cgi` and differs only by `?jcode=`. Reducing
+    those to the path gave 16 cards one reference, and the in-page dedup then
+    kept exactly one of them.
+
+    References from external systems are namespaced ("jcode:2017911", or
+    host+path+query) so they cannot collide with an on-site numeric id.
     """
     if not href:
-        return None, None
+        return LinkIdentity(None, None, SOURCE_OTHER)
     href = href.strip()
     if _NON_DETAIL_HREF_RE.match(href):
-        return None, None
+        return LinkIdentity(None, None, SOURCE_OTHER)
 
-    m = VAC_REF_RE.search(href)
-    if m:
-        return m.group(1), "vac"
+    parts = urlsplit(href)
+    source = _source_for_host(parts.netloc)
 
-    path = urlsplit(href).path.rstrip("/")
+    # On-site: the VAC reference is the canonical identity wherever it appears.
+    if source == SOURCE_FINDAPPRENTICESHIP:
+        m = VAC_REF_RE.search(href)
+        if m:
+            return LinkIdentity(m.group(1), "vac", source)
+
+    path = parts.path.rstrip("/")
+    query = _canonical_query(parts.query)
+
+    if source != SOURCE_FINDAPPRENTICESHIP:
+        # An id parameter is the tightest identity available, and short enough
+        # to read in an alert.
+        params = {k.lower(): v for k, v in
+                  parse_qsl(parts.query, keep_blank_values=True)}
+        for name in EXTERNAL_ID_PARAMS:
+            value = params.get(name)
+            if value:
+                return LinkIdentity(f"{name}:{value}", name, source)
+        # No recognised parameter: the whole normalised URL, which is still
+        # distinct per vacancy. Scheme is dropped so http/https don't split one
+        # listing in two.
+        host = parts.netloc.lower().removeprefix("www.")
+        ref = f"{host}{path}" + (f"?{query}" if query else "")
+        return LinkIdentity(ref or None, "url", source) if ref else \
+            LinkIdentity(None, None, source)
+
     if not path:
-        return None, None
+        return LinkIdentity(None, None, source)
 
     segments = [s for s in path.split("/") if s]
-    if segments:
-        last = segments[-1]
-        if ID_SEGMENT_RE.match(last):
-            return last, "id"
-    return path.lower(), "path"
+    if segments and ID_SEGMENT_RE.match(segments[-1]):
+        return LinkIdentity(segments[-1], "id", source)
+    return LinkIdentity(path.lower(), "path", source)
 
 
 # ----------------------------------------------------------------------

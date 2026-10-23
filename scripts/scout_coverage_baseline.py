@@ -34,7 +34,8 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services.scrapers.gov_uk import GovUkScraper, ScraperError  # noqa: E402
+from services.scrapers.gov_uk import (GovUkScraper, ScraperError,  # noqa: E402
+                                      SOURCE_FINDAPPRENTICESHIP)
 
 # ── Classifying a listing as digital ─────────────────────────────────────────
 # CLASSIFIER_VERSION 4 replaces a title-keyword match, which was circular: it
@@ -221,6 +222,72 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True):
     return _summarise(by_ref, per_search, errors, searches, use_employers)
 
 
+# ── Likely cross-post detection (FLAG ONLY — Phase 2 owns dedupe) ────────────
+# gov.uk lists some public-sector roles twice: once as a native apprenticeship
+# with a VAC reference and a level, and once as an off-site cross-post to the
+# employer's own system with neither. Those are the same job and should alert
+# once. This only LABELS candidate groups so the scale of the problem is
+# visible; nothing is merged, and the real matching (with a fuzzy fallback and
+# near-miss tests) belongs to Phase 2.
+
+_EMPLOYER_NOISE_RE = re.compile(
+    r"\b(ltd|limited|plc|llp|llc|inc|group|uk|the)\b", re.I)
+
+# Words that say nothing about WHICH role this is: grade/band markers, and the
+# apprenticeship vocabulary every one of these listings shares.
+_TITLE_NOISE = {
+    "apprentice", "apprenticeship", "apprenticeships", "trainee", "graduate",
+    "level", "band", "eo", "heo", "seo", "aa", "ao", "scheme", "programme",
+    "program", "new", "tab", "opens", "in", "a", "the", "and", "of", "for",
+}
+_TITLE_BRACKET_RE = re.compile(r"\([^)]*\)")
+
+
+def _norm_employer(name: str) -> str:
+    n = _EMPLOYER_NOISE_RE.sub(" ", (name or "").casefold())
+    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", n).split())
+
+
+def _title_core(title: str) -> frozenset:
+    """The tokens that distinguish one role from another."""
+    t = _TITLE_BRACKET_RE.sub(" ", (title or "").casefold())
+    t = re.sub(r"[^a-z0-9 ]+", " ", t)
+    return frozenset(w for w in t.split()
+                     if w not in _TITLE_NOISE and not w.isdigit() and len(w) > 2)
+
+
+def likely_duplicate_groups(vacs):
+    """Groups of listings that look like the same role seen twice.
+
+    Grouped on normalised employer plus the distinguishing title tokens, and
+    only when there are at least two such tokens — one generic token would pull
+    unrelated roles together. Returns the groups with more than one reference.
+    """
+    buckets = {}
+    for v in vacs:
+        core = _title_core(v.title)
+        if len(core) < 2:
+            continue
+        buckets.setdefault((_norm_employer(v.employer_name_raw), core), []).append(v)
+
+    groups = []
+    for (employer, core), members in buckets.items():
+        refs = {m.reference for m in members}
+        if len(refs) < 2:
+            continue
+        groups.append({
+            "employer": employer,
+            "title_tokens": sorted(core),
+            "sources": sorted({m.source for m in members}),
+            "cross_source": len({m.source for m in members}) > 1,
+            "members": sorted(
+                ({"ref": m.reference, "title": m.title, "source": m.source,
+                  "level": m.level, "url": m.url} for m in members),
+                key=lambda d: d["ref"]),
+        })
+    return sorted(groups, key=lambda g: (-len(g["members"]), g["employer"]))
+
+
 def _merge_counts(dicts):
     out = {}
     for d in dicts:
@@ -236,6 +303,8 @@ def _summarise(by_ref, per_search, errors, searches, use_employers):
     lvl6plus = [v for v in vacs if v.level is not None and v.level >= 6]
     digital = [v for v in vacs if digital_route(v)]
     unclassified = [v for v in vacs if route_unclassified(v)]
+    external = [v for v in vacs if v.source != SOURCE_FINDAPPRENTICESHIP]
+    level_unknown = [v for v in vacs if v.level is None]
     both = [v for v in vacs
             if digital_route(v) and v.level is not None and v.level >= 4]
 
@@ -272,11 +341,23 @@ def _summarise(by_ref, per_search, errors, searches, use_employers):
             "digital_route": len(digital),
             "digital_route_and_level_4_plus": len(both),
             "route_unclassified": len(unclassified),
-            "level_unknown": levels.get("unknown", 0),
+            "level_unknown": len(level_unknown),
+            # Off-site cross-posts. They carry no level or training course, so
+            # they are reported in their own right rather than counted as a
+            # parsing failure or silently excluded by a level filter.
+            "external_listings": len(external),
+            "external_level_unknown": sum(
+                1 for v in external if v.level is None),
+            "onsite_level_unknown": sum(
+                1 for v in level_unknown
+                if v.source == SOURCE_FINDAPPRENTICESHIP),
         },
         "coverage": coverage,
         "by_level": {str(k): v for k, v in sorted(
             levels.items(), key=lambda kv: (kv[0] == "unknown", kv[0]))},
+        "by_source": {k: v for k, v in sorted(
+            Counter(v.source for v in vacs).items())},
+        "likely_duplicate_groups": likely_duplicate_groups(vacs),
         "by_course": {c: n for c, n in Counter(
             course_name(v) or "(no course)" for v in vacs).most_common()},
         "per_search": per_search,
@@ -290,6 +371,7 @@ def _summarise(by_ref, per_search, errors, searches, use_employers):
                 "course": v.training_course,
                 "course_normalised": course_name(v),
                 "digital_route": digital_route(v),
+                "source": v.source,
                 "url": v.url,
             } for v in vacs),
             key=lambda d: (d["level"] is None, -(d["level"] or 0), d["title"])),
@@ -338,7 +420,20 @@ def report(snap):
     print(f"  digital route AND L4+    : {t['digital_route_and_level_4_plus']}")
     print(f"  course text missing      : {t['route_unclassified']}"
           f"   (route cannot be read)")
-    print(f"  level not parsed         : {t['level_unknown']}")
+    print()
+    print("  level unknown — counted separately, NEVER dropped:")
+    print(f"    total level unknown      : {t.get('level_unknown', 0)}")
+    print(f"      of which off-site      : {t.get('external_level_unknown', 0)}"
+          f"   (cross-posts carry no level)")
+    print(f"      of which on gov.uk     : {t.get('onsite_level_unknown', 0)}"
+          f"   (level not parsed — look at these)")
+    print(f"    off-site listings        : {t.get('external_listings', 0)}")
+
+    if snap.get("by_source"):
+        print()
+        print("by source:")
+        for src, n in snap["by_source"].items():
+            print(f"    {src:<22} {n:>5}")
 
     c = snap.get("coverage") or {}
     print()
@@ -396,6 +491,23 @@ def report(snap):
                               for d in digital_set) else " "
             print(f"  {star} {course[:52]:<54}{n:>4}")
 
+    groups = snap.get("likely_duplicate_groups") or []
+    if groups:
+        cross = sum(1 for g in groups if g["cross_source"])
+        print()
+        print(f"likely cross-posts — FLAGGED ONLY, nothing merged ({len(groups)} "
+              f"group(s), {cross} spanning two sources):")
+        for g in groups[:10]:
+            tag = "  [cross-source]" if g["cross_source"] else ""
+            print(f"    {g['employer'][:44]:<46}{'+'.join(g['title_tokens'])[:28]}{tag}")
+            for m in g["members"]:
+                lvl = m["level"] if m["level"] is not None else "?"
+                print(f"        L{lvl:<3} {m['source']:<20}{m['ref']:<20}"
+                      f"{m['title'][:38]}")
+        if len(groups) > 10:
+            print(f"    ... and {len(groups) - 10} more")
+        print("    Phase 2 owns dedupe; these are reported so the scale is known.")
+
     if snap["errors"]:
         print()
         print(f"errors ({len(snap['errors'])}):")
@@ -423,10 +535,13 @@ def compare(a_path, b_path):
         print("      with one based on the apprenticeship standard.")
         print()
 
-    keys = ("unique_results", "level_4_plus", "level_6_plus", "digital_route",
+    keys = ("unique_results", "level_4_plus", "level_6_plus", "level_unknown",
+            "external_listings", "digital_route",
             "digital_route_and_level_4_plus", "route_unclassified")
     label = {"unique_results": "unique listings", "level_4_plus": "Level 4+",
-             "level_6_plus": "Level 6+", "digital_route": "digital route",
+             "level_6_plus": "Level 6+", "level_unknown": "level unknown",
+             "external_listings": "off-site listings",
+             "digital_route": "digital route",
              "digital_route_and_level_4_plus": "digital route AND L4+",
              "route_unclassified": "course text missing"}
 
