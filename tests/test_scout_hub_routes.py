@@ -242,6 +242,48 @@ def test_allow_forever_validates_its_input():
                  {"kind": "standard", "value": ""}).status_code == 400
 
 
+def test_a_correction_round_trips_and_can_be_undone():
+    c = _client()
+    r = _post(c, "/api/scout/excluded/allow",
+              {"kind": "standard", "value": "supply chain warehouse operative"})
+    assert r.status_code == 200
+    allowed = r.get_json()["allowed"]
+    row = next(a for a in allowed
+               if a["value"] == "supply chain warehouse operative")
+    assert row["label"] == "Never exclude this standard"
+
+    # It is visible on the next load of the screen, from the database.
+    listed = c.get("/api/scout/excluded").get_json()["allowed"]
+    assert any(a["id"] == row["id"] for a in listed)
+
+    r = c.open(f"/api/scout/excluded/allow/{row['id']}", method="DELETE",
+               headers={"X-CSRF-Token": _csrf(c)})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert c.get("/api/scout/excluded").get_json()["allowed"] == []
+
+
+def test_undoing_a_correction_that_is_gone_is_a_404():
+    c = _client()
+    r = c.open("/api/scout/excluded/allow/999999", method="DELETE",
+               headers={"X-CSRF-Token": _csrf(c)})
+    assert r.status_code == 404
+
+
+def test_a_stored_correction_changes_what_the_filter_does():
+    """The point of the whole feature: the verdict actually moves."""
+    from services import scout_config
+    c = _client()
+    before = scout_config.judge("Warehouse Systems Apprentice", "Marchmont",
+                                "Supply chain warehouse operative")
+    assert before.keep is False
+
+    _post(c, "/api/scout/excluded/allow",
+          {"kind": "standard", "value": "supply chain warehouse operative"})
+    after = scout_config.judge("Warehouse Systems Apprentice", "Marchmont",
+                               "Supply chain warehouse operative")
+    assert after.keep is True and after.reason == scout_config.KEEP_DIGITAL_STANDARD
+
+
 # ── Alerts ──────────────────────────────────────────────────────────────────
 
 def test_alerts_report_each_channel_without_a_secret(monkeypatch):

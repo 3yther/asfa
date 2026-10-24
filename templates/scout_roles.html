@@ -102,8 +102,10 @@
   <button type="button" class="sr-btn" id="sr-ex-back">&#x2190; Back to roles</button>
   <h1 class="sr-h1" id="sr-ex-h1" style="margin-top:16px;">Excluded</h1>
   <p class="sr-sub">Everything the relevance filter dropped, and why. If one is
-     wrong, allow it here and the filter config changes — no deploy.</p>
+     wrong, allow it here — the correction is saved to the database, so it
+     survives a redeploy, and you can undo it below.</p>
   <div class="sr-reason-tally" id="sr-ex-tally"></div>
+  <div id="sr-allowed" hidden></div>
   <div id="sr-ex-list"></div>
 </section>
 

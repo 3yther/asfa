@@ -3316,6 +3316,22 @@ def _ensure_scout_tables():
             fetched_at TEXT,
             fetch_status TEXT
         )""",
+        # Corrections the user made from the Excluded screen. A DELTA on top
+        # of config/scout_filters.json, not a replacement for it: the file
+        # stays the hand-editable default layer and these are applied over it.
+        #
+        # DB-backed rather than written into the file because Railway's
+        # container filesystem is ephemeral — a correction written to the file
+        # in production lasts until the next deploy and then silently reverts,
+        # which is the worst of both worlds.
+        """CREATE TABLE IF NOT EXISTS scout_filter_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            list_key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            op TEXT NOT NULL DEFAULT 'add',
+            source TEXT,
+            created_at TEXT
+        )""",
         """CREATE TABLE IF NOT EXISTS scout_exclusions (
             external_ref TEXT PRIMARY KEY,
             title TEXT,
@@ -4446,6 +4462,113 @@ def get_scout_programme_companies() -> list:
             "SELECT DISTINCT company_norm FROM scout_programmes "
             "WHERE company_norm <> ''").fetchall()
     return sorted({dict(r)["company_norm"] for r in rows})
+
+
+# ── Scout filter overrides: the Excluded screen's corrections ──────────────
+#
+# A DELTA applied over config/scout_filters.json, which stays the default
+# layer. Two ops, which is all the Excluded screen's two buttons need:
+#
+#   add     — put this value into that list (a standard into digital_standards,
+#             an employer onto the watchlist)
+#   remove  — take this value out of that list (an exclusion term that was
+#             wrongly matching an employer)
+#
+# They live in the database because Railway's filesystem is ephemeral: a
+# correction written into the JSON file in production survives until the next
+# deploy and then silently reverts.
+SCOUT_FILTER_OPS = ("add", "remove")
+
+
+def list_scout_filter_overrides(list_key: str = None) -> list:
+    """Every stored override, oldest first so later ones win on replay."""
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        if list_key:
+            cur.execute(f"SELECT * FROM scout_filter_overrides "
+                        f"WHERE list_key = {ph} ORDER BY id", (list_key,))
+        else:
+            cur.execute("SELECT * FROM scout_filter_overrides ORDER BY id")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def add_scout_filter_override(list_key: str, value: str, op: str = "add",
+                              source: str = "excluded_screen") -> bool:
+    """Store one override. Idempotent on (list_key, value, op).
+
+    An `add` and a `remove` of the same value cannot both stand — the later one
+    is what the user meant — so storing one clears the other.
+    """
+    list_key = (list_key or "").strip()
+    value = " ".join((value or "").split())
+    op = (op or "add").strip().lower()
+    if not list_key or not value or op not in SCOUT_FILTER_OPS:
+        return False
+    _ensure_scout_tables()
+    opposite = "remove" if op == "add" else "add"
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"DELETE FROM scout_filter_overrides "
+            f"WHERE list_key = {ph} AND LOWER(value) = LOWER({ph}) "
+            f"  AND op IN ({ph}, {ph})",
+            (list_key, value, op, opposite))
+        cur.execute(
+            f"INSERT INTO scout_filter_overrides "
+            f"(list_key, value, op, source, created_at) "
+            f"VALUES ({ph}, {ph}, {ph}, {ph}, {ph})",
+            (list_key, value, op, source, datetime.now().isoformat()))
+    return True
+
+
+def delete_scout_filter_override(override_id) -> bool:
+    """Undo one correction. The Excluded screen's "allowed" list uses this."""
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM scout_filter_overrides WHERE id = {ph}",
+                    (override_id,))
+        return cur.rowcount > 0
+
+
+def current_database_id() -> str:
+    """Which database this process is actually talking to.
+
+    Part of the override cache's key, so a reader cannot serve rows it read
+    from a different database. In production this never changes; under test
+    each module gets its own SQLite file, and a cache that ignored that would
+    hand one module's state to the next.
+
+    The Postgres URL is a credential, so it is hashed rather than returned.
+    """
+    if USE_POSTGRES:
+        return "pg:" + hashlib.sha256(
+            (DATABASE_URL or "").encode("utf-8")).hexdigest()[:16]
+    return "sqlite:" + str(SQLITE_PATH)
+
+
+def scout_filter_overrides_stamp():
+    """A cheap fingerprint of the overrides layer, so a reader can cache it.
+
+    `settings()` is consulted several times per listing, which is thousands of
+    times per scan, so the overrides cannot be re-read on every call — but a
+    cache that never notices a write would silently ignore the correction the
+    user just made. This is one small aggregate query, used as the cache key.
+
+    The database identity is part of it: (count, max_id) alone would compare
+    equal across two different databases that happen to hold the same number
+    of rows.
+    """
+    _ensure_scout_tables()
+    with get_db() as conn:
+        row = dict(conn.cursor().execute(
+            "SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS top "
+            "FROM scout_filter_overrides").fetchone())
+    return (current_database_id(), row["n"], row["top"])
 
 
 def get_watched_employer_names() -> list:

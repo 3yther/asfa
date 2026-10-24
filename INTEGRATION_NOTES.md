@@ -177,8 +177,10 @@ Two paths, both already in place:
 
 - **Email:** `services/scout.py:_send_email(jobs)` — Gmail SMTP
   (`smtp.gmail.com:587`, STARTTLS), `MIMEText(body, "plain", "utf-8")`,
-  credentials from `SCOUT_EMAIL_USER` / `SCOUT_EMAIL_PASS`, hardcoded
-  `NOTIFY_EMAIL_TO = "ami.salax08@gmail.com"`. Subject:
+  credentials from `SCOUT_EMAIL_USER` / `SCOUT_EMAIL_PASS`, recipient from
+  `SCOUT_NOTIFY_EMAIL_TO` / `NOTIFY_EMAIL_TO`. (This used to be a hardcoded
+  address; it was moved to the environment because this repository is public.
+  Unset means the email path is skipped silently.) Subject:
   `f"SCOUT — {n} new job{'s' if n != 1 else ''} found"`. Body is **plain text**,
   one bullet per job:
   ```

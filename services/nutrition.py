@@ -20,8 +20,28 @@ _OFF_URL = "https://world.openfoodfacts.org/api/v0/product/{code}.json"
 _OFF_SEARCH_URL = "https://world.openfoodfacts.org/cgi/search.pl"
 _TIMEOUT = 5
 # Open Food Facts blocks requests without a descriptive User-Agent (403), per
-# their API policy: identify the app + a contact.
-_HEADERS = {"User-Agent": "ASFA-Dashboard/1.0 (nutrition; ami.salax@gmail.com)"}
+# their API policy: identify the app, and give a contact where you can.
+#
+# The contact comes from NUTRITION_CONTACT (or OFF_CONTACT) and has NO default:
+# this repository is public, and a personal address in the source is a personal
+# address on GitHub and in every outbound request header. Unset drops the
+# contact and nothing else — "ASFA-Dashboard/1.0 (nutrition)" still names the
+# app, its version and its purpose, which is what the policy is actually asking
+# for, so lookups keep working. Set it if you want them to be able to reach you.
+_UA_BASE = "ASFA-Dashboard/1.0"
+
+
+def _user_agent() -> str:
+    contact = (os.environ.get("NUTRITION_CONTACT")
+               or os.environ.get("OFF_CONTACT") or "").strip()
+    return f"{_UA_BASE} (nutrition; {contact})" if contact \
+        else f"{_UA_BASE} (nutrition)"
+
+
+def _headers() -> dict:
+    """Built per call, not captured at import, so setting the variable in a
+    test or a one-off `railway run` takes effect without a reload."""
+    return {"User-Agent": _user_agent()}
 
 # USDA FoodData Central text search. Free; DEMO_KEY works but is rate-limited
 # (~30 req/hr, 50/day per IP), so prod should set FDC_API_KEY to a real key
@@ -64,7 +84,7 @@ def lookup_barcode(code: str):
     if not code:
         return None
     try:
-        r = requests.get(_OFF_URL.format(code=code), headers=_HEADERS,
+        r = requests.get(_OFF_URL.format(code=code), headers=_headers(),
                          timeout=_TIMEOUT)
         r.raise_for_status()
         data = r.json()
@@ -404,7 +424,7 @@ def search_open_food_facts(q: str, limit: int = 10):
         "fields": "product_name,nutriments,code",
     }
     try:
-        r = requests.get(_OFF_SEARCH_URL, params=params, headers=_HEADERS,
+        r = requests.get(_OFF_SEARCH_URL, params=params, headers=_headers(),
                          timeout=_TIMEOUT)
         r.raise_for_status()
         data = r.json()

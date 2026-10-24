@@ -917,8 +917,10 @@ def export_all_data():
 # CV or an application form, so it must render without the passphrase and
 # without a guest session. It reads nothing from the database.
 #
-# Contact details default to the values on the CV and can be overridden (or
-# blanked) with PORTFOLIO_* env vars — useful because this repo is public.
+# Contact details come from PORTFOLIO_* env vars. There is NO default for the
+# email: this repository is public, so a default in the source is a personal
+# address published on GitHub. Unset simply drops the chip — templates/
+# portfolio.html guards each one with {% if %}, so the page renders without it.
 CV_FILENAME = "Amir_Salah_CV.pdf"
 CV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "cv", CV_FILENAME)
 
@@ -929,7 +931,7 @@ def portfolio():
         "portfolio.html",
         active="portfolio",
         phone=os.environ.get("PORTFOLIO_PHONE", "07398 396363"),
-        email=os.environ.get("PORTFOLIO_EMAIL", "ami.salax08@gmail.com"),
+        email=os.environ.get("PORTFOLIO_EMAIL", "").strip(),
         linkedin=os.environ.get("PORTFOLIO_LINKEDIN",
                                 "https://www.linkedin.com/in/amir-salah"),
         cv_available=os.path.exists(CV_PATH),
@@ -4491,10 +4493,12 @@ def api_scout_role_detail_fetch(ref):
 @app.route("/api/scout/excluded")
 def api_scout_excluded():
     """The audit view: everything the relevance filter dropped, with reasons."""
+    from services import scout_config
     return jsonify({
         "counts": db.count_scout_exclusions(listing_type="apprenticeship"),
         "listings": db.get_scout_exclusions(limit=500,
                                             listing_type="apprenticeship"),
+        "allowed": scout_config.allowed_overrides(),
     })
 
 
@@ -4514,9 +4518,27 @@ def api_scout_excluded_allow():
                                  "with a value"}), 400
     try:
         added = scout_config.allow_forever(kind, value)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    return jsonify({"ok": True, "kind": kind, "value": value, "added": added})
+        logger.error("scout allow_forever failed: %s", e)
+        return jsonify({"error": "could not store that correction"}), 500
+    return jsonify({"ok": True, "kind": kind, "value": value, "added": added,
+                    "allowed": scout_config.allowed_overrides()})
+
+
+@app.route("/api/scout/excluded/allow/<int:override_id>", methods=["DELETE"])
+def api_scout_excluded_undo(override_id):
+    """Undo one stored correction.
+
+    The corrections live in the database so they survive a Railway deploy; the
+    file they replaced was at least hand-editable, so moving them has to bring
+    a way back with it.
+    """
+    from services import scout_config
+    ok = scout_config.undo_override(override_id)
+    return jsonify({"ok": ok, "allowed": scout_config.allowed_overrides()}), \
+        (200 if ok else 404)
 
 
 @app.route("/api/scout/tracker")

@@ -48,6 +48,7 @@ import logging
 import os
 import re
 import threading
+import time
 
 logger = logging.getLogger("asfa.scout_config")
 
@@ -366,14 +367,101 @@ def _load_overrides(path: str) -> dict:
     return out
 
 
+# How long the database layer may be served from cache before it is re-checked.
+# `settings()` is consulted several times per listing — thousands of times in a
+# scan — so the overrides table cannot be read on every call. The stamp query
+# is cheap but not free, so it runs at most this often; an explicit refresh
+# after a write makes a correction visible immediately regardless.
+_DB_STAMP_TTL = 30.0
+_DB_STAMP = None
+_DB_STAMP_AT = 0.0
+_DB_STAMP_FOR = None
+
+
+def _db_stamp(force: bool = False):
+    """A fingerprint of the overrides table, re-read at most every TTL.
+
+    The TTL bounds how long an out-of-band write (a direct SQL edit, a second
+    process) stays invisible; a correction made through `allow_forever` is
+    visible at once, because that refreshes explicitly.
+
+    A change of DATABASE is never deferred, though: the identity check below is
+    a string compare with no query behind it, and serving one database's
+    overrides against another's rows is wrong rather than merely stale.
+
+    Returns None when the database cannot be reached — deliberately not the
+    (…, 0, 0) an empty table produces, so an unavailable database leaves the
+    file layer in charge instead of looking like "every override was deleted".
+    """
+    global _DB_STAMP, _DB_STAMP_AT, _DB_STAMP_FOR
+    try:
+        import database as db
+        db_id = db.current_database_id()
+    except Exception as e:                              # pragma: no cover
+        logger.debug("scout_config: no database module (%s)", e)
+        return None
+
+    now = time.monotonic()
+    if (not force and _DB_STAMP_AT and db_id == _DB_STAMP_FOR
+            and (now - _DB_STAMP_AT) < _DB_STAMP_TTL):
+        return _DB_STAMP
+    try:
+        _DB_STAMP = db.scout_filter_overrides_stamp()
+    except Exception as e:
+        logger.debug("scout_config: overrides table unavailable (%s)", e)
+        _DB_STAMP = None
+    _DB_STAMP_AT, _DB_STAMP_FOR = now, db_id
+    return _DB_STAMP
+
+
+def _apply_db_overrides(merged: dict) -> dict:
+    """Apply the stored corrections over the file layer.
+
+    Replayed oldest-first so a later decision wins, and matched case-insensitively
+    because the values come from scraped employer names and course titles, where
+    the user's spelling and the site's rarely agree.
+    """
+    try:
+        import database as db
+        rows = db.list_scout_filter_overrides()
+    except Exception as e:
+        logger.debug("scout_config: could not read overrides (%s)", e)
+        return merged
+
+    for row in rows:
+        key = row.get("list_key")
+        value = " ".join((row.get("value") or "").split())
+        if key not in _KEYS or not value:
+            continue
+        current = [str(v) for v in merged.get(key, _KEYS[key])]
+        fold = value.casefold()
+        kept = [v for v in current if v.strip().casefold() != fold]
+        if (row.get("op") or "add") == "add":
+            merged[key] = kept + [value]
+        else:
+            merged[key] = kept
+    return merged
+
+
 def settings(refresh: bool = False) -> dict:
-    """The effective configuration: defaults merged with the JSON overrides."""
+    """The effective configuration, in three layers.
+
+        1. the module defaults above
+        2. config/scout_filters.json — the hand-editable file layer
+        3. `scout_filter_overrides` — the corrections made from the Excluded
+           screen, applied as a delta over both
+
+    The database is last so a correction wins, and a delta rather than a
+    replacement so the file stays meaningful: edit the file and the stored
+    corrections still ride on top of the new value.
+    """
     global _CACHE, _CACHE_STAMP
     path = config_path()
     try:
-        stamp = (path, os.path.getmtime(path))
+        file_stamp = os.path.getmtime(path)
     except OSError:
-        stamp = (path, None)
+        file_stamp = None
+    stamp = (path, file_stamp, _db_stamp(force=refresh))
 
     with _LOCK:
         if refresh or not _CACHE or _CACHE_STAMP != stamp:
@@ -381,6 +469,7 @@ def settings(refresh: bool = False) -> dict:
             merged.update(_SCALARS)
             merged["distance"] = DEFAULT_DISTANCE
             merged.update(_load_overrides(path))
+            merged = _apply_db_overrides(merged)
             # Normalise the lists once so the matchers don't re-lower on every
             # listing; scalars are left as they are.
             _CACHE = {k: (v if k in _SCALARS or k == "distance" else tuple(v))
@@ -741,93 +830,17 @@ def judge(title: str, employer: str = "", course: str = "",
 ALLOW_KINDS = ("standard", "employer")
 
 
-def _read_raw() -> dict:
-    """The overrides file as written, not merged with the defaults.
-
-    A scan tolerates a broken file by falling back to defaults; a WRITE must
-    not, because overwriting it would throw away whatever the user was editing.
-    So this raises where `_load_overrides` shrugs.
-    """
-    path = config_path()
-    try:
-        with open(path, encoding="utf-8") as fh:
-            raw = json.load(fh)
-    except FileNotFoundError:
-        return {}
-    except (OSError, ValueError) as e:
-        raise ValueError(f"{path} could not be read as JSON ({e}) — refusing "
-                         f"to overwrite it") from e
-    if not isinstance(raw, dict):
-        raise ValueError(f"{path} is not a JSON object — refusing to "
-                         f"overwrite it")
-    return raw
-
-
-def _write_raw(raw: dict) -> None:
-    """Replace the overrides file, then drop the cache.
-
-    Written to a temporary file and renamed: `os.replace` is atomic, so an
-    interrupted write cannot leave a truncated config — which would silently
-    reset every exclusion list to the defaults on the next scan.
-    """
-    path = config_path()
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(raw, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-    os.replace(tmp, path)
-    settings(refresh=True)
-
-
-def _append_override(raw: dict, key: str, value: str, changed: dict) -> bool:
-    """Add `value` to `key` via the append form, unless it is already in effect.
-
-    The `+key` form adds to the defaults instead of replacing them, so allowing
-    one standard cannot quietly drop the other fifty-odd.
-    """
-    fold = value.casefold()
-    if any(fold == str(v).strip().casefold() for v in settings()[key]):
-        return False
-    plus = f"+{key}"
-    current = raw.get(plus)
-    raw[plus] = ([str(v) for v in current] if isinstance(current, list)
-                 else []) + [value]
-    changed["added"].setdefault(key, []).append(value)
-    return True
-
-
-def _remove_matching(raw: dict, key: str, employer: str, changed: dict) -> bool:
-    """Drop every `key` term that would match this employer.
+def _effective_matches(key: str, employer: str) -> list:
+    """The `key` terms that would currently match this employer.
 
     `matched_employer_exclusion` is a substring test, so the term that caused
     the drop is often not the employer's full name — "greggs" excludes "Greggs
     plc". Removing exactly what WOULD match is what makes the button do what it
-    says, rather than removing a name that was never on the list.
+    says, rather than storing a name that was never on the list.
     """
     name = employer.casefold()
-    drop = {t.strip().casefold() for t in settings()[key]
-            if t.strip().casefold() and t.strip().casefold() in name}
-    if not drop:
-        return False
-
-    def _without(seq):
-        return [str(v) for v in seq if str(v).strip().casefold() not in drop]
-
-    for form in (key, f"+{key}"):
-        if isinstance(raw.get(form), list):
-            raw[form] = _without(raw[form])
-
-    # A term that survives the file came from this module's defaults, and the
-    # only way to lift one of those is a full-replace list.
-    if any(str(v).strip().casefold() in drop for v in _KEYS[key]):
-        base = raw[key] if isinstance(raw.get(key), list) else _KEYS[key]
-        raw[key] = _without(base)
-
-    changed["removed"].setdefault(key, []).extend(sorted(drop))
-    return True
+    return sorted({t.strip() for t in settings()[key]
+                   if t.strip() and t.strip().casefold() in name})
 
 
 def allow_forever(kind: str, value: str) -> dict:
@@ -846,17 +859,18 @@ def allow_forever(kind: str, value: str) -> dict:
         chef — so this is "stop excluding them for being them", not "keep
         everything they post".
 
-    Returns what changed, per list, so a caller can report what happened rather
-    than claim more than it did. Idempotent: a value already in effect writes
-    nothing and comes back with both maps empty.
+    STORED IN THE DATABASE, as a delta over `config/scout_filters.json`. Railway's
+    container filesystem is ephemeral, so a correction written into the file in
+    production would hold until the next deploy and then silently revert — the
+    user would have to notice the exclusion had come back. The file stays the
+    hand-editable default layer; these ride on top of whatever it says.
 
-    ON RAILWAY THIS IS NOT PERMANENT. The container filesystem is ephemeral, so
-    a correction made from the Excluded screen holds until the next deploy or
-    restart and is then back to whatever `config/scout_filters.json` says in the
-    repo. Commit the change there to keep it. Making these DB-backed instead is
-    the fix, and is deliberately not done here: the brief said the action writes
-    the filter config, and one source of truth beats two that disagree.
+    Returns what changed, per list, so a caller can report what happened rather
+    than claim more than it did. Idempotent: a value already in effect stores
+    nothing and comes back with both maps empty.
     """
+    import database as db
+
     kind = (kind or "").strip().casefold()
     value = " ".join((value or "").split())
     if kind not in ALLOW_KINDS:
@@ -864,17 +878,73 @@ def allow_forever(kind: str, value: str) -> dict:
     if not value:
         raise ValueError("a value is required")
 
-    raw = _read_raw()
     changed = {"added": {}, "removed": {}}
 
+    def _add(key, term):
+        fold = term.casefold()
+        if any(fold == str(v).strip().casefold() for v in settings()[key]):
+            return
+        if db.add_scout_filter_override(key, term, op="add"):
+            changed["added"].setdefault(key, []).append(term)
+
+    def _drop(key, terms):
+        for term in terms:
+            if db.add_scout_filter_override(key, term, op="remove"):
+                changed["removed"].setdefault(key, []).append(term)
+
     if kind == "standard":
-        _append_override(raw, "digital_standards", value, changed)
+        _add("digital_standards", value)
     else:
-        _remove_matching(raw, "employer_exclusions", value, changed)
-        _append_override(raw, "watchlist_employers", value, changed)
+        _drop("employer_exclusions",
+              _effective_matches("employer_exclusions", value))
+        _add("watchlist_employers", value)
 
     if changed["added"] or changed["removed"]:
-        _write_raw(raw)
+        settings(refresh=True)        # the correction takes effect now, not in 30s
         logger.info("scout_config: allow_forever(%s) added=%s removed=%s",
                     kind, changed["added"], changed["removed"])
     return changed
+
+
+def allowed_overrides() -> list:
+    """Every correction currently stored, for the Excluded screen's undo list.
+
+    Without this the only way back from a mis-click would be a SQL console —
+    the file was at least hand-editable, so moving to the database has to bring
+    its own way to reverse a decision.
+    """
+    import database as db
+
+    labels = {
+        ("digital_standards", "add"): "Never exclude this standard",
+        ("watchlist_employers", "add"): "Never exclude this employer",
+        ("employer_exclusions", "remove"): "Removed an employer exclusion",
+    }
+    out = []
+    try:
+        rows = db.list_scout_filter_overrides()
+    except Exception as e:
+        logger.warning("scout_config: could not list overrides: %s", e)
+        return out
+    for row in rows:
+        key, op = row.get("list_key"), row.get("op") or "add"
+        out.append({
+            "id": row.get("id"),
+            "value": row.get("value") or "",
+            "list_key": key,
+            "op": op,
+            "label": labels.get((key, op),
+                                f"{op} {str(key).replace('_', ' ')}"),
+            "created_at": row.get("created_at") or "",
+        })
+    return out
+
+
+def undo_override(override_id) -> bool:
+    """Reverse one stored correction."""
+    import database as db
+
+    if db.delete_scout_filter_override(override_id):
+        settings(refresh=True)
+        return True
+    return False

@@ -459,6 +459,8 @@
     }
     $("sr-ex-tally").innerHTML = tally.join("");
 
+    renderAllowed(data.allowed || []);
+
     const rows = data.listings || [];
     if (!rows.length) {
       list.innerHTML = '<div class="sr-empty">Nothing has been excluded yet.</div>';
@@ -485,6 +487,42 @@
     }).join("");
   }
 
+  // Corrections already made, with a way back. They are stored in the database
+  // so a Railway deploy cannot lose them — which also means a mis-click would
+  // be permanent without this.
+  function renderAllowed(rows) {
+    const box = $("sr-allowed");
+    if (!rows.length) { box.innerHTML = ""; box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = '<h2 class="sr-h1" style="font-size:1rem;">Allowed</h2>' +
+      '<p class="sr-group-note" style="margin-bottom:12px;">Corrections you ' +
+      "have made. These are stored in the database, so they survive a " +
+      "redeploy.</p>" +
+      rows.map((r) =>
+        '<div class="sr-ex-row"><h3>' + esc(r.value) + "</h3>" +
+        '<p class="sr-ex-why">' + esc(r.label) +
+          (r.created_at ? " &middot; " + esc(String(r.created_at).slice(0, 10))
+                        : "") + "</p>" +
+        '<div class="sr-ex-actions"><button type="button" class="sr-btn" ' +
+          'data-undo="' + r.id + '" aria-label="Undo: ' + esc(r.label) +
+          " " + esc(r.value) + '">Undo</button></div></div>').join("");
+  }
+
+  $("sr-allowed").addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-undo]");
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      const res = await apiSend("/api/scout/excluded/allow/" +
+        encodeURIComponent(btn.dataset.undo), undefined, "DELETE");
+      renderAllowed(res.allowed || []);
+      toast("Correction undone.");
+    } catch (err) {
+      toast("Could not undo that (" + err.message + ")", true);
+      btn.disabled = false;
+    }
+  });
+
   $("sr-ex-list").addEventListener("click", async (e) => {
     const btn = e.target.closest("[data-allow]");
     if (!btn) return;
@@ -495,8 +533,9 @@
       const added = res.added || {};
       const touched = Object.keys(added.added || {}).concat(
         Object.keys(added.removed || {}));
+      renderAllowed(res.allowed || []);
       toast(touched.length
-        ? "Filter config updated: " + touched.join(", ").replace(/_/g, " ")
+        ? "Saved. Undo it under \u201cAllowed\u201d if that was wrong."
         : "Already allowed — nothing to change.");
     } catch (err) {
       toast("Could not update the filter config (" + err.message + ")", true);

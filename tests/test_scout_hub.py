@@ -43,7 +43,7 @@ def clean_scout():
         cur = conn.cursor()
         for table in ("scout_pipeline", "scout_jobs", "scout_programmes",
                       "scout_job_details", "scout_exclusions",
-                      "scout_saved_searches"):
+                      "scout_saved_searches", "scout_filter_overrides"):
             cur.execute(f"DELETE FROM {table}")
     yield
 
@@ -273,17 +273,108 @@ def test_allow_forever_rejects_an_unknown_kind(filters_file):
         scout_config.allow_forever("standard", "   ")
 
 
-def test_allow_forever_refuses_to_overwrite_an_unreadable_config(filters_file):
+def test_allow_forever_never_touches_the_config_file(filters_file):
+    """Corrections go to the database, so the hand-editable file is left
+    exactly as the user wrote it — including when it will not parse."""
+    before = filters_file.read_text(encoding="utf-8")
+    scout_config.allow_forever("standard", "supply chain warehouse operative")
+    assert filters_file.read_text(encoding="utf-8") == before
+
+
+def test_a_correction_still_works_when_the_config_file_is_broken(filters_file):
     filters_file.write_text("{ this is not json", encoding="utf-8")
     scout_config.settings(refresh=True)
-    with pytest.raises(ValueError):
-        scout_config.allow_forever("standard", "data analyst")
+    scout_config.allow_forever("standard", "supply chain warehouse operative")
+    assert scout_config.is_digital_standard("Supply chain warehouse operative (level 2)")
     assert filters_file.read_text(encoding="utf-8") == "{ this is not json", (
-        "a scan tolerates a broken file; a WRITE must not destroy it")
+        "and the file the user was mid-edit on is not rewritten")
+
+
+# ── The three layers ────────────────────────────────────────────────────────
+
+def test_the_database_layer_wins_over_the_file(filters_file):
+    filters_file.write_text(json.dumps(
+        {"+employer_exclusions": ["larkspur"]}), encoding="utf-8")
+    scout_config.settings(refresh=True)
+    assert scout_config.matched_employer_exclusion("Larkspur Catering")
+
+    scout_config.allow_forever("employer", "Larkspur Catering")
+    assert scout_config.matched_employer_exclusion("Larkspur Catering") is None
+
+
+def test_the_database_layer_is_a_delta_not_a_replacement(filters_file):
+    """Editing the file afterwards must still take effect, with the stored
+    corrections riding on top — otherwise the file stops meaning anything."""
+    scout_config.allow_forever("standard", "supply chain warehouse operative")
+    filters_file.write_text(json.dumps(
+        {"+digital_standards": ["something else entirely"],
+         "home_postcode": ["AB12"]}), encoding="utf-8")
+    scout_config.settings(refresh=True)
+
+    effective = scout_config.settings()["digital_standards"]
+    assert "supply chain warehouse operative" in effective, "the stored correction survives"
+    assert "something else entirely" in effective, "and so does the file edit"
+    assert scout_config.home_postcode() == "AB12"
+
+
+def test_a_correction_survives_a_restart(filters_file):
+    """The whole point: nothing is kept in the process or on the container
+    filesystem, so a redeploy cannot lose it."""
+    scout_config.allow_forever("standard", "supply chain warehouse operative")
+    scout_config._CACHE = {}          # a fresh process has no cache
+    scout_config._DB_STAMP_AT = 0.0
+    scout_config._DB_STAMP_FOR = None
+    assert scout_config.is_digital_standard("Supply chain warehouse operative (level 2)")
+
+
+def test_a_correction_can_be_undone(filters_file):
+    scout_config.allow_forever("standard", "supply chain warehouse operative")
+    stored = scout_config.allowed_overrides()
+    row = next(r for r in stored if r["value"] == "supply chain warehouse operative")
+    assert row["label"] == "Never exclude this standard"
+
+    assert scout_config.undo_override(row["id"]) is True
+    assert not scout_config.is_digital_standard("Supply chain warehouse operative (level 2)")
+    assert scout_config.undo_override(row["id"]) is False, "already gone"
+
+
+def test_undoing_an_employer_correction_restores_the_exclusion(filters_file):
+    filters_file.write_text(json.dumps(
+        {"+employer_exclusions": ["larkspur"]}), encoding="utf-8")
+    scout_config.settings(refresh=True)
+    scout_config.allow_forever("employer", "Larkspur Catering")
+    assert scout_config.matched_employer_exclusion("Larkspur Catering") is None
+
+    for row in scout_config.allowed_overrides():
+        scout_config.undo_override(row["id"])
+    assert scout_config.matched_employer_exclusion("Larkspur Catering") == "larkspur"
+
+
+def test_a_later_decision_replaces_an_earlier_opposite_one(filters_file):
+    """add and remove of the same value cannot both stand."""
+    db.add_scout_filter_override("digital_standards", "supply chain warehouse operative", op="remove")
+    db.add_scout_filter_override("digital_standards", "supply chain warehouse operative", op="add")
+    rows = [r for r in db.list_scout_filter_overrides()
+            if r["value"] == "supply chain warehouse operative"]
+    assert len(rows) == 1 and rows[0]["op"] == "add"
+
+
+def test_an_override_for_an_unknown_list_is_ignored_not_fatal(filters_file):
+    db.add_scout_filter_override("not_a_real_list", "whatever", op="add")
+    scout_config.settings(refresh=True)
+    assert "not_a_real_list" not in scout_config.settings()
+
+
+def test_the_cache_notices_a_correction_without_waiting_for_the_ttl(filters_file):
+    assert not scout_config.is_digital_standard("Supply chain warehouse operative (level 2)")
+    scout_config.allow_forever("standard", "supply chain warehouse operative")
+    # No refresh() call here: allow_forever has to have done it itself, or the
+    # screen would show the old verdict for up to the stamp TTL.
+    assert scout_config.is_digital_standard("Supply chain warehouse operative (level 2)")
 
 
 def test_allow_forever_keeps_the_settings_it_did_not_touch(filters_file):
-    scout_config.allow_forever("standard", "data analyst")
+    scout_config.allow_forever("standard", "supply chain warehouse operative")
     assert scout_config.home_postcode() == "ZZ99"
 
 

@@ -25,7 +25,11 @@ logged warning rather than killing the whole export, matching how the other
 scheduler jobs degrade.
 
 Env vars:
-  EXPORT_EMAIL_TO   recipient (defaults to DEFAULT_RECIPIENT below)
+  EXPORT_EMAIL_TO   recipient. REQUIRED for the email to go out — there is no
+                    default address, because this repository is public and a
+                    personal one in the source is a personal one on GitHub.
+                    Unset means the CSVs are still built and the send is
+                    skipped silently.
   EXPORT_TZ         window/trigger timezone (defaults to Europe/London, matching
                     ASFA_TZ — override both together or the window will not line
                     up with the stored dates)
@@ -46,7 +50,15 @@ from services import alerts
 
 logger = logging.getLogger("asfa.weekly_export")
 
-DEFAULT_RECIPIENT = "ami.salax08@gmail.com"
+def recipient() -> str:
+    """Who the weekly export goes to. "" when nobody is configured.
+
+    Read at call time rather than captured at import, so a test or a `railway
+    run` can set it for one process. There is deliberately NO fallback address:
+    this repository is public, and a default in the source is a personal
+    address published on GitHub. Unset simply skips the send.
+    """
+    return (os.environ.get("EXPORT_EMAIL_TO") or "").strip()
 
 
 def _tz():
@@ -273,16 +285,23 @@ def send_weekly_export(start=None, end=None, dry_run=False):
 
     subject = f"ASFA Weekly Export — {start} to {end}"
     body = "Your weekly ASFA data export. See attached."
-    to_addr = os.environ.get("EXPORT_EMAIL_TO", DEFAULT_RECIPIENT)
+    to_addr = recipient()
     result["to"] = to_addr
 
     if dry_run:
         result["skipped"] = "dry_run"
         return result
+    # SMTP first: with no mail server there is nowhere to send from, which is
+    # the blocker to report whether or not a recipient is also missing.
     if not alerts.smtp_configured():
         logger.warning("Weekly export built (%d rows) but SMTP is not configured; "
                        "no email sent.", total)
         result["skipped"] = "smtp_not_configured"
+        return result
+    if not to_addr:
+        logger.info("Weekly export built (%d rows); EXPORT_EMAIL_TO is unset, "
+                    "so no email was sent.", total)
+        result["skipped"] = "no_recipient"
         return result
 
     result["emailed"] = alerts.send_email_with_attachments(

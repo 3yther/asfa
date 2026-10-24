@@ -1,10 +1,18 @@
 {
   "_README": [
-    "Scout's editable filter lists. Defaults live in services/scout_config.py;",
-    "this file overrides them, so these lists can be tuned without a code change.",
-    "A key REPLACES the built-in list. A key prefixed with '+' APPENDS to it,",
-    "which is usually what you want for exclusions.",
-    "Re-read automatically when this file's mtime changes — no redeploy needed.",
+    "Scout's editable filter lists. The effective config has THREE layers:",
+    "  1. defaults in services/scout_config.py",
+    "  2. THIS FILE \u2014 a key REPLACES the built-in list, a key prefixed with '+'",
+    "     APPENDS to it (usually what you want for exclusions). Re-read when",
+    "     this file's mtime changes, so no redeploy is needed.",
+    "  3. the scout_filter_overrides table \u2014 the 'never exclude this' buttons",
+    "     on /scout/roles -> Excluded. Applied as a DELTA on top of this file,",
+    "     so editing here still takes effect and those corrections ride over",
+    "     it. They live in the database because Railway's filesystem is",
+    "     ephemeral; undo them under 'Allowed' on that same screen.",
+    "",
+    "Put a rule you want in version control HERE. Use the buttons for one-off",
+    "corrections while you are reading the exclusion log.",
     "",
     "Keys: search_keywords (production), audit_keywords (measurement only),",
     "digital_standards, strong_digital_terms, weak_digital_terms,",
@@ -15,24 +23,26 @@
     "'excluded: N' with every dropped listing and its reason, so an over-eager",
     "exclusion shows up immediately."
   ],
-
   "_filters_note": [
     "gov.uk's own filter field names, verified against the live site:",
     "  location=DA17&distance=20  ->  2 results",
     "Distance must be one of 2, 5, 10, 15, 20, 30, 40, all."
   ],
-  "distance_param": ["distance"],
-  "postcode_param": ["location"],
-  "home_postcode": ["DA17"],
+  "distance_param": [
+    "distance"
+  ],
+  "postcode_param": [
+    "location"
+  ],
+  "home_postcode": [
+    "DA17"
+  ],
   "distance": 20,
-
   "_watchlist_note": [
     "Employers whose listings are never silently dropped by the standard rule;",
     "they surface in the report's 'review' group instead. Replace this with your",
-    "spreadsheet's employers — it overrides the built-in list entirely."
+    "spreadsheet's employers \u2014 it overrides the built-in list entirely."
   ],
-
   "+title_exclusions": [],
-
   "+employer_exclusions": []
 }
