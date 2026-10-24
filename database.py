@@ -3238,6 +3238,53 @@ def _ensure_scout_tables():
         # uncertain, and this is how you check what that bias actually cost.
         # One row per external_ref — a listing excluded on every scan must not
         # grow the log without bound.
+        # Programmes: a company's apprenticeship scheme, tracked whether or not
+        # a live vacancy exists yet. Most of what the user follows is a
+        # programme they are waiting to open, so the tracker cannot be keyed on
+        # scraped vacancies alone.
+        #
+        # Columns are grouped by OWNER, which is what makes a re-import safe:
+        #   - identity: company/programme plus their normalised forms (the key)
+        #   - import-owned: refreshed from the spreadsheet on every run
+        #   - user-owned: the tracker state, never touched by an import
+        #   - provenance: imported_at / edited_in_scout
+        """CREATE TABLE IF NOT EXISTS scout_programmes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT NOT NULL,
+            programme TEXT NOT NULL,
+            company_norm TEXT NOT NULL,
+            programme_norm TEXT NOT NULL,
+
+            sector TEXT, specialization TEXT, level TEXT, duration TEXT,
+            university_partner TEXT, degree_awarded TEXT, locations TEXT,
+            salary_y1 TEXT, entry_requirements TEXT, t_level_accepted TEXT,
+            typical_opens TEXT, typical_closes TEXT, rolling TEXT,
+            cohort_size TEXT, assessment_process TEXT, official_link TEXT,
+            import_notes TEXT, cloud_sec_fit TEXT,
+
+            open_months TEXT,
+            timeline_close TEXT,
+            timeline_fit TEXT,
+            confirmed_open_date TEXT,
+            confirmed_close_date TEXT,
+            confirmed_source TEXT,
+
+            stage TEXT,
+            next_step TEXT,
+            next_step_date TEXT,
+            deadline TEXT,
+            applied_date TEXT,
+            link TEXT,
+            notes TEXT,
+
+            linked_external_ref TEXT,
+            suggested_external_ref TEXT,
+
+            imported_at TEXT,
+            edited_in_scout INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+        )""",
         """CREATE TABLE IF NOT EXISTS scout_exclusions (
             external_ref TEXT PRIMARY KEY,
             title TEXT,
@@ -3259,6 +3306,9 @@ def _ensure_scout_tables():
                 stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
             cur.execute(stmt)
         # CV keyword-match analysis (Part 4). All nullable.
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "idx_scout_programmes_key "
+                    "ON scout_programmes (company_norm, programme_norm)")
         _add_column(cur, "scout_pipeline", "cv_match_score", "INTEGER")
         _add_column(cur, "scout_pipeline", "missing_keywords", "TEXT")
         _add_column(cur, "scout_pipeline", "match_analysis_at", "TEXT")
@@ -3525,7 +3575,30 @@ def delete_scout_application(app_id) -> None:
 # Board order, left to right. `interested` sits between saved and applied: the
 # "I mean to apply for this" tier, which `saved` cannot express because the boot
 # backfill assigns it automatically (see SCOUT_AUTO_STAGE).
-SCOUT_STAGES = ("saved", "interested", "applied", "interview", "offer", "rejected")
+# Board order, left to right. Matches the real application process: an
+# assessment centre follows a video interview, which follows an online
+# assessment, and "withdrawn" is a distinct outcome from "rejected".
+SCOUT_STAGES = (
+    "saved",
+    "interested",
+    "applied",
+    "online_assessment",
+    "video_interview",
+    "assessment_centre",
+    "offer",
+    "rejected",
+    "withdrawn",
+)
+
+# Stages no longer offered but still valid in the database. Rows are NOT
+# migrated: "interview" was a real thing the user recorded, and rewriting it to
+# one of the newer stages would be inventing detail they never entered. It is
+# accepted on write, treated as tracked, exempt from the cleanup, and displayed
+# as "Interview".
+SCOUT_LEGACY_STAGES = ("interview",)
+
+# Every stage a row may legitimately hold.
+SCOUT_ALL_STAGES = SCOUT_STAGES + SCOUT_LEGACY_STAGES
 
 # The stage `_backfill_scout_pipeline()` inserts scraped listings at. It is a
 # default, not a user decision, which is why it is the only stage the nightly
@@ -3535,8 +3608,33 @@ SCOUT_AUTO_STAGE = "saved"
 # Stages that only exist because the user put a listing there. `cleanup_job_pipeline`
 # must never delete these: an apprenticeship cycle runs for months, far longer
 # than the 14-day window the cleanup was tuned for, so age alone says nothing
-# about whether a tracked role still matters.
-SCOUT_TRACKED_STAGES = tuple(s for s in SCOUT_STAGES if s != SCOUT_AUTO_STAGE)
+# about whether a tracked role still matters. Legacy stages are included — a
+# retired label is still a decision the user made.
+SCOUT_TRACKED_STAGES = tuple(s for s in SCOUT_ALL_STAGES
+                             if s != SCOUT_AUTO_STAGE)
+
+# Display labels. Derived from the key except where the key is an abbreviation
+# or a retired label, so the UI never has to special-case one.
+SCOUT_STAGE_LABELS = {
+    "saved": "Saved",
+    "interested": "Interested",
+    "applied": "Applied",
+    "online_assessment": "Online Assessment",
+    "video_interview": "Video Interview",
+    "assessment_centre": "Assessment Centre",
+    "offer": "Offer",
+    "rejected": "Rejected",
+    "withdrawn": "Withdrawn",
+    "interview": "Interview",
+}
+
+# Outcomes that belong in the board's muted "Closed" column.
+SCOUT_CLOSED_STAGES = ("rejected", "withdrawn")
+
+
+def scout_stage_label(stage: str) -> str:
+    """Human label for a stage key, including the retired ones."""
+    return SCOUT_STAGE_LABELS.get(stage or "", (stage or "").replace("_", " ").title())
 
 
 def get_scout_pipeline(stage=None) -> list:
@@ -3699,7 +3797,7 @@ def add_scout_pipeline_job(job_title, company, job_url=None, location=None,
                            source=None, stage="saved", notes=None, cv_version=None):
     """Add a job to the pipeline. Returns the new row id."""
     _ensure_scout_tables()
-    if stage not in SCOUT_STAGES:
+    if stage not in SCOUT_ALL_STAGES:
         stage = "saved"
     now = datetime.now().isoformat()
     today = date.today().isoformat()
@@ -3729,7 +3827,7 @@ def update_scout_pipeline(pid, stage=None, notes=None, cv_version=None):
         return None
     now = datetime.now().isoformat()
     sets, params = ["updated_at = {ph}"], [now]
-    if stage is not None and stage in SCOUT_STAGES and stage != existing.get("stage"):
+    if stage is not None and stage in SCOUT_ALL_STAGES and stage != existing.get("stage"):
         sets.append("stage = {ph}"); params.append(stage)
         sets.append("date_stage_changed = {ph}"); params.append(now)
         if stage == "applied" and not existing.get("date_applied"):
@@ -3758,7 +3856,7 @@ def delete_scout_pipeline(pid) -> bool:
 def get_scout_pipeline_stage_counts() -> dict:
     """{stage: count} across all five stages (zero-filled)."""
     _ensure_scout_tables()
-    counts = {s: 0 for s in SCOUT_STAGES}
+    counts = {s: 0 for s in SCOUT_ALL_STAGES}
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT stage, COUNT(*) AS n FROM scout_pipeline GROUP BY stage")
@@ -3782,6 +3880,194 @@ def get_scout_pipeline_reminders(days: int = 7) -> list:
             f"AND date_applied IS NOT NULL AND date_applied <= {ph} "
             f"ORDER BY date_applied ASC", (cutoff,))
         return [dict(r) for r in cur.fetchall()]
+
+
+# ── Scout programmes (the tracker's own entries + the watchlist) ────────────
+
+# Fields the spreadsheet owns. A re-import refreshes these.
+PROGRAMME_IMPORT_FIELDS = (
+    "sector", "specialization", "level", "duration", "university_partner",
+    "degree_awarded", "locations", "salary_y1", "entry_requirements",
+    "t_level_accepted", "typical_opens", "typical_closes", "rolling",
+    "cohort_size", "assessment_process", "official_link", "import_notes",
+    "cloud_sec_fit", "open_months", "timeline_close", "timeline_fit",
+)
+
+# Fields the USER owns. An import may seed them on first insert and must never
+# touch them afterwards — see upsert_scout_programme.
+PROGRAMME_USER_FIELDS = (
+    "stage", "next_step", "next_step_date", "deadline", "applied_date",
+    "link", "notes", "confirmed_open_date", "confirmed_close_date",
+    "confirmed_source", "linked_external_ref",
+)
+
+
+def normalise_programme_key(value) -> str:
+    """Trimmed, case-folded, inner whitespace collapsed, punctuation dropped.
+
+    The import key is (company, programme), and the spreadsheet spells them
+    inconsistently across sheets ("BT Group" vs "BT  group."), so the key has to
+    survive that or a re-import would duplicate every row.
+    """
+    text = re.sub(r"[^a-z0-9 ]+", " ", (str(value or "")).casefold())
+    return " ".join(text.split())
+
+
+def upsert_scout_programme(company: str, programme: str, fields: dict,
+                           seed_user_fields: dict = None,
+                           mark_imported: bool = True) -> str:
+    """Insert or refresh one programme. Returns "inserted" | "updated" | "skipped".
+
+    The contract that makes a re-import safe:
+
+      * identity is the NORMALISED (company, programme), so re-running cannot
+        duplicate a row that was spelled differently;
+      * import-owned fields are refreshed every run;
+      * user-owned fields are written ONLY on first insert. Once a row exists,
+        an import never touches the tracker state — that is the user's, and the
+        spreadsheet is no longer the source of truth after the first import;
+      * `edited_in_scout` is set the moment anything is changed inside Scout,
+        and a row carrying it has even its import-owned fields left alone, so a
+        correction made in Scout is not undone by the next import.
+    """
+    _ensure_scout_tables()
+    cn, pn = normalise_programme_key(company), normalise_programme_key(programme)
+    if not cn:
+        return "skipped"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ph = "%s" if USE_POSTGRES else "?"
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT id, edited_in_scout FROM scout_programmes "
+            f"WHERE company_norm = {ph} AND programme_norm = {ph}", (cn, pn))
+        row = cur.fetchone()
+
+        if row is None:
+            cols = ["company", "programme", "company_norm", "programme_norm",
+                    "created_at", "updated_at"]
+            vals = [company, programme, cn, pn, now, now]
+            if mark_imported:
+                cols.append("imported_at")
+                vals.append(now)
+            for key in PROGRAMME_IMPORT_FIELDS:
+                if key in fields:
+                    cols.append(key)
+                    vals.append(fields[key])
+            for key in PROGRAMME_USER_FIELDS:
+                if seed_user_fields and key in seed_user_fields:
+                    cols.append(key)
+                    vals.append(seed_user_fields[key])
+            cur.execute(
+                f"INSERT INTO scout_programmes ({', '.join(cols)}) "
+                f"VALUES ({', '.join([ph] * len(cols))})", tuple(vals))
+            return "inserted"
+
+        existing = dict(row)
+        if existing.get("edited_in_scout"):
+            # Touched inside Scout: leave it entirely alone.
+            return "skipped"
+
+        updates, vals = [], []
+        for key in PROGRAMME_IMPORT_FIELDS:
+            if key in fields:
+                updates.append(f"{key} = {ph}")
+                vals.append(fields[key])
+        if not updates:
+            return "skipped"
+        updates.append(f"updated_at = {ph}")
+        vals.append(now)
+        if mark_imported:
+            updates.append(f"imported_at = {ph}")
+            vals.append(now)
+        vals.append(existing["id"])
+        cur.execute(
+            f"UPDATE scout_programmes SET {', '.join(updates)} WHERE id = {ph}",
+            tuple(vals))
+        return "updated"
+
+
+def set_scout_programme_stage(programme_id: int, stage: str, **user_fields) -> bool:
+    """Set the tracker state on a programme, from inside Scout.
+
+    Marks `edited_in_scout`, which is what stops a later import overwriting it.
+    """
+    if stage is not None and stage not in SCOUT_ALL_STAGES:
+        return False
+    _ensure_scout_tables()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ph = "%s" if USE_POSTGRES else "?"
+    updates, vals = [], []
+    if stage is not None:
+        updates.append(f"stage = {ph}")
+        vals.append(stage)
+    for key, value in user_fields.items():
+        if key in PROGRAMME_USER_FIELDS:
+            updates.append(f"{key} = {ph}")
+            vals.append(value)
+    if not updates:
+        return False
+    updates += [f"edited_in_scout = 1", f"updated_at = {ph}"]
+    vals.append(now)
+    vals.append(programme_id)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"UPDATE scout_programmes SET {', '.join(updates)} WHERE id = {ph}",
+            tuple(vals))
+        return bool(cur.rowcount)
+
+
+def get_scout_programmes(stage=None, with_stage_only: bool = False) -> list:
+    """Programmes, newest-touched first. Optional stage filter."""
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    sql = "SELECT * FROM scout_programmes"
+    args = []
+    if stage:
+        sql += f" WHERE stage = {ph}"
+        args.append(stage)
+    elif with_stage_only:
+        sql += " WHERE stage IS NOT NULL AND stage <> ''"
+    sql += " ORDER BY company, programme"
+    with get_db() as conn:
+        return [dict(r) for r in conn.cursor().execute(sql, tuple(args)).fetchall()]
+
+
+def get_scout_programme_companies() -> list:
+    """Normalised company names from the programme list.
+
+    This is Scout's watchlist once the spreadsheet is imported: the employers
+    the user actually tracks, replacing the placeholder list in
+    services/scout_config.py.
+    """
+    _ensure_scout_tables()
+    with get_db() as conn:
+        rows = conn.cursor().execute(
+            "SELECT DISTINCT company_norm FROM scout_programmes "
+            "WHERE company_norm <> ''").fetchall()
+    return sorted({dict(r)["company_norm"] for r in rows})
+
+
+def count_scout_programmes() -> dict:
+    """{"total": N, "by_stage": {...}, "not_started": N, "edited_in_scout": N}."""
+    _ensure_scout_tables()
+    out = {"total": 0, "by_stage": {}, "not_started": 0, "edited_in_scout": 0}
+    with get_db() as conn:
+        cur = conn.cursor()
+        for r in cur.execute(
+                "SELECT stage, COUNT(*) AS n FROM scout_programmes "
+                "GROUP BY stage").fetchall():
+            d = dict(r)
+            key = d["stage"] or "(not started)"
+            out["by_stage"][key] = d["n"]
+        out["total"] = sum(out["by_stage"].values())
+        out["not_started"] = out["by_stage"].get("(not started)", 0)
+        out["edited_in_scout"] = dict(cur.execute(
+            "SELECT COUNT(*) AS n FROM scout_programmes "
+            "WHERE edited_in_scout = 1").fetchone())["n"]
+    return out
 
 
 # ── Scout relevance-filter exclusion log ────────────────────────────────────

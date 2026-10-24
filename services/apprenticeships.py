@@ -117,7 +117,8 @@ def match_employer(raw_name: str, employers=None):
 # ── Persistence ──────────────────────────────────────────────────────────────
 
 def _persist_vacancies(raws, employer, new_bucket, employers=None,
-                       excluded=None, alert_skipped=None) -> int:
+                       excluded=None, alert_skipped=None,
+                       watchlist=None) -> int:
     """Insert new apprenticeships, refresh last_seen on ones we already have.
 
     Dedup is by `external_ref` (the gov.uk VAC reference, or a namespaced id for
@@ -153,7 +154,8 @@ def _persist_vacancies(raws, employer, new_bucket, employers=None,
         matched = employer or match_employer(raw.employer_name_raw, employers)
 
         verdict = scout_config.judge(raw.title, raw.employer_name_raw,
-                                     raw.training_course)
+                                     raw.training_course,
+                                     watchlist=watchlist)
         if not verdict.keep:
             if excluded is not None:
                 excluded.append({
@@ -201,7 +203,11 @@ def _persist_vacancies(raws, employer, new_bucket, employers=None,
         orm.session.flush()                   # assign an id before we bucket it
         new_count += 1
         # A watchlist match earns a star, not the right to be alerted at all.
-        row.starred = bool(matched)
+        # Either source counts: the Employer table (which has alias handling and
+        # the /scout/employers toggles) or an imported programme company.
+        row.starred = bool(matched) or bool(
+            scout_config.matched_watchlist_employer(
+                raw.employer_name_raw, watchlist=watchlist))
         row.needs_review = bool(getattr(verdict, "review", False))
         row.review_standard = verdict.detail if row.needs_review else ""
         # The keyword passes no longer apply a level floor, so Level 2/3 roles
@@ -319,6 +325,18 @@ def scan_apprenticeships() -> dict:
 
     employers = Employer.query.filter_by(watching=True).all()
 
+    # The imported programmes ARE the watchlist once they exist: these are the
+    # employers the user actually tracks, and they replace the placeholder list
+    # in services/scout_config.py. `judge` is a pure function and cannot reach
+    # the database, so the list is read once here and passed down. None means
+    # "fall back to the config list", which is what a fresh install with no
+    # import yet still needs.
+    try:
+        watchlist = db.get_scout_programme_companies() or None
+    except Exception as e:
+        logger.warning("apprenticeships: programme watchlist unavailable: %s", e)
+        watchlist = None
+
     # ---- Per-employer scans ----
     for emp in employers:
         for alias in emp.alias_list:
@@ -335,7 +353,8 @@ def scan_apprenticeships() -> dict:
                                            new_bucket=new_bucket,
                                            employers=employers,
                                            excluded=excluded,
-                                           alert_skipped=alert_skipped)
+                                           alert_skipped=alert_skipped,
+                                           watchlist=watchlist)
             summary["employers_scanned"] += 1
             summary["new"] += new_count
             _log_scan("employer", alias, len(raws), new_count, duration_ms)
@@ -358,7 +377,8 @@ def scan_apprenticeships() -> dict:
                                        new_bucket=new_bucket,
                                        employers=employers,
                                        excluded=excluded,
-                                       alert_skipped=alert_skipped)
+                                       alert_skipped=alert_skipped,
+                                       watchlist=watchlist)
         summary["route_scanned"] = 1
         summary["route_found"] = len(raws)
         summary["new"] += new_count
@@ -407,7 +427,8 @@ def scan_apprenticeships() -> dict:
                                        new_bucket=new_bucket,
                                        employers=employers,
                                        excluded=excluded,
-                                       alert_skipped=alert_skipped)
+                                       alert_skipped=alert_skipped,
+                                       watchlist=watchlist)
         summary["keywords_scanned"] += 1
         summary["new"] += new_count
         _log_scan("keyword", kw, len(raws), new_count, duration_ms)

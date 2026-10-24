@@ -239,6 +239,10 @@ DEFAULT_EMPLOYER_EXCLUSIONS = ()
 # on alerts. Replace this list with your own employers in
 # config/scout_filters.json; matched as a case-insensitive substring, so keep
 # entries distinctive.
+# NOTE: once the spreadsheet is imported, the programme companies in
+# scout_programmes take over as the watchlist (see
+# database.get_scout_programme_companies and the `watchlist` argument to
+# `judge`). This list is the fallback for a fresh install with no import yet.
 DEFAULT_WATCHLIST_EMPLOYERS = (
     "thales",
     "bae systems",
@@ -583,17 +587,25 @@ def matched_title_exclusion(title: str):
     return m.group(1).lower() if m else None
 
 
-def matched_watchlist_employer(employer: str):
+def matched_watchlist_employer(employer: str, watchlist=None):
     """The watchlist entry this employer matches, or None.
 
     Substring, case-insensitive, for the same reason as the exclusion list: a
     company name is not a sentence, and "bae systems" should match
     "BAE SYSTEMS PLC".
+
+    `watchlist` is the caller's own list, which is how the imported programmes
+    take over from the placeholder in this module: `judge` stays a pure
+    function of its arguments and cannot reach the database, so the scan passes
+    the programme companies in. With nothing passed, the config list is used —
+    which is what keeps this testable and what covers a fresh install before
+    any import has run.
     """
     name = (employer or "").casefold()
     if not name:
         return None
-    for term in settings()["watchlist_employers"]:
+    for term in (watchlist if watchlist is not None
+                 else settings()["watchlist_employers"]):
         t = term.strip().casefold()
         if t and t in name:
             return t
@@ -647,7 +659,8 @@ class Verdict:
                 "watchlist": self.watchlist, "review": self.review}
 
 
-def judge(title: str, employer: str = "", course: str = "") -> Verdict:
+def judge(title: str, employer: str = "", course: str = "",
+          watchlist=None) -> Verdict:
     """Decide whether a listing is a digital apprenticeship worth surfacing.
 
     Order matters, and it is ordered to fail towards keeping:
@@ -695,7 +708,7 @@ def judge(title: str, employer: str = "", course: str = "") -> Verdict:
     if stated and not strong:
         # The standard is known (there is course text) and step 1 already
         # established it is not a Digital one.
-        watched = matched_watchlist_employer(employer)
+        watched = matched_watchlist_employer(employer, watchlist=watchlist)
         if watched:
             # Never silently drop a watched employer's listing. A defence firm
             # posting against an odd standard is the case most worth a look.

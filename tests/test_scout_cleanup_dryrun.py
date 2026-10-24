@@ -81,7 +81,7 @@ def clean_pipeline():
 # ── The dry run is read-only ─────────────────────────────────────────────────
 
 def test_preview_deletes_nothing(clean_pipeline):
-    for stage in db.SCOUT_STAGES:
+    for stage in db.SCOUT_ALL_STAGES:
         _seed_pipeline(stage, days_old=40)
     _seed_application("pending", days_old=40)
     before = _pipeline_count()
@@ -89,7 +89,7 @@ def test_preview_deletes_nothing(clean_pipeline):
     db.preview_job_pipeline_cleanup(days=14)
     db.preview_job_pipeline_cleanup(days=14)   # twice, in case one latches
 
-    assert _pipeline_count() == before == len(db.SCOUT_STAGES)
+    assert _pipeline_count() == before == len(db.SCOUT_ALL_STAGES)
 
 
 def test_preview_reports_only_untouched_rows_as_doomed(clean_pipeline):
@@ -165,7 +165,7 @@ def test_preview_echoes_its_cutoff(clean_pipeline):
 # ── The dry run agrees with the real job ─────────────────────────────────────
 
 def test_preview_predicts_exactly_what_the_job_deletes(clean_pipeline):
-    for stage in db.SCOUT_STAGES:
+    for stage in db.SCOUT_ALL_STAGES:
         _seed_pipeline(stage, days_old=40)
     _seed_pipeline("saved", days_old=1)        # survivor, inside the window
     _seed_application("pending", days_old=40)
@@ -183,11 +183,19 @@ def test_preview_predicts_exactly_what_the_job_deletes(clean_pipeline):
 # ── The stage exemption ──────────────────────────────────────────────────────
 
 def test_the_stage_model_is_what_we_think_it_is():
+    """WIDENED in Phase 3: the real process has an online assessment, a video
+    interview and an assessment centre between applying and an offer, and
+    withdrawing is a different outcome from being rejected. "interview" stays
+    as a legacy value rather than being migrated into a guess."""
     assert db.SCOUT_STAGES == (
-        "saved", "interested", "applied", "interview", "offer", "rejected")
+        "saved", "interested", "applied", "online_assessment",
+        "video_interview", "assessment_centre", "offer", "rejected",
+        "withdrawn")
     assert db.SCOUT_AUTO_STAGE == "saved"
+    assert db.SCOUT_LEGACY_STAGES == ("interview",)
     assert db.SCOUT_TRACKED_STAGES == (
-        "interested", "applied", "interview", "offer", "rejected")
+        "interested", "applied", "online_assessment", "video_interview",
+        "assessment_centre", "offer", "rejected", "withdrawn", "interview")
     assert db.SCOUT_AUTO_STAGE not in db.SCOUT_TRACKED_STAGES
 
 

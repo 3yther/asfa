@@ -36,3 +36,10 @@ static/cv/
 *.tgz
 *.zip
 *-openclaw-backup*
+
+# Spreadsheets. The tracker spreadsheet holds application IDs, candidate
+# references and personal notes, and this repo is PUBLIC. Never commit one.
+*.xlsx
+*.xls
+*.xlsm
+*.ods

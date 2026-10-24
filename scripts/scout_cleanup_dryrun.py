@@ -29,6 +29,10 @@ import database as db  # noqa: E402
 # rather than a choice the user made.
 USER_CHOSEN_STAGES = db.SCOUT_TRACKED_STAGES
 
+# Retired stages are tracked too — a label Scout no longer offers is still a
+# decision the user made, so it is exempt like any other.
+LEGACY_STAGES = db.SCOUT_LEGACY_STAGES
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -53,7 +57,7 @@ def main() -> int:
         for stage, n in sorted(r["pipeline_by_stage"].items(),
                                key=lambda kv: (-kv[1], kv[0])):
             flag = "  <-- UNEXPECTED: user-chosen" if stage in USER_CHOSEN_STAGES else ""
-            print(f"    {stage:<12} {n:>6}{flag}")
+            print(f"    {stage:<20} {n:>6}{flag}")
     else:
         print("    (none)")
     print()
@@ -63,7 +67,8 @@ def main() -> int:
     if r["pipeline_exempt_by_stage"]:
         for stage, n in sorted(r["pipeline_exempt_by_stage"].items(),
                                key=lambda kv: (-kv[1], kv[0])):
-            print(f"    {stage:<12} {n:>6}  kept (user-chosen)")
+            legacy = "  (retired stage)" if stage in LEGACY_STAGES else ""
+            print(f"    {stage:<20} {n:>6}  kept (user-chosen){legacy}")
     else:
         print("    (none)")
     print()
@@ -73,7 +78,7 @@ def main() -> int:
     if r["pipeline_surviving_by_stage"]:
         for stage, n in sorted(r["pipeline_surviving_by_stage"].items(),
                                key=lambda kv: (-kv[1], kv[0])):
-            print(f"    {stage:<12} {n:>6}")
+            print(f"    {stage:<20} {n:>6}")
     else:
         print("    (none)")
     print()
@@ -82,7 +87,7 @@ def main() -> int:
     if r["applications_by_status"]:
         for status, n in sorted(r["applications_by_status"].items(),
                                 key=lambda kv: (-kv[1], kv[0])):
-            print(f"    {status:<12} {n:>6}")
+            print(f"    {status:<20} {n:>6}")
     else:
         print("    (none)")
     print()
