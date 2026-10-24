@@ -43,3 +43,4 @@ static/cv/
 *.xls
 *.xlsm
 *.ods
+.scout-shots/
