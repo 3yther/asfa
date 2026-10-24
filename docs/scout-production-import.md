@@ -129,8 +129,48 @@ This reads the workbook and reports what it *would* do, grouped by sheet and by
 stage. It writes nothing. Check the counts look like your spreadsheet — roughly
 51 programmes from Master List and roughly 64 application rows.
 
-If a row is skipped the script says why (missing company, missing programme,
-unrecognised status) as a count, not as content.
+If a row is skipped the script says why (missing company, unrecognised status)
+as a count, not as content. Entirely blank rows are ignored silently — a
+workbook with formatting applied below the data yields hundreds of them, and
+counting those as skipped buries the real problems.
+
+### "programme not in Master List"
+
+The dry run breaks that number down, in counts only:
+
+```
+applications with no Master List programme:
+    total                                  13
+    company IS in Master List               8   (probable programme-name mismatch)
+      company has one programme             5
+        linkable                            5
+      company has several programmes        3   (ambiguous — never linked)
+    company NOT in Master List              5   (genuinely new)
+```
+
+- **company IS in Master List** — the same scheme written differently on the
+  two sheets. Either fix the spelling in the workbook, or use the flag below.
+- **company has several programmes** — it could be any of them, so it is never
+  linked automatically; guessing would attach an application to the wrong
+  scheme with nothing to notice.
+- **company NOT in Master List** — genuinely missing, and a new programme row
+  is the right outcome. Nothing to do.
+
+When the linkable count looks right, re-run with the flag — on a dry run first
+if you want to see the effect before writing:
+
+```bash
+railway run --service Postgres -- sh -c '
+  DATABASE_URL="$DATABASE_PUBLIC_URL" \
+  python scripts/import_scout_spreadsheet.py ~/Documents/apprenticeships.xlsx \
+    --link-single-programme-companies --dry-run
+'
+```
+
+It attaches an application to its company's single Master List row instead of
+creating a second programme. It is **never automatic**, and it skips a row that
+already has an application of its own — that case is a second scheme at the
+same company, not a misspelling of the first.
 
 Note that the `.xlsx` path is on **your Mac**. `railway run` only injects
 environment variables; the file is read locally and never uploaded.

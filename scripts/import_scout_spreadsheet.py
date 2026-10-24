@@ -1,6 +1,8 @@
 """One-time import of the tracker spreadsheet into Scout.
 
     python scripts/import_scout_spreadsheet.py PATH_TO_XLSX [--dry-run]
+    python scripts/import_scout_spreadsheet.py PATH_TO_XLSX \
+        --link-single-programme-companies
 
 The file is read from wherever you point it and is never copied into the repo.
 `*.xlsx` is gitignored for the same reason.
@@ -139,6 +141,18 @@ def _sheet_rows(workbook, name):
     return headers, rows[header_index + 1:]
 
 
+def _is_blank_row(row) -> bool:
+    """True when every cell is empty.
+
+    openpyxl yields a row for anything the sheet has FORMATTED, so a workbook
+    with borders or a fill applied below the data returns hundreds of rows that
+    hold nothing. Those are not skipped rows worth reporting — they are not
+    rows at all, and counting them as "row with no company" buried the handful
+    of genuine problems under noise.
+    """
+    return all(not _cell(c) for c in row)
+
+
 def _row_dict(headers, row) -> dict:
     out = {}
     for i, header in enumerate(headers):
@@ -158,6 +172,8 @@ def read_master(workbook, stats):
         return out
 
     for row in rows:
+        if _is_blank_row(row):
+            continue                      # formatting, not data — see above
         d = _row_dict(headers, row)
         company = _cell(d.get("company"))
         programme = _cell(d.get("programme"))
@@ -195,6 +211,8 @@ def read_timeline(workbook, stats):
         return out
 
     for row in rows:
+        if _is_blank_row(row):
+            continue                      # formatting, not data
         d = _row_dict(headers, row)
         company = _cell(d.get("company"))
         programme = _cell(d.get("programme"))
@@ -228,6 +246,8 @@ def read_applications(workbook, stats):
         return out
 
     for row in rows:
+        if _is_blank_row(row):
+            continue                      # formatting, not data
         d = _row_dict(headers, row)
         company = _cell(d.get("company"))
         programme = _cell(d.get("programme"))
@@ -271,6 +291,11 @@ def read_applications(workbook, stats):
 
 def _new_stats():
     return {
+        "unmatched": {"total": 0, "company_known": 0,
+                      "one_programme_company": 0, "linkable": 0,
+                      "ambiguous": 0, "target_has_own_application": 0,
+                      "link_collisions": 0, "company_unknown": 0},
+        "link_applied": 0,
         "rows_read": Counter(),
         "stages": Counter(),
         "skipped": Counter(),
@@ -282,7 +307,79 @@ def _new_stats():
     }
 
 
-def run_import(path: str, dry_run: bool = False) -> dict:
+def analyse_unmatched(master: dict, applications: dict) -> dict:
+    """Why each application has no Master List programme. COUNTS ONLY.
+
+    An application keyed (company, programme) that Master List does not have
+    is one of three things, and they want different answers:
+
+      * the COMPANY is in Master List with exactly one programme — almost
+        certainly the same scheme written differently on the two sheets
+        ("Cyber Degree Apprenticeship" vs "Cyber Security Degree"). This is
+        the one that can be linked, and `linkable` counts it;
+      * the company is there with SEVERAL programmes — it could be any of
+        them, so it is never linked automatically. Guessing would silently
+        attach an application to the wrong scheme;
+      * the company is not in Master List at all — genuinely missing, and a
+        new programme row is the right outcome.
+
+    Returns counts and, separately, the mapping the opt-in link would use.
+    No company or programme name is returned or printed.
+    """
+    by_company = {}
+    for company_norm, programme_norm in master:
+        by_company.setdefault(company_norm, []).append(
+            (company_norm, programme_norm))
+
+    out = {"total": 0, "company_known": 0, "one_programme_company": 0,
+           "linkable": 0, "ambiguous": 0, "target_has_own_application": 0,
+           "link_collisions": 0, "company_unknown": 0, "link_map": {}}
+    # A Master List row that already has an application of its own is not
+    # available: linking onto it would overwrite that application's stage with
+    # this one's. Seeded here so the loop below sees it as taken.
+    has_own_application = {key for key in applications if key in master}
+    claimed = set()
+
+    for key in sorted(applications):
+        if key in master:
+            continue
+        out["total"] += 1
+        candidates = by_company.get(key[0], [])
+        if not candidates:
+            out["company_unknown"] += 1
+            continue
+
+        out["company_known"] += 1
+        if len(candidates) != 1:
+            out["ambiguous"] += 1
+            continue
+
+        # The user's criterion from here down: the company has exactly one
+        # Master List row. Two things can still make it the wrong target, and
+        # they are counted apart because they mean different things.
+        out["one_programme_company"] += 1
+        target = candidates[0]
+        if target in has_own_application:
+            # That one programme already has an application of its own, so
+            # this is a SECOND application at the same company — a different
+            # scheme, not a misspelling of the same one. Its own row is right.
+            out["target_has_own_application"] += 1
+            continue
+        if target in claimed:
+            # Two unmatched applications competing for one row. The first in
+            # sorted order wins so a re-run is deterministic; the second keeps
+            # its own programme row rather than overwriting the first.
+            out["link_collisions"] += 1
+            continue
+
+        claimed.add(target)
+        out["linkable"] += 1
+        out["link_map"][key] = target
+    return out
+
+
+def run_import(path: str, dry_run: bool = False,
+               link_single: bool = False) -> dict:
     """Read the workbook and upsert. Returns counts only."""
     import openpyxl
 
@@ -299,6 +396,25 @@ def run_import(path: str, dry_run: bool = False) -> dict:
         applications = read_applications(workbook, stats)
     finally:
         workbook.close()
+
+    # Why the unmatched applications are unmatched. Read before any linking,
+    # so the counts describe the workbook rather than the outcome.
+    unmatched = analyse_unmatched(master, applications)
+    stats["unmatched"] = {k: v for k, v in unmatched.items()
+                          if k != "link_map"}
+    stats["link_applied"] = 0
+
+    # OPT-IN ONLY. Without the flag this mapping is computed, counted and
+    # reported, and then thrown away — the suggestion is never acted on by
+    # itself, because attaching an application to the wrong scheme is a silent
+    # error the user would have no way to notice.
+    if link_single and unmatched["link_map"]:
+        for app_key, master_key in unmatched["link_map"].items():
+            applications[master_key] = (master[master_key][0],
+                                        master[master_key][1],
+                                        applications[app_key][2])
+            del applications[app_key]
+            stats["link_applied"] += 1
 
     # Every key any sheet mentions. An application for a programme missing from
     # Master List still gets a row — losing a tracked application because a
@@ -363,6 +479,46 @@ def report(stats, dry_run: bool):
     print("result:")
     for key, n in sorted(stats["results"].items()):
         print(f"    {key:<22}{n:>6}")
+
+    # Why the unmatched applications are unmatched, so "programme not in
+    # Master List" is a diagnosis rather than just a number. Counts only.
+    um = stats.get("unmatched") or {}
+    if um.get("total"):
+        print()
+        print("applications with no Master List programme:")
+        print(f"    total                               {um['total']:>5}")
+        print(f"    company IS in Master List           "
+              f"{um['company_known']:>5}   (probable programme-name mismatch)")
+        print(f"      company has one programme         "
+              f"{um['one_programme_company']:>5}")
+        print(f"        linkable                        {um['linkable']:>5}")
+        if um.get("target_has_own_application"):
+            print(f"        that programme already has its own application "
+                  f"{um['target_has_own_application']:>3}")
+            print("          (so this is a second scheme, not a misspelling "
+                  "— never linked)")
+        if um.get("link_collisions"):
+            print(f"        two applications want the same row "
+                  f"{um['link_collisions']:>3}   (never linked)")
+        if um.get("ambiguous"):
+            print(f"      company has several programmes    "
+                  f"{um['ambiguous']:>5}   (ambiguous — never linked)")
+        print(f"    company NOT in Master List          "
+              f"{um['company_unknown']:>5}   (genuinely new)")
+
+        if stats.get("link_applied"):
+            print()
+            print(f"    linked to the company's single Master List programme: "
+                  f"{stats['link_applied']}")
+        elif um.get("linkable"):
+            print()
+            print(f"    {um['linkable']} could be linked to their company's "
+                  f"single Master List programme.")
+            print("    Re-run with --link-single-programme-companies to do "
+                  "that. It is never automatic:")
+            print("    a wrong link attaches an application to the wrong "
+                  "scheme with nothing to notice.")
+
     print()
     print("skipped:")
     if stats["skipped"]:
@@ -412,6 +568,14 @@ def main():
     ap.add_argument("path", nargs="?", help="path to the .xlsx, read in place")
     ap.add_argument("--dry-run", action="store_true",
                     help="print counts only, write nothing")
+    ap.add_argument("--link-single-programme-companies", action="store_true",
+                    dest="link_single",
+                    help="when an application has no exact programme match but "
+                         "its company has exactly ONE Master List row, attach "
+                         "it to that row instead of creating a second "
+                         "programme. Off by default: the dry run reports how "
+                         "many this would affect so you can check the number "
+                         "first")
     ap.add_argument("--export-csv", metavar="OUT.csv",
                     help="export the tracker to CSV and exit "
                          "(carries notes — keep it out of the repo)")
@@ -430,7 +594,8 @@ def main():
         print(f"no such file: {args.path}", file=sys.stderr)
         return 1
 
-    stats = run_import(args.path, dry_run=args.dry_run)
+    stats = run_import(args.path, dry_run=args.dry_run,
+                       link_single=args.link_single)
     report(stats, dry_run=args.dry_run)
     return 0
 

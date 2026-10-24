@@ -603,3 +603,198 @@ def test_an_empty_programme_watchlist_does_not_protect_everything():
     v = scout_config.judge("Project Manager Apprentice", "Northwind Systems",
                            "Business administrator (level 4)", watchlist=[])
     assert v.keep is False
+
+
+# ── Diagnosing applications with no Master List programme ───────────────────
+#
+# "programme not in Master List: 13" is a number, not a diagnosis. It covers
+# three different situations that want three different answers, so the dry run
+# now splits it — in COUNTS ONLY, like everything else this script prints.
+
+def _linkable_workbook(tmp_path):
+    """One company with a single Master List programme, whose application
+    spells the programme differently; one company with two programmes and an
+    application matching neither; and one company Master List has never heard
+    of. All invented."""
+    master = [
+        ["Northwind Systems", "Cyber Degree Apprenticeship"],
+        ["Orrery Bank", "Technology Apprenticeship"],
+        ["Orrery Bank", "Data Apprenticeship"],
+    ]
+    applications = [
+        # Same scheme, written differently -> linkable.
+        ["Northwind Systems", "Cyber Security Degree", "Applied"],
+        # Company known, two programmes -> ambiguous, never linked.
+        ["Orrery Bank", "Software Apprenticeship", "Interested"],
+        # Company unknown -> genuinely new.
+        ["Castellan Ltd", "Engineering Scheme", "Applied"],
+    ]
+    return _workbook(tmp_path, master=master, applications=applications)
+
+
+def test_the_dry_run_splits_the_unmatched_applications_by_cause(tmp_path):
+    stats = importer.run_import(_linkable_workbook(tmp_path), dry_run=True)
+    um = stats["unmatched"]
+    assert um["total"] == 3
+    assert um["company_known"] == 2
+    assert um["one_programme_company"] == 1
+    assert um["linkable"] == 1
+    assert um["ambiguous"] == 1
+    assert um["company_unknown"] == 1
+
+
+def test_the_split_is_printed_as_counts_with_no_names(tmp_path, capsys):
+    stats = importer.run_import(_linkable_workbook(tmp_path), dry_run=True)
+    importer.report(stats, dry_run=True)
+    out = capsys.readouterr().out
+
+    assert "applications with no Master List programme:" in out
+    assert "probable programme-name mismatch" in out
+    assert "ambiguous — never linked" in out
+    for name in ("Northwind", "Orrery", "Castellan", "Cyber", "Technology",
+                 "Engineering Scheme"):
+        assert name not in out, f"{name!r} leaked into the report"
+
+
+def test_the_suggestion_is_offered_but_never_taken_on_its_own(tmp_path, capsys):
+    path = _linkable_workbook(tmp_path)
+    stats = importer.run_import(path, dry_run=True)
+    importer.report(stats, dry_run=True)
+    out = capsys.readouterr().out
+    assert "--link-single-programme-companies" in out
+    assert "never automatic" in out
+
+    # Without the flag the linkable application still gets its own row.
+    importer.run_import(path)
+    rows = db.get_scout_programmes()
+    northwind = [r for r in rows if r["company"] == "Northwind Systems"]
+    assert len(northwind) == 2, "no link was made, so both rows exist"
+
+
+def test_the_flag_links_only_the_single_programme_company(tmp_path):
+    importer.run_import(_linkable_workbook(tmp_path), link_single=True)
+    rows = db.get_scout_programmes()
+
+    northwind = [r for r in rows if r["company"] == "Northwind Systems"]
+    assert len(northwind) == 1, "the application joined the Master List row"
+    assert northwind[0]["programme"] == "Cyber Degree Apprenticeship"
+    assert northwind[0]["stage"] == "applied", "and brought its stage with it"
+
+    # The ambiguous one is untouched: still three Orrery Bank rows would be
+    # wrong, so it keeps its own and the two Master List rows stand.
+    orrery = [r for r in rows if r["company"] == "Orrery Bank"]
+    assert len(orrery) == 3
+    assert sorted(r["programme"] for r in orrery) == [
+        "Data Apprenticeship", "Software Apprenticeship",
+        "Technology Apprenticeship"]
+
+    # The unknown company is untouched too.
+    assert [r["programme"] for r in rows
+            if r["company"] == "Castellan Ltd"] == ["Engineering Scheme"]
+
+
+def test_the_flag_reports_how_many_it_linked(tmp_path, capsys):
+    stats = importer.run_import(_linkable_workbook(tmp_path),
+                                link_single=True)
+    assert stats["link_applied"] == 1
+    importer.report(stats, dry_run=False)
+    out = capsys.readouterr().out
+    assert "linked to the company's single Master List programme: 1" in out
+
+
+def test_linking_never_overwrites_an_application_that_already_matched(tmp_path):
+    """A Master List row with an application of its own is not a free target:
+    taking it would replace that application's stage with another's."""
+    path = _workbook(
+        tmp_path,
+        master=[["Northwind Systems", "Cyber Degree Apprenticeship"]],
+        applications=[
+            ["Northwind Systems", "Cyber Degree Apprenticeship", "Offer"],
+            ["Northwind Systems", "Cyber Security Degree", "Applied"],
+        ])
+    stats = importer.run_import(path, link_single=True)
+    assert stats["unmatched"]["one_programme_company"] == 1
+    assert stats["unmatched"]["target_has_own_application"] == 1
+    assert stats["unmatched"]["linkable"] == 0
+    assert stats["link_applied"] == 0
+
+    rows = [r for r in db.get_scout_programmes()
+            if r["company"] == "Northwind Systems"]
+    stages = {r["programme"]: r["stage"] for r in rows}
+    assert stages["Cyber Degree Apprenticeship"] == "offer", "not overwritten"
+    assert stages["Cyber Security Degree"] == "applied"
+
+
+def test_two_applications_cannot_both_claim_one_master_row(tmp_path):
+    path = _workbook(
+        tmp_path,
+        master=[["Northwind Systems", "Cyber Degree Apprenticeship"]],
+        applications=[
+            ["Northwind Systems", "Cyber Security Degree", "Applied"],
+            ["Northwind Systems", "Cyber Apprenticeship 2027", "Offer"],
+        ])
+    stats = importer.run_import(path, link_single=True)
+    assert stats["unmatched"]["one_programme_company"] == 2
+    assert stats["unmatched"]["linkable"] == 1
+    assert stats["unmatched"]["link_collisions"] == 1
+    assert stats["link_applied"] == 1
+    assert len([r for r in db.get_scout_programmes()
+                if r["company"] == "Northwind Systems"]) == 2
+
+
+def test_the_flag_can_be_previewed_with_dry_run_first(tmp_path):
+    """So the number can be checked before anything is written."""
+    stats = importer.run_import(_linkable_workbook(tmp_path), dry_run=True,
+                                link_single=True)
+    assert stats["link_applied"] == 1
+    # 3 Master List rows + the 2 applications that could not be linked. The
+    # linked one folds onto its Master List row instead of adding a sixth.
+    assert stats["results"]["would upsert"] == 5
+    assert importer.run_import(_linkable_workbook(tmp_path), dry_run=True
+                               )["results"]["would upsert"] == 6, (
+        "and without the flag it would be six")
+    assert db.get_scout_programmes() == [], "and nothing was written"
+
+
+def test_a_second_run_with_the_flag_changes_nothing_further(tmp_path):
+    path = _linkable_workbook(tmp_path)
+    importer.run_import(path, link_single=True)
+    before = len(db.get_scout_programmes())
+    importer.run_import(path, link_single=True)
+    assert len(db.get_scout_programmes()) == before
+
+
+# ── Blank rows are not "skipped rows" ───────────────────────────────────────
+
+def test_rows_that_are_entirely_empty_are_ignored_silently(tmp_path):
+    """openpyxl yields a row for anything the sheet has FORMATTED, so a
+    workbook with a fill applied below the data returns hundreds of empty
+    rows. Counting those as skipped buried the real problems."""
+    wb = openpyxl.load_workbook(_workbook(
+        tmp_path,
+        master=[["Northwind Systems", "Cyber Degree Apprenticeship"]],
+        applications=[["Northwind Systems", "Cyber Degree Apprenticeship",
+                       "Applied"]]))
+    for sheet in ("Master List", "Timeline", "My Applications"):
+        for _ in range(40):
+            wb[sheet].append([None] * 6)
+    path = tmp_path / "with_blank_rows.xlsx"
+    wb.save(path)
+
+    stats = importer.run_import(str(path), dry_run=True)
+    assert stats["rows_read"]["Master List"] == 1
+    assert stats["rows_read"]["My Applications"] == 1
+    for reason in stats["skipped"]:
+        assert "no company" not in reason, (
+            f"a blank row was reported as skipped: {reason}")
+
+
+def test_a_row_with_content_but_no_company_is_still_reported(tmp_path):
+    """Only ENTIRELY empty rows are silent. A row someone half-filled is a
+    real problem and must not be swallowed with them."""
+    path = _workbook(
+        tmp_path,
+        master=[["Northwind Systems", "Cyber Degree Apprenticeship"],
+                ["", "Orphaned Programme"]])
+    stats = importer.run_import(path, dry_run=True)
+    assert stats["skipped"]["master row with no company"] == 1
