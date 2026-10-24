@@ -1012,7 +1012,11 @@ input[type=range] { accent-color: var(--purple); padding: 0; border: none; backg
 }
 .focus-line.urgent { animation: fl-pulse 2s ease-in-out infinite; }
 @keyframes fl-pulse { 50% { opacity: .5; } }
-.focus-actions { display: flex; align-items: center; gap: 10px; }
+/* Wraps, so the row cannot run off a phone. It was `nowrap` and 701px wide in
+   a 390px viewport, which pushed the whole PAGE to 715px and left the last
+   buttons — SCOUT among them — entirely off screen with no way to scroll to
+   them. Wrapping changes nothing above ~700px, where the row already fits. */
+.focus-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .focus-today-chip {
   font-family: 'IBM Plex Mono', monospace; font-size: .58rem; letter-spacing: 1.5px;
   color: var(--muted); border: 1px solid rgba(var(--primary-rgb),.2);

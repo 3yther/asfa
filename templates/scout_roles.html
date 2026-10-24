@@ -30,6 +30,11 @@
       <button type="button" class="sr-tab" role="tab" id="tab-alerts"
               aria-controls="screen-alerts" aria-selected="false" data-screen="alerts">Alerts</button>
     </nav>
+    <!-- The older part-time radar. Deliberately NOT inside the tablist above:
+         that element contains tabs, and an <a> among them misreports the tab
+         count to a screen reader. At narrow widths CSS pins this to the bottom
+         of the viewport instead, because the four tabs already fill the bar. -->
+    <a class="sr-alt" href="/scout">Part-time jobs</a>
   </div>
 </header>
 

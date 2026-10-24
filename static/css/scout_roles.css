@@ -76,6 +76,7 @@
   max-width: var(--sr-max); margin: 0 auto;
   padding: 0 var(--sr-gap);
   display: flex; align-items: center; gap: var(--sr-gap);
+  flex-wrap: wrap;            /* lets .sr-alt take its own row when tight */
 }
 
 .sr-mark {
@@ -118,6 +119,36 @@
     min-width: var(--sr-tap); justify-content: center;
   }
   .sr-tab { font-size: .76rem; padding: 0 7px; }
+}
+
+/* The link across to the older part-time radar. Wide: a quiet link at the end
+   of the top bar. Narrow: pinned to the bottom of the viewport, because the
+   four tabs already fill the bar at 390px and a fifth item would push one off
+   screen — measured, not assumed. One element either way, so the two states
+   cannot drift apart. */
+.sr-alt {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--sr-tap); padding: 0 12px;
+  font-size: .78rem; font-weight: 600;
+  color: var(--sr-ink-2); text-decoration: none;
+  border-left: 1px solid var(--sr-edge);
+}
+.sr-alt:hover { color: var(--cyan); }
+
+/* Narrow: its own row under the tabs, in normal flow.
+   NOT `position: fixed` pinned to the bottom of the viewport, which is what
+   this was first: `.sr-top` sets `backdrop-filter`, and that makes it the
+   containing block for fixed descendants, so the link anchored to the bottom
+   of the HEADER and sat on top of the Tracker tab. A bounds check called it
+   "on screen" and the screenshot showed it covering a tab. */
+@media (max-width: 700px) {
+  .sr-alt {
+    flex: 1 0 100%;
+    justify-content: flex-start;
+    border-left: 0; border-top: 1px solid var(--sr-edge);
+    min-height: var(--sr-tap); padding-left: 2px;
+  }
 }
 
 .sr-screen { max-width: var(--sr-max); margin: 0 auto; padding: var(--s5, 24px) var(--sr-gap) 72px; }
