@@ -317,7 +317,6 @@ def scan_apprenticeships() -> dict:
     summary = {"employers_scanned": 0, "keywords_scanned": 0, "new": 0,
                "closed": 0, "alerted": 0, "excluded": 0, "errors": [],
                "baseline_run": False, "route_scanned": 0, "route_found": 0,
-               "near_home_found": 0, "near_home_tagged": 0,
                "not_alerted_below_level": 0}
     new_bucket = []
     excluded = []
@@ -383,29 +382,6 @@ def scan_apprenticeships() -> dict:
         summary["route_found"] = len(raws)
         summary["new"] += new_count
         _log_scan("route", "digital L4+", len(raws), new_count, duration_ms)
-
-    # ---- Near-home pass: TAG only, never filter ----
-    # The same route query narrowed to the configured radius from home. A role
-    # outside the radius is still a role — a degree apprenticeship is worth
-    # commuting or relocating for — so this only marks what is close, and
-    # nothing is dropped for being far.
-    try:
-        near = scraper.by_route_near_home(min_level=1)
-    except ScraperError as e:
-        summary["errors"].append(f"near_home: {e}")
-        near = []
-    if near:
-        near_refs = {r.reference for r in near}
-        summary["near_home_found"] = len(near_refs)
-        tagged = (ScoutJob.query
-                  .filter(ScoutJob.listing_type == "apprenticeship",
-                          ScoutJob.external_ref.in_(near_refs))
-                  .all())
-        for row in tagged:
-            row.near_home = 1
-        if tagged:
-            orm.session.commit()
-        summary["near_home_tagged"] = len(tagged)
 
     # ---- Keyword scans (surface employers we don't track by name) ----
     for kw in keyword_scans():

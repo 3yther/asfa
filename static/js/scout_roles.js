@@ -153,10 +153,20 @@
     if (src.options.length <= 1) {
       (view.sources || []).forEach((s) => src.add(new Option(s, s)));
     }
+    // A datalist, not a select: you can type a city the current results do not
+    // mention yet, which is the point when you are deciding where to move to.
+    // `.add()` is a select method — a datalist takes appended <option>s.
+    const places = $("sr-f-location-list");
+    if (!places.children.length) {
+      (view.locations || []).forEach((l) => {
+        const opt = document.createElement("option");
+        opt.value = l;
+        places.appendChild(opt);
+      });
+    }
   }
 
   const CHIP_LABELS = {
-    near_home: "Near home",
     watchlist_only: "Watchlist only",
     hide_closed: "Open listings only",
     new_only: "New since last visit",
@@ -171,6 +181,7 @@
       if (key === "q") label = 'Search: "' + v + '"';
       else if (key === "level") label = "Level " + v + "+";
       else if (key === "source") label = "Provider: " + v;
+      else if (key === "location") label = "In: " + v;
       else label = CHIP_LABELS[key] || key;
       bits.push('<button type="button" class="sr-chip" data-drop="' + esc(key) +
         '" aria-label="Remove filter: ' + esc(label) + '">' + esc(label) +
@@ -192,7 +203,6 @@
       bits.push('<span class="new">' + c.new_since_last_visit + " new since " +
         (lastVisited ? "your last visit" : "the first scan") + "</span>");
     }
-    if (c.near_home) bits.push("<span>" + c.near_home + " near home</span>");
     if (c.saved) bits.push("<span>" + c.saved + " on the tracker</span>");
     if (c.review) bits.push("<span>" + c.review + " to review</span>");
     $("sr-countline").innerHTML = bits.join("");
@@ -204,7 +214,6 @@
     if (card.starred) out.push(['star', '★ WATCHLIST']);
     if (card.level) out.push(['level', 'LEVEL ' + card.level]);
     else out.push(['unknown', 'LEVEL UNKNOWN']);
-    if (card.near_home) out.push(['near', 'NEAR HOME']);
     if (card.location_count > 1) {
       out.push(['multi', card.location_count + ' LOCATIONS']);
     }
@@ -327,7 +336,8 @@
     if (q) f.q = q;
     if ($("sr-f-level").value) f.level = $("sr-f-level").value;
     if ($("sr-f-source").value) f.source = $("sr-f-source").value;
-    if ($("sr-f-near").checked) f.near_home = true;
+    const place = $("sr-f-location").value.trim();
+    if (place) f.location = place;
     if ($("sr-f-watch").checked) f.watchlist_only = true;
     if ($("sr-f-open").checked) f.hide_closed = true;
     if ($("sr-f-new").checked) f.new_only = true;
@@ -338,7 +348,7 @@
     $("sr-q").value = f.q || "";
     $("sr-f-level").value = f.level || "";
     $("sr-f-source").value = f.source || "";
-    $("sr-f-near").checked = !!f.near_home;
+    $("sr-f-location").value = f.location || "";
     $("sr-f-watch").checked = !!f.watchlist_only;
     $("sr-f-open").checked = !!f.hide_closed;
     $("sr-f-new").checked = !!f.new_only;

@@ -198,7 +198,7 @@ def test_recently_seen_rows_stay_open(watchlist):
 
 def test_closure_detection_ignores_jobs(watchlist):
     """Reed/SerpAPI jobs have no last_seen and must never be marked closed."""
-    db.add_scout_job(title="Sales Assistant", company="TK Maxx", location="Erith",
+    db.add_scout_job(title="Sales Assistant", company="TK Maxx", location="Riverport",
                      salary="", job_type="part time",
                      url="https://example.com/closure-test", description="",
                      source="reed", posted_date="Today",
@@ -270,7 +270,7 @@ def test_combined_email_groups_by_source_with_badges(watchlist):
         [_raw("VAC900080", "AMAZON UK SERVICES LTD.", level=6)], None, [], watchlist)
     appr = ScoutJob.query.filter_by(external_ref="VAC900080").all()
     jobs = [{"title": "Sales Assistant", "company": "TK Maxx",
-             "location": "Erith", "url": "https://example.com/j1",
+             "location": "Riverport", "url": "https://example.com/j1",
              "salary": "12.21", "posted_date": "Today"}]
 
     html = scout_notify.render_email(
@@ -310,7 +310,7 @@ def test_alert_returns_false_when_nothing_new():
 def client(watchlist):
     apprenticeships._persist_vacancies(
         [_raw("VAC900090", "AMAZON UK SERVICES LTD.")], None, [], watchlist)
-    db.add_scout_job(title="Sales Assistant", company="TK Maxx", location="Erith",
+    db.add_scout_job(title="Sales Assistant", company="TK Maxx", location="Riverport",
                      salary="", job_type="part time",
                      url="https://example.com/route-test", description="",
                      source="reed", posted_date="Today",
@@ -1101,7 +1101,7 @@ def test_poll_interval_defaults_to_six_hours(monkeypatch):
 
 
 def test_existing_job_rows_default_to_listing_type_job(ctx):
-    db.add_scout_job(title="Team Member", company="Greggs", location="Dartford",
+    db.add_scout_job(title="Team Member", company="Greggs", location="Keyford",
                      salary="", job_type="part time",
                      url="https://example.com/legacy", description="",
                      source="reed", posted_date="Today",
@@ -1651,59 +1651,36 @@ def test_the_sweep_query_is_requested_separately_from_the_keyword_query():
     assert "searchTerm" not in GovUkScraper.route_sweep_params()
 
 
-# ── Distance: validated, but not sent until the field name is known ────────
+# ── The sweep is nationwide, and carries no location at all ────────────────
+#
+# Scout used to accept a distance and a postcode here and send them once the
+# field names were confirmed. That is removed: the apprenticeship is worth
+# relocating for, so a sweep centred on where the user lives today is a thumb
+# on the scale towards staying put, and a home postcode in a public repository
+# is a home address by triangulation.
 
-def test_the_distance_is_now_sent_because_the_field_names_are_configured():
-    """CHANGED in Phase 1D: location=DA17&distance=20 was verified on the live
-    site (2 results), so config/scout_filters.json now carries the names and
-    the sweep actually sends them."""
-    params = GovUkScraper.route_sweep_params(
-        distance=scout_config.search_distance(),
-        postcode=scout_config.home_postcode())
-
-    assert params["routeIds"] == 7
-    assert params["levelIds"] == [4, 5, 6, 7]
-    assert params["distance"] == 20
-    assert params["location"] == "DA17"
-
-
-def test_a_distance_is_still_omitted_and_warned_when_no_field_name_is_set(
-        caplog, tmp_path, monkeypatch):
-    """The guard stays for any OTHER filter whose name we do not have: validated
-    so a bad value is caught, omitted so the query cannot claim to be local."""
-    path = tmp_path / "filters.json"
-    path.write_text('{"distance_param": [], "postcode_param": []}')
-    monkeypatch.setenv("SCOUT_FILTERS_PATH", str(path))
-    monkeypatch.delenv("SCOUT_DISTANCE_PARAM", raising=False)
-    monkeypatch.delenv("SCOUT_POSTCODE_PARAM", raising=False)
-    scout_config.settings(refresh=True)
-    try:
-        with caplog.at_level("WARNING", logger="asfa.gov_uk"):
-            params = GovUkScraper.route_sweep_params(distance=20)
-        assert params == {"routeIds": 7, "levelIds": [4, 5, 6, 7],
-                          "sort": "AgeAsc"}
-        messages = [r.getMessage() for r in caplog.records]
-        assert any("no distance_param is configured" in m for m in messages), \
-            f"a silently nationwide sweep must warn; got {messages}"
-    finally:
-        monkeypatch.delenv("SCOUT_FILTERS_PATH", raising=False)
-        scout_config.settings(refresh=True)
+def test_route_sweep_params_takes_no_location_arguments():
+    """Not just "does not send one" — it cannot be ASKED for one, so a caller
+    that tries to reintroduce the near-home pass fails loudly."""
+    import inspect
+    params = inspect.signature(GovUkScraper.route_sweep_params).parameters
+    assert list(params) == [], f"unexpected arguments: {list(params)}"
 
 
-@pytest.mark.parametrize("bad", [25, 0, -1, "near"])
-def test_an_invalid_distance_raises_before_any_request(bad):
-    with pytest.raises(ValueError):
-        GovUkScraper.route_sweep_params(distance=bad)
+def test_there_is_no_near_home_sweep_method():
+    assert not hasattr(GovUkScraper, "by_route_near_home")
 
 
-def test_a_distance_is_sent_once_the_field_name_is_configured(tmp_path, monkeypatch):
-    monkeypatch.setenv("SCOUT_DISTANCE_PARAM", "distance")
-    monkeypatch.setenv("SCOUT_POSTCODE_PARAM", "location")
-    params = GovUkScraper.route_sweep_params(distance=20, postcode="DA17 6AB")
+def test_by_route_takes_no_location_arguments():
+    import inspect
+    params = set(inspect.signature(GovUkScraper.by_route).parameters)
+    assert not params & {"distance", "postcode", "location", "radius"}
 
-    assert params["distance"] == 20
-    assert params["location"] == "DA17 6AB"
-    assert params["routeIds"] == 7
+
+def test_a_raw_vacancy_carries_no_near_home_flag():
+    card = _card("/apprenticeship/VAC1", "Cyber Apprentice", "Acme")
+    got = _paged_scraper([card], 1).by_route(min_level=1)
+    assert not hasattr(got[0], "near_home")
 
 
 def test_the_nationwide_sweep_sends_no_distance_at_all():
@@ -1792,17 +1769,14 @@ def test_a_role_found_by_both_the_sweep_and_a_keyword_is_one_row(watchlist, monk
     assert len(sent[0]["apprenticeships"]) == 1, "one vacancy, one alert"
 
 
-# ── Near-home tagging in the production scan ────────────────────────────────
+# ── The production scan runs ONE sweep, and it is nationwide ───────────────
 
-def _scan_with(monkeypatch, route=(), near=(), keyword=()):
-    """Run a scan with the three passes stubbed. Baseline already closed."""
+def _scan_with(monkeypatch, route=(), keyword=()):
+    """Run a scan with the two passes stubbed. Baseline already closed."""
     db.kv_set(apprenticeships._BASELINE_KEY, "1")
     monkeypatch.setattr(apprenticeships, "keyword_scans", lambda: ["cyber"])
     monkeypatch.setattr(GovUkScraper, "by_route",
-                        lambda self, min_level=1, distance=None, postcode="",
-                        stats=None: list(route))
-    monkeypatch.setattr(GovUkScraper, "by_route_near_home",
-                        lambda self, min_level=1, stats=None: list(near))
+                        lambda self, min_level=1, stats=None: list(route))
     monkeypatch.setattr(GovUkScraper, "by_keyword",
                         lambda self, kw, min_level=4, stats=None: list(keyword))
     monkeypatch.setattr(GovUkScraper, "by_employer",
@@ -1810,58 +1784,32 @@ def _scan_with(monkeypatch, route=(), near=(), keyword=()):
     return apprenticeships.scan_apprenticeships()
 
 
-def test_the_near_home_pass_tags_rows_without_filtering(watchlist, monkeypatch):
-    near_one = _appr_raw("VAC-NH1", "Cyber Apprentice", "BT GROUP",
-                         course="Cyber security technologist (level 4)")
-    far_one = _appr_raw("VAC-NH2", "Cloud Apprentice", "AWS",
-                        course="Cloud engineer (level 4)")
+def test_the_scan_reports_nothing_about_proximity(watchlist, monkeypatch):
+    """The near-home pass used to add near_home_found/near_home_tagged to the
+    summary and tag rows. Both are gone: every listing is equal on location."""
+    one = _appr_raw("VAC-NH1", "Cyber Apprentice", "BT GROUP",
+                    course="Cyber security technologist (level 4)")
+    two = _appr_raw("VAC-NH2", "Cloud Apprentice", "AWS",
+                    course="Cloud engineer (level 4)")
     monkeypatch.setattr("services.scout_notify.alert_new_listings", lambda **kw: True)
 
-    summary = _scan_with(monkeypatch, route=[near_one, far_one], near=[near_one])
+    summary = _scan_with(monkeypatch, route=[one, two])
 
-    assert summary["near_home_found"] == 1
-    assert summary["near_home_tagged"] == 1
-    assert ScoutJob.query.filter_by(external_ref="VAC-NH1").one().near_home == 1
-    far = ScoutJob.query.filter_by(external_ref="VAC-NH2").one()
-    assert not far.near_home
-    assert far.status == "open", "a far listing must not be dropped or closed"
+    assert not [k for k in summary if "near" in k.lower()], (
+        f"proximity is back in the summary: {sorted(summary)}")
+    assert summary["route_found"] == 2, "and both listings are still kept"
 
 
-def test_a_failing_near_home_pass_does_not_abort_the_scan(watchlist, monkeypatch):
+def test_no_listing_is_tagged_with_a_distance(watchlist, monkeypatch):
+    one = _appr_raw("VAC-NH3", "Data Apprentice", "BT GROUP",
+                    course="Data analyst (level 4)")
     monkeypatch.setattr("services.scout_notify.alert_new_listings", lambda **kw: True)
+    _scan_with(monkeypatch, route=[one])
 
-    def boom(self, min_level=1, stats=None):
-        raise ScraperError("no")
-
-    monkeypatch.setattr(GovUkScraper, "by_route_near_home", boom)
-    monkeypatch.setattr(apprenticeships, "keyword_scans", lambda: ["cyber"])
-    monkeypatch.setattr(GovUkScraper, "by_route",
-                        lambda self, min_level=1, distance=None, postcode="",
-                        stats=None: [_appr_raw("VAC-NH3", "Cyber Apprentice",
-                                               "BT GROUP")])
-    monkeypatch.setattr(GovUkScraper, "by_keyword",
-                        lambda self, kw, min_level=4, stats=None: [])
-    monkeypatch.setattr(GovUkScraper, "by_employer",
-                        lambda self, a, min_level=4, stats=None: [])
-    db.kv_set(apprenticeships._BASELINE_KEY, "1")
-
-    summary = apprenticeships.scan_apprenticeships()
-    assert any("near_home" in e for e in summary["errors"])
-    assert ScoutJob.query.filter_by(external_ref="VAC-NH3").count() == 1
-
-
-def test_the_near_home_pass_is_skipped_without_a_postcode(monkeypatch, caplog):
-    monkeypatch.setenv("SCOUT_FILTERS_PATH", "/nonexistent/filters.json")
-    monkeypatch.delenv("SCOUT_HOME_POSTCODE", raising=False)
-    scout_config.settings(refresh=True)
-    try:
-        with caplog.at_level("INFO", logger="asfa.gov_uk"):
-            assert GovUkScraper().by_route_near_home() == []
-        assert any("no home_postcode configured" in r.getMessage()
-                   for r in caplog.records)
-    finally:
-        monkeypatch.delenv("SCOUT_FILTERS_PATH", raising=False)
-        scout_config.settings(refresh=True)
+    rows = db.get_apprenticeship_rows()
+    assert rows, "the listing was stored"
+    for row in rows:
+        assert "near_home" not in row
 
 
 # ── Keyword passes run with no level floor ─────────────────────────────────
@@ -1873,9 +1821,6 @@ def test_the_keyword_passes_send_no_level_floor(watchlist, monkeypatch):
     monkeypatch.setattr("services.scout_notify.alert_new_listings", lambda **kw: True)
     monkeypatch.setattr(apprenticeships, "keyword_scans", lambda: ["cyber"])
     monkeypatch.setattr(GovUkScraper, "by_route",
-                        lambda self, min_level=1, distance=None, postcode="",
-                        stats=None: [])
-    monkeypatch.setattr(GovUkScraper, "by_route_near_home",
                         lambda self, min_level=1, stats=None: [])
     monkeypatch.setattr(
         GovUkScraper, "by_keyword",

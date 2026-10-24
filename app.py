@@ -4415,7 +4415,9 @@ def _roles_filters_from_request() -> dict:
         out["level"] = args.get("level")
     if args.get("source"):
         out["source"] = args.get("source")
-    for flag in ("near_home", "watchlist_only", "hide_closed", "new_only"):
+    if args.get("location"):
+        out["location"] = args.get("location", "")[:120]
+    for flag in ("watchlist_only", "hide_closed", "new_only"):
         if args.get(flag) in ("1", "true", "yes", "on"):
             out[flag] = True
     return out

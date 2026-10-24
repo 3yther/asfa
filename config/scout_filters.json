@@ -16,28 +16,19 @@
     "",
     "Keys: search_keywords (production), audit_keywords (measurement only),",
     "digital_standards, strong_digital_terms, weak_digital_terms,",
-    "title_exclusions, employer_exclusions, watchlist_employers,",
-    "distance_param, postcode_param, home_postcode, distance, max_pages.",
+    "title_exclusions, employer_exclusions, watchlist_employers, max_pages.",
     "",
     "Run scripts/scout_coverage_baseline.py after editing: the report prints",
     "'excluded: N' with every dropped listing and its reason, so an over-eager",
     "exclusion shows up immediately."
   ],
-  "_filters_note": [
-    "gov.uk's own filter field names, verified against the live site:",
-    "  location=DA17&distance=20  ->  2 results",
-    "Distance must be one of 2, 5, 10, 15, 20, 30, 40, all."
+  "_location_note": [
+    "There is NO home postcode or distance setting. Scout's sweep is",
+    "nationwide and always has been the only sweep since the near-home pass",
+    "was removed: the apprenticeship is worth relocating for, so proximity to",
+    "where you live today must not rank a listing. Search by place name on",
+    "Find roles instead \u2014 that works for a city you might move TO."
   ],
-  "distance_param": [
-    "distance"
-  ],
-  "postcode_param": [
-    "location"
-  ],
-  "home_postcode": [
-    "DA17"
-  ],
-  "distance": 20,
   "_watchlist_note": [
     "Employers whose listings are never silently dropped by the standard rule;",
     "they surface in the report's 'review' group instead. Replace this with your",

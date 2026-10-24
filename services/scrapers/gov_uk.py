@@ -192,7 +192,6 @@ class RawVacancy:
     # filter: a role outside the radius is still a role, and quietly dropping
     # it would hide the degree apprenticeships that are worth relocating or
     # commuting for. Set by the caller after the near-home sweep.
-    near_home: bool = False
 
     def __post_init__(self):
         # Seed from `location` so a single-location vacancy still reports
@@ -256,24 +255,7 @@ class GovUkScraper:
         return self._search_all_pages(
             self.search_params(keyword), min_level, stats=stats)
 
-    def by_route_near_home(self, min_level: int = 1,
-                           stats: Optional[dict] = None) -> list[RawVacancy]:
-        """The same route sweep, narrowed to the configured radius from home.
-
-        Used only to TAG listings as near_home; the nationwide sweep is what
-        decides what Scout knows about. Returns [] when no postcode is
-        configured, since a distance with no centre is meaningless.
-        """
-        postcode = scout_config.home_postcode()
-        if not postcode:
-            logger.info("gov_uk: no home_postcode configured — "
-                        "skipping the near-home pass")
-            return []
-        return self.by_route(min_level=min_level,
-                             distance=scout_config.search_distance(),
-                             postcode=postcode, stats=stats)
-
-    def by_route(self, min_level: int = 1, distance=None, postcode: str = "",
+    def by_route(self, min_level: int = 1,
                  stats: Optional[dict] = None) -> list[RawVacancy]:
         """Sweep the whole Digital route at Level 4+, with no search term.
 
@@ -281,54 +263,30 @@ class GovUkScraper:
         only finds a vacancy if the right word appears in it; the route filter
         selects on what the apprenticeship IS, so one pass covers the route.
 
+        NATIONWIDE, always. There used to be a second pass narrowed to a radius
+        from a home postcode, which tagged what it found as near_home. It is
+        gone: the apprenticeship is worth relocating for, so centring a sweep
+        on where the user lives today is a thumb on the scale towards staying
+        put. Where a listing is is shown on its card and can be searched for by
+        name instead.
+
         min_level defaults to 1 here, not 4: gov.uk has already filtered to
         Level 4+ via levelIds, so re-filtering locally would only discard the
         listings whose level we failed to parse.
         """
-        params = self.route_sweep_params(distance=distance, postcode=postcode)
-        return self._search_all_pages(params, min_level, stats=stats)
+        return self._search_all_pages(self.route_sweep_params(), min_level,
+                                      stats=stats)
 
     @staticmethod
-    def route_sweep_params(distance=None, postcode: str = "") -> dict:
+    def route_sweep_params() -> dict:
         """The route sweep's query. Field names verified against the live site.
 
             ?routeIds=7&levelIds=4&levelIds=5&levelIds=6&levelIds=7&sort=AgeAsc
 
-        `distance` and `postcode` are accepted and VALIDATED but only appear in
-        the query when the parameter names for them are configured. gov.uk's
-        allowed distance values are known (2/5/10/15/20/30/40/all); the names of
-        the distance and postcode fields are not, and guessing a field name
-        would silently produce a nationwide search while reporting a local one.
-        Set "distance_param" and "postcode_param" in config/scout_filters.json
-        once they are confirmed and this starts sending them.
+        No location, distance or postcode: see by_route().
         """
         params = dict(scout_config.route_sweep_params())
         params["sort"] = "AgeAsc"
-
-        if distance is None and not postcode:
-            return params
-
-        # Validate even when we cannot send it, so a bad value is caught here
-        # rather than being quietly dropped.
-        if distance is not None:
-            distance = scout_config.validate_distance(distance)
-
-        distance_param = scout_config.distance_param()
-        postcode_param = scout_config.postcode_param()
-        if distance is not None:
-            if distance_param:
-                params[distance_param] = distance
-            else:
-                logger.warning(
-                    "gov_uk: distance=%r requested but no distance_param is "
-                    "configured, so the sweep stays nationwide", distance)
-        if postcode:
-            if postcode_param:
-                params[postcode_param] = postcode
-            else:
-                logger.warning(
-                    "gov_uk: postcode=%r requested but no postcode_param is "
-                    "configured, so the sweep stays nationwide", postcode)
         return params
 
     # ------------------------------------------------------------------

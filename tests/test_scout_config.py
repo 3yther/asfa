@@ -433,103 +433,42 @@ def test_the_sweep_sends_no_search_term():
     assert "searchTerm" not in sc.route_sweep_params()
 
 
-# ── Distance validation ─────────────────────────────────────────────────────
+# ── The near-home feature is GONE, and must not drift back ─────────────────
+#
+# Scout used to centre a second sweep on a home postcode and tag what it found.
+# That is removed: the apprenticeship is worth relocating for, so proximity to
+# where the user lives today must not rank a listing — and a home postcode in a
+# public repo is a home address by triangulation. These tests exist so the
+# feature cannot reappear unnoticed.
 
-def test_the_allowed_distances_are_the_sites_own():
-    assert sc.DISTANCE_VALUES == (2, 5, 10, 15, 20, 30, 40, "all")
-
-
-def test_the_default_distance_is_twenty():
-    assert sc.DEFAULT_DISTANCE == 20
-    assert sc.search_distance() == 20
-
-
-@pytest.mark.parametrize("value", [2, 5, 10, 15, 20, 30, 40, "all"])
-def test_every_accepted_distance_validates(value):
-    assert sc.validate_distance(value) == value
-
-
-@pytest.mark.parametrize("raw,expected", [
-    ("20", 20), (" 20 ", 20), ("ALL", "all"), ("All", "all"), (" all ", "all"),
+@pytest.mark.parametrize("name", [
+    "DISTANCE_VALUES", "DEFAULT_DISTANCE", "search_distance",
+    "validate_distance", "distance_param", "postcode_param", "home_postcode",
 ])
-def test_distance_strings_are_normalised(raw, expected):
-    assert sc.validate_distance(raw) == expected
+def test_no_distance_or_postcode_setting_exists(name):
+    assert not hasattr(sc, name), (
+        f"{name} is back — location must never favour where the user lives")
 
 
-@pytest.mark.parametrize("bad", [25, 1, 0, -5, 100, 3.5, "near", "", None, True,
-                                 [20], {"d": 20}])
-def test_an_unaccepted_distance_is_rejected(bad):
-    """Rejected, not coerced. Distance changes which listings a sweep can see,
-    so quietly substituting a different radius would make the numbers a lie —
-    and a wrong "nothing found" is worse than an error."""
-    with pytest.raises(ValueError):
-        sc.validate_distance(bad)
+def test_no_config_key_asks_for_a_location(isolated_config):
+    for key in ("distance", "distance_param", "postcode_param", "home_postcode"):
+        assert key not in sc.settings()
 
 
-def test_the_rejection_message_names_the_allowed_values():
-    with pytest.raises(ValueError) as e:
-        sc.validate_distance(25)
-    assert "2, 5, 10, 15, 20, 30, 40" in str(e.value)
-    assert "all" in str(e.value)
+def test_a_stray_location_key_in_config_is_ignored(isolated_config):
+    """An old config file left over from before the removal must not quietly
+    re-enable anything."""
+    _write(isolated_config, {"home_postcode": ["ZZ99 9ZZ"], "distance": 20})
+    assert "home_postcode" not in sc.settings()
+    assert "distance" not in sc.settings()
 
 
-def test_the_distance_can_be_set_from_the_environment(monkeypatch):
-    monkeypatch.setenv("SCOUT_DISTANCE", "40")
-    assert sc.search_distance() == 40
-    monkeypatch.setenv("SCOUT_DISTANCE", "all")
-    assert sc.search_distance() == "all"
+def test_the_sweep_query_carries_no_location_of_any_kind():
+    params = sc.route_sweep_params()
+    blob = str(params).lower()
+    for token in ("distance", "postcode", "location", "lat", "lon", "radius"):
+        assert token not in blob, f"{token} is back in the sweep query"
 
-
-def test_a_bad_distance_in_the_environment_raises(monkeypatch):
-    monkeypatch.setenv("SCOUT_DISTANCE", "25")
-    with pytest.raises(ValueError):
-        sc.search_distance()
-
-
-def test_the_distance_can_be_set_in_config(isolated_config):
-    _write(isolated_config, {"distance": 5})
-    assert sc.search_distance() == 5
-
-
-def test_a_bad_distance_in_config_falls_back_to_the_default(isolated_config):
-    """A mistyped config value must not stop a scan; the warning is the signal."""
-    _write(isolated_config, {"distance": 25})
-    assert sc.search_distance() == sc.DEFAULT_DISTANCE
-
-
-# ── Field names we do NOT have are not guessed ──────────────────────────────
-
-def test_the_field_names_have_no_PYTHON_default(isolated_config, monkeypatch):
-    """CHANGED in Phase 1D: the names are now in config/scout_filters.json,
-    verified against the live site. There is still no default in Python —
-    guessing a field name would send a query that looks local and is silently
-    nationwide, a worse failure than not filtering at all."""
-    monkeypatch.delenv("SCOUT_DISTANCE_PARAM", raising=False)
-    monkeypatch.delenv("SCOUT_POSTCODE_PARAM", raising=False)
-    monkeypatch.delenv("SCOUT_HOME_POSTCODE", raising=False)
-    assert sc.distance_param() is None
-    assert sc.postcode_param() is None
-
-
-def test_the_home_postcode_is_never_hardcoded_in_python(isolated_config,
-                                                        monkeypatch):
-    """It comes from config. With config isolated there is no postcode at all,
-    which is what "never hardcoded" has to mean."""
-    monkeypatch.delenv("SCOUT_HOME_POSTCODE", raising=False)
-    assert sc.home_postcode() == ""
-    assert "DA17" not in str(sc.DEFAULT_SEARCH_KEYWORDS)
-
-
-def test_the_home_postcode_can_be_configured(isolated_config):
-    _write(isolated_config, {"home_postcode": ["DA17 6AB"]})
-    assert sc.home_postcode() == "DA17 6AB"
-
-
-def test_the_field_names_can_be_configured_once_known(isolated_config):
-    _write(isolated_config, {"distance_param": ["distance"],
-                             "postcode_param": ["location"]})
-    assert sc.distance_param() == "distance"
-    assert sc.postcode_param() == "location"
 
 
 # ── Standards coverage (Phase 1D audit) ─────────────────────────────────────
@@ -683,11 +622,16 @@ def test_the_verdict_carries_the_review_flag_for_the_log():
     assert d["watchlist"] == "thales"
 
 
-# ── The verified distance/postcode field names ─────────────────────────────
+# ── The shipped config file carries no location either ─────────────────────
 
-def test_the_verified_field_names_are_configured():
-    """location=DA17&distance=20 returned 2 results on the live site."""
-    assert sc.distance_param() == "distance"
-    assert sc.postcode_param() == "location"
-    assert sc.home_postcode() == "DA17"
-    assert sc.search_distance() == 20
+def test_the_committed_config_has_no_home_location():
+    """The real config/scout_filters.json, not an isolated one: this is the
+    file that gets committed to a public repository."""
+    import json
+    import os
+    path = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "config", "scout_filters.json")
+    raw = json.load(open(path, encoding="utf-8"))
+    for key in ("home_postcode", "distance", "distance_param",
+                "postcode_param", "+home_postcode"):
+        assert key not in raw, f"{key} is back in the committed config"
