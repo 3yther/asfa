@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Seed the /interview prep bank with Amir's pre-written Q&A.
+"""Seed the /interview prep bank from a local Q&A file.
+
+The source file (interview_qa_seed.json) is GITIGNORED: it holds placement
+history and candid self-assessment, which does not belong in a public
+repository. A clone without it seeds nothing and exits 0 — /interview simply
+starts empty.
 
 Idempotent: safe to run repeatedly. It never duplicates a session or a Q&A, and
 it only ever inserts — it never edits or deletes anything the live AI interview
@@ -155,14 +160,28 @@ def main(argv):
     args = [a for a in argv[1:] if not a.startswith("-")]
     dry_run = "--dry-run" in argv[1:]
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = args[0] if args else os.path.join(here, "interview_qa_seed.json")
+    default_path = os.path.join(here, "interview_qa_seed.json")
+    path = args[0] if args else default_path
+
     if not os.path.exists(path):
+        # A MISSING DEFAULT IS NORMAL, NOT AN ERROR. interview_qa_seed.json is
+        # gitignored — it holds placement history and candid self-assessment,
+        # which does not belong in a public repo — so a fresh clone simply has
+        # no prep bank and /interview starts empty. Exit 0 so a boot script or
+        # a Makefile that runs this does not fail on a clean checkout.
+        if not args:
+            print(f"No seed file at {path} — nothing to seed, skipping. "
+                  f"(It is gitignored; keep your own copy there.)")
+            return 0
+        # A path the caller TYPED and got wrong is a real error.
         raise SystemExit(f"seed file not found: {path}")
+
     print(f"Seeding from {path}"
           f"  (backend: {'Postgres' if db.USE_POSTGRES else 'SQLite'})"
           + ("  [DRY RUN]" if dry_run else ""))
     seed(path, dry_run=dry_run)
+    return 0
 
 
 if __name__ == "__main__":
-    main(sys.argv)
+    sys.exit(main(sys.argv))

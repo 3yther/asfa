@@ -13,7 +13,7 @@ The task brief says *"Both are Flask + SQLAlchemy apps."* That is true of Radar
 but **false of Scout**.
 
 Scout is not a standalone project — it is a feature module inside **ASFA**
-(`/Users/amirsalah/stock-scanner/asfa`), consisting of `services/scout.py`,
+(this repository), consisting of `services/scout.py`,
 `templates/scout.html`, the `scout_*` tables in `database.py`, and the
 `/scout` + `/api/scout/*` routes in `app.py`.
 

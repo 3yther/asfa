@@ -98,7 +98,7 @@ Return ONLY valid JSON in this exact format:
 {{
   "reasoning": "Why you chose this decomposition",
   "steps": [
-    {{"step": 0, "agent": "scout", "skill": "scan_jobs", "params": {{"keywords": ["retail"], "location": "Erith"}}, "depends_on": []}},
+    {{"step": 0, "agent": "scout", "skill": "scan_jobs", "params": {{"keywords": ["retail"], "location": "Manchester"}}, "depends_on": []}},
     {{"step": 1, "agent": "scout", "skill": "filter_results", "params": {{"filters": {{"min_salary": 25000}}}}, "depends_on": [0]}}
   ]
 }}

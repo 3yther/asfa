@@ -130,6 +130,25 @@ def test_a_role_detail_carries_the_panel_fields():
         assert key in card, f"the panel renders {key} as a dash when unknown"
 
 
+def test_the_roles_api_takes_a_location_filter_and_no_proximity_flag():
+    c = _client()
+    data = c.get("/api/scout/roles?location=Reading").get_json()
+    assert data["filters"] == {"location": "Reading"}
+    assert data["counts"]["shown"] == 1
+
+    # A near_home flag left in a bookmarked URL is ignored, not honoured.
+    data = c.get("/api/scout/roles?near_home=1").get_json()
+    assert "near_home" not in data["filters"]
+    assert data["counts"]["shown"] == data["counts"]["total"]
+
+
+def test_the_roles_api_reports_no_distances_or_home_postcode():
+    data = _client().get("/api/scout/roles").get_json()
+    for key in ("distances", "home_postcode", "near_home"):
+        assert key not in data
+    assert "near_home" not in data["counts"]
+
+
 def test_an_unknown_ref_is_a_404_not_an_empty_card():
     assert _client().get("/api/scout/roles/NOPE").status_code == 404
 

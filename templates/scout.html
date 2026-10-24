@@ -333,13 +333,13 @@
           <button type="button" class="chip" data-source="job">JOBS</button>
           <button type="button" class="chip" data-source="apprenticeship">APPRENTICESHIPS</button>
         </div>
+        <!-- A text box, not a list of towns. The committed list was the
+             user's home catchment, which is a home address by triangulation in
+             a public repo and the wrong default for someone who will relocate.
+             Typing a place still filters; leaving it blank shows everywhere. -->
         <label for="loc-filter">LOCATION</label>
-        <select id="loc-filter">
-          <option value="">All</option>
-          <option>Erith</option><option>Bexleyheath</option><option>Bluewater</option>
-          <option>Dartford</option><option>Charlton</option><option>Woolwich</option>
-          <option>Belvedere</option><option>Plumstead</option>
-        </select>
+        <input type="text" id="loc-filter" placeholder="Any location"
+               autocomplete="off">
         <label class="toggle">
           <input type="checkbox" id="new-only">
           <span class="track"></span>
@@ -400,11 +400,8 @@
         </div>
         <div class="log-field">
           <label for="f-location">Location</label>
-          <select id="f-location">
-            <option>Erith</option><option>Bexleyheath</option><option>Bluewater</option>
-            <option>Dartford</option><option>Charlton</option><option>Woolwich</option>
-            <option>Belvedere</option><option>Plumstead</option><option>Other</option>
-          </select>
+          <input type="text" id="f-location" placeholder="Where the role is"
+                 autocomplete="off">
         </div>
         <div class="log-field">
           <label for="f-method">Method</label>
@@ -902,7 +899,14 @@
     });
   })();
 
-  document.getElementById("loc-filter").addEventListener("change", loadJobs);
+  // A text box needs "input" with a debounce, not "change" — on a select the
+  // latter fired on every pick, on a text box it only fires on blur, which
+  // reads as a filter that does nothing.
+  let locTimer = null;
+  document.getElementById("loc-filter").addEventListener("input", () => {
+    clearTimeout(locTimer);
+    locTimer = setTimeout(loadJobs, 300);
+  });
   document.getElementById("new-only").addEventListener("change", loadJobs);
 
   /* ── Export pipeline as CSV (same-origin GET carries the session cookie) ── */

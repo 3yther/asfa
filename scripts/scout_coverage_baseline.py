@@ -82,10 +82,10 @@ def judge(vacancy):
 # ── Measurement ──────────────────────────────────────────────────────────────
 
 # The route sweep's label, used to attribute vacancies to it in `found_by`.
+# There is one sweep and it is nationwide: the near-home pass that used to run
+# beside it is gone, because proximity to where the user lives today must not
+# rank an apprenticeship they would relocate for.
 ROUTE_TERM = "[route sweep] digital, Level 4+"
-# The same sweep narrowed to the configured radius from home. Its only job is to
-# TAG listings as near_home — nothing is filtered on it.
-NEAR_HOME_TERM = "[route sweep] near home"
 
 
 def _searches(use_employers: bool, route_sweep: bool = True):
@@ -98,8 +98,6 @@ def _searches(use_employers: bool, route_sweep: bool = True):
     out = []
     if route_sweep:
         out.append(("route", ROUTE_TERM))
-        if scout_config.home_postcode():
-            out.append(("near_home", NEAR_HOME_TERM))
     # The AUDIT list: narrow + broad. The production scan searches the narrow
     # terms only; the audit keeps asking whether the broad ones would find
     # anything the route sweep misses, without production paying for the answer.
@@ -140,9 +138,7 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True,
             print(f"  [{i}/{len(searches)}] {kind}: {term} ... ", end="", flush=True)
         stats = {}
         try:
-            if kind == "near_home":
-                raws = scraper.by_route_near_home(min_level=1, stats=stats)
-            elif kind == "route":
+            if kind == "route":
                 # No search term: the route filter selects the listings. Also no
                 # local level floor — gov.uk has already filtered via levelIds,
                 # so re-filtering here would only discard listings whose level
@@ -160,10 +156,6 @@ def measure(use_employers=False, min_level=1, max_pages=None, verbose=True,
         fresh = sum(1 for r in raws if r.reference not in by_ref)
         for r in raws:
             by_ref.setdefault(r.reference, r)
-            if kind == "near_home":
-                # A tag on whatever we already hold, never a filter: a role
-                # outside the radius stays in the results untouched.
-                by_ref[r.reference].near_home = True
             # Which terms found this vacancy, so "only the widened terms find
             # it" can be answered without a second run.
             found_by.setdefault(r.reference, []).append(term)
@@ -362,7 +354,7 @@ def _summarise(by_ref, per_search, errors, searches, use_employers,
           "employer": v.employer_name_raw,
           "watchlist": verdicts[v.reference].watchlist,
           "standard": verdicts[v.reference].detail,
-          "level": v.level, "near_home": bool(getattr(v, "near_home", False)),
+          "level": v.level,
           "url": v.url}
          for v in vacs if verdicts[v.reference].review),
         key=lambda d: (d["watchlist"] or "", d["title"]))
@@ -482,7 +474,6 @@ def _summarise(by_ref, per_search, errors, searches, use_employers,
                 if v.source == SOURCE_FINDAPPRENTICESHIP),
             "multi_location_listings": sum(
                 1 for v in vacs if v.location_count > 1),
-            "near_home": sum(1 for v in vacs if getattr(v, "near_home", False)),
             "needs_review": sum(
                 1 for v in vacs if verdicts[v.reference].review),
         },
@@ -515,7 +506,6 @@ def _summarise(by_ref, per_search, errors, searches, use_employers,
                 "digital_route": digital_route(v),
                 "kept_by_filter": verdicts[v.reference].keep,
                 "filter_reason": verdicts[v.reference].reason,
-                "near_home": bool(getattr(v, "near_home", False)),
                 "needs_review": verdicts[v.reference].review,
                 "found_by": sorted(set(found_by.get(v.reference, []))),
                 "source": v.source,
@@ -587,8 +577,6 @@ def report(snap):
     print(f"    off-site listings        : {t.get('external_listings', 0)}")
     print(f"  multi-location roles       : {t.get('multi_location_listings', 0)}"
           f"   (merged from several cards)")
-    print(f"  near home                  : {t.get('near_home', 0)}"
-          f"   (tagged only — nothing is filtered on distance)")
 
     if snap.get("by_source"):
         print()
@@ -719,10 +707,9 @@ def report(snap):
         print("  (kept on purpose: a watched employer posting against an odd")
         print("   standard is the case most worth a human glance)")
         for d in review:
-            near = "  [near home]" if d.get("near_home") else ""
             lvl = d["level"] if d["level"] is not None else "?"
-            print(f"    L{str(lvl):<3} {d['employer'][:26]:<28}{d['title'][:34]:<36}"
-                  f"{near}")
+            print(f"    L{str(lvl):<3} {d['employer'][:26]:<28}"
+                  f"{d['title'][:34]:<36}")
             print(f"         standard: {d['standard'][:56]}"
                   f"   (watchlist: {d['watchlist']})")
 
@@ -818,14 +805,13 @@ def compare(a_path, b_path):
         print()
 
     keys = ("unique_results", "level_4_plus", "level_6_plus", "level_unknown",
-            "external_listings", "multi_location_listings", "near_home",
+            "external_listings", "multi_location_listings",
             "needs_review", "digital_route",
             "digital_route_and_level_4_plus", "route_unclassified")
     label = {"unique_results": "unique listings", "level_4_plus": "Level 4+",
              "level_6_plus": "Level 6+", "level_unknown": "level unknown",
              "external_listings": "off-site listings",
              "multi_location_listings": "multi-location roles",
-             "near_home": "near home",
              "needs_review": "needs review",
              "digital_route": "digital route",
              "digital_route_and_level_4_plus": "digital route AND L4+",

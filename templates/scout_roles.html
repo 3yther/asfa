@@ -38,8 +38,8 @@
 {# ══ FIND ROLES ════════════════════════════════════════════════════════ #}
 <section class="sr-screen" id="screen-find" role="tabpanel" aria-labelledby="tab-find">
   <h1 class="sr-h1">Find roles</h1>
-  <p class="sr-sub">Digital apprenticeships Scout has kept. Filters narrow what you
-     see and say so — nothing is hidden.</p>
+  <p class="sr-sub">Digital apprenticeships Scout has kept, nationwide. Filters
+     narrow what you see and say so — nothing is hidden.</p>
 
   <form class="sr-searchbar" id="sr-search-form" role="search">
     <div class="sr-search-pill">
@@ -54,7 +54,6 @@
       <option value="recent">Newest first</option>
       <option value="closing">Closing soonest</option>
       <option value="level">Highest level</option>
-      <option value="near">Nearest home</option>
       <option value="fit">Watchlist first</option>
     </select>
     <button type="button" class="sr-btn" id="sr-filters-btn"
@@ -74,9 +73,15 @@
         <span>Provider</span>
         <select class="sr-select" id="sr-f-source"><option value="">Any provider</option></select>
       </label>
+      <label class="sr-field">
+        <span>Location</span>
+        <input class="sr-input" type="text" id="sr-f-location"
+               list="sr-f-location-list" placeholder="Any location"
+               autocomplete="off">
+        <datalist id="sr-f-location-list"></datalist>
+      </label>
       <fieldset style="border:0;padding:0;margin:0;">
         <legend class="sr-sr-only">Toggles</legend>
-        <label class="sr-check"><input type="checkbox" id="sr-f-near"> Near home only</label>
         <label class="sr-check"><input type="checkbox" id="sr-f-watch"> Watchlist employers only</label>
       </fieldset>
       <fieldset style="border:0;padding:0;margin:0;">

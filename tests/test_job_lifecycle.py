@@ -32,7 +32,7 @@ def _ago(days=0, minutes=0):
     return (db.now_local() - timedelta(days=days, minutes=minutes)).strftime(STAMP)
 
 
-def _seed(title, found_date, company="TK Maxx", location="Erith", url=None):
+def _seed(title, found_date, company="TK Maxx", location="Riverport", url=None):
     """Insert one scout job. `url` is the dedup key, so it defaults to unique."""
     db.add_scout_job(
         title=title, company=company, location=location, salary="",
@@ -234,11 +234,11 @@ def test_created_at_is_exposed_for_the_countdown(client):
 
 
 def test_active_view_keeps_the_existing_filters(client):
-    _seed("Erith Job", _ago(days=1), location="Erith")
-    _seed("Dartford Job", _ago(days=1), location="Dartford")
+    _seed("Riverport Job", _ago(days=1), location="Riverport")
+    _seed("Keyford Job", _ago(days=1), location="Keyford")
 
-    rows = client.get("/api/scout/jobs/active?location=erith").get_json()
-    assert [r["title"] for r in rows] == ["Erith Job"]
+    rows = client.get("/api/scout/jobs/active?location=riverport").get_json()
+    assert [r["title"] for r in rows] == ["Riverport Job"]
 
     rows = client.get("/api/scout/jobs/active?source=apprenticeship").get_json()
     assert rows == []

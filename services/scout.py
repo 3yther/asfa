@@ -42,18 +42,39 @@ SERPAPI_BASE = "https://serpapi.com/search"
 # single alert path shared with the apprenticeship scanner (SMTP host, port and
 # recipient live there).
 
-# South-East London / North Kent catchment.
-LOCATIONS = [
-    "Erith", "Bexleyheath", "Bluewater", "Dartford",
-    "Charlton", "Woolwich", "Belvedere", "Plumstead",
-]
+# Where the part-time job search looks. EMPTY BY DEFAULT and read from the
+# environment: the committed list named the towns around the user's home, which
+# is a home address by triangulation in a public repo. It is also the wrong
+# default now — nothing in Scout should assume the user stays where they are.
+#
+# SCOUT_JOB_LOCATIONS is a comma-separated list ("Leeds, York"). With it unset
+# BOTH SOURCES SKIP, and say so once in the log. They do not fall back to a
+# nationwide search: a part-time retail shift is only useful within travelling
+# distance, so listings from the other end of the country are noise, not
+# coverage. The apprenticeship search is the opposite and is always nationwide.
+def locations() -> list:
+    raw = os.environ.get("SCOUT_JOB_LOCATIONS", "")
+    return [part.strip() for part in raw.split(",") if part.strip()]
 
-# Reed runs one request per (keyword x location).
+
+# The region SerpAPI searches from, when one is set. Same reasoning: a default
+# of "London, England" is a geographic thumb on the scale.
+def search_region() -> str:
+    return (os.environ.get("SCOUT_JOB_REGION") or "").strip()
+
+
+# Message for the skip, in one place so the two sources cannot drift apart.
+_NO_LOCATIONS = ("scout: SCOUT_JOB_LOCATIONS not set — skipping %s source "
+                 "(part-time work is local; a nationwide sweep would be noise)")
+
+# Reed runs one request per (keyword x location), or one per keyword when no
+# location is configured.
 REED_KEYWORDS = [
     "part time retail", "sales assistant", "customer service", "team member",
 ]
 
-# Google Jobs (SerpAPI) runs one combined query per location.
+# Google Jobs (SerpAPI) runs one combined query per location, or one overall
+# when no location is configured.
 JOB_TYPES = ["retail", "sales assistant", "customer service", "team member"]
 
 # Roles are kept if the employer matches one of these (case-insensitive) OR the
@@ -113,10 +134,18 @@ def _fetch_reed(found_date: str, seen_urls: set, collected: list) -> int:
         logger.info("scout: REED_API_KEY not set — skipping Reed source")
         return 0
 
+    where = locations()
+    if not where:
+        # Unset means SKIP, not "search everywhere". A part-time retail shift is
+        # only useful within travelling distance, so a nationwide sweep would
+        # fill the dashboard with jobs that cannot be taken.
+        logger.info(_NO_LOCATIONS, "Reed")
+        return 0
+
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
     inserted = 0
 
-    for location in LOCATIONS:
+    for location in where:
         for keyword in REED_KEYWORDS:
             params = {
                 "keywords": keyword,
@@ -178,17 +207,24 @@ def _fetch_serpapi(found_date: str, seen_urls: set, collected: list) -> int:
                        "skipping SerpAPI source")
         return 0
 
+    where = locations()
+    if not where:
+        logger.info(_NO_LOCATIONS, "Google Jobs")
+        return 0
+
     job_type = " ".join(JOB_TYPES)
     inserted = 0
 
-    for location in LOCATIONS:
+    for location in where:
         params = {
             "engine": "google_jobs",
             "q": f"part time {job_type} {location}",
-            "location": "London, England",
             "chips": "date_posted:today",
             "api_key": api_key,
         }
+        region = search_region()
+        if region:
+            params["location"] = region
         try:
             results = GoogleSearch(params).get_dict()
         except Exception as e:
@@ -271,7 +307,7 @@ def _send_email(jobs: list) -> bool:
 def scan_jobs_reed(keywords, location="", limit=20) -> list:
     """Param-driven Reed search used by the skill executor (the `scan_jobs`
     skill). Unlike scan(), this honors the caller's keywords/location instead of
-    the fixed REED_KEYWORDS/LOCATIONS lists, does not apply the
+    the configured keyword/location lists, does not apply the
     target-company/recency filter, and returns the matched jobs as a list of
     dicts (newest results first, capped at `limit`). Newly-seen jobs are also
     persisted via add_scout_job (deduped by url) so the dashboard sees them.
@@ -288,13 +324,16 @@ def scan_jobs_reed(keywords, location="", limit=20) -> list:
     if isinstance(keywords, str):
         keywords = [keywords]
     keywords = [k for k in (keywords or []) if k] or ["retail"]
-    locations = [location] if location else LOCATIONS
+    search_in = [location] if location else locations()
+    if not search_in:
+        logger.info(_NO_LOCATIONS, "Reed")
+        return []
 
     found_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     collected: list = []
     seen_urls: set = set()
 
-    for loc in locations:
+    for loc in search_in:
         for keyword in keywords:
             if len(collected) >= limit:
                 return collected[:limit]

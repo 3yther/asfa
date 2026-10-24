@@ -52,7 +52,7 @@ def clean_scout():
 def filters_file(tmp_path, monkeypatch):
     """A throwaway scout_filters.json. Never the repo's own."""
     path = tmp_path / "scout_filters.json"
-    path.write_text(json.dumps({"home_postcode": ["ZZ99"]}), encoding="utf-8")
+    path.write_text(json.dumps({"max_pages": 7}), encoding="utf-8")
     monkeypatch.setenv("SCOUT_FILTERS_PATH", str(path))
     scout_config.settings(refresh=True)
     yield path
@@ -63,7 +63,7 @@ def filters_file(tmp_path, monkeypatch):
 def _listing(ref="VAC5000001", title="Cyber Apprentice",
              employer="Northwind Defence", url=None, level=6,
              course="Cyber security technical professional (level 6)",
-             status="open", found="2026-10-01"):
+             status="open", found="2026-10-01", location="Reading"):
     url = url or ("https://www.findapprenticeship.service.gov.uk"
                   "/apprenticeship/" + ref)
     cols = ("title, company, location, url, source, found_date, listing_type, "
@@ -72,7 +72,7 @@ def _listing(ref="VAC5000001", title="Cyber Apprentice",
     with db.get_db() as conn:
         conn.cursor().execute(
             f"INSERT INTO scout_jobs ({cols}) VALUES ({','.join([ph] * 12)})",
-            (title, employer, "Reading", url, "gov_uk", found,
+            (title, employer, location, url, "gov_uk", found,
              "apprenticeship", ref, employer, level, course, status))
     return ref, url
 
@@ -212,6 +212,62 @@ def test_a_filter_narrows_and_the_counts_say_by_how_much(filters_file):
     assert view["counts"]["shown"] == 1
 
 
+# ── Location: shown and searchable, never a proximity ranking ──────────────
+#
+# The near-home tag, filter and sort are gone. What replaces them is a plain
+# name match, because the question is "where might I move TO", not "what is
+# near where I am".
+
+def test_a_location_filter_matches_by_name(filters_file):
+    _listing(ref="VAC5000020", location="Manchester")
+    _listing(ref="VAC5000021", location="Bristol")
+    view = scout_roles.roles_view({"location": "manchester"})
+    assert [c["ref"] for c in view["groups"]["level_4_plus"]] == ["VAC5000020"]
+
+
+def test_a_location_filter_is_a_substring_not_a_radius(filters_file):
+    """"Greater Manchester" has to match a search for "Manchester" — there is
+    no geocoding here and there should not be."""
+    _listing(ref="VAC5000022", location="Greater Manchester")
+    view = scout_roles.roles_view({"location": "Manchester"})
+    assert len(view["groups"]["level_4_plus"]) == 1
+
+
+def test_a_location_that_matches_nothing_shows_nothing_and_says_so(filters_file):
+    _listing(ref="VAC5000023", location="Bristol")
+    view = scout_roles.roles_view({"location": "Aberdeen"})
+    assert view["counts"]["shown"] == 0
+    assert view["counts"]["total"] == 1, "the listing is filtered, not deleted"
+
+
+def test_the_view_offers_the_locations_it_actually_holds(filters_file):
+    _listing(ref="VAC5000024", location="Leeds")
+    _listing(ref="VAC5000025", location="Cardiff")
+    assert scout_roles.roles_view()["locations"] == ["Cardiff", "Leeds"]
+
+
+def test_a_card_still_shows_where_the_role_is(filters_file):
+    _listing(ref="VAC5000026", location="Edinburgh")
+    card = scout_roles.roles_view()["groups"]["level_4_plus"][0]
+    assert card["locations"] == ["Edinburgh"]
+
+
+def test_there_is_no_proximity_sort_or_filter(filters_file):
+    assert "near" not in scout_roles.SORTS
+    _listing(ref="VAC5000027", location="Belfast")
+    card = scout_roles.roles_view()["groups"]["level_4_plus"][0]
+    assert "near_home" not in card
+    view = scout_roles.roles_view()
+    assert "near_home" not in view["counts"]
+    assert "distances" not in view and "home_postcode" not in view
+
+
+def test_an_unknown_sort_falls_back_rather_than_raising(filters_file):
+    """A bookmarked ?sort=near from before the removal must not 500."""
+    _listing(ref="VAC5000028")
+    assert scout_roles.roles_view({}, sort="near")["sort"] == "recent"
+
+
 def test_the_view_carries_the_stage_list_and_the_auto_stage(filters_file):
     view = scout_roles.roles_view()
     assert [s["key"] for s in view["stages"]] == list(db.SCOUT_STAGES)
@@ -308,13 +364,13 @@ def test_the_database_layer_is_a_delta_not_a_replacement(filters_file):
     scout_config.allow_forever("standard", "supply chain warehouse operative")
     filters_file.write_text(json.dumps(
         {"+digital_standards": ["something else entirely"],
-         "home_postcode": ["AB12"]}), encoding="utf-8")
+         "max_pages": 3}), encoding="utf-8")
     scout_config.settings(refresh=True)
 
     effective = scout_config.settings()["digital_standards"]
     assert "supply chain warehouse operative" in effective, "the stored correction survives"
     assert "something else entirely" in effective, "and so does the file edit"
-    assert scout_config.home_postcode() == "AB12"
+    assert scout_config.max_pages() == 3
 
 
 def test_a_correction_survives_a_restart(filters_file):
@@ -375,7 +431,7 @@ def test_the_cache_notices_a_correction_without_waiting_for_the_ttl(filters_file
 
 def test_allow_forever_keeps_the_settings_it_did_not_touch(filters_file):
     scout_config.allow_forever("standard", "supply chain warehouse operative")
-    assert scout_config.home_postcode() == "ZZ99"
+    assert scout_config.max_pages() == 7
 
 
 # ── The detail fetch, one listing at a time ─────────────────────────────────

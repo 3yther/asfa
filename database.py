@@ -3542,9 +3542,13 @@ def init_apprenticeships():
         _add_column(cur, "scout_jobs", "status", "TEXT DEFAULT 'open'")
         _add_column(cur, "scout_jobs", "last_seen", dt_t)
         _add_column(cur, "scout_jobs", "alerted", "INTEGER DEFAULT 0")
-        # Near-home tag from the radius-limited route pass. Nullable and
-        # defaulted, so every existing row reads back as "not known to be near".
-        _add_column(cur, "scout_jobs", "near_home", "INTEGER DEFAULT 0")
+        # NOTE: there is no `near_home` column here any more. Scout used to run
+        # a radius-limited sweep from a home postcode and tag what it found;
+        # that is gone, because the apprenticeship is worth relocating for and
+        # proximity to where the user lives today should not rank a listing.
+        # A database created before this still HAS the column — it is simply
+        # never read or written, and dropping it would mean a table rebuild on
+        # SQLite for no behavioural gain.
         # Kept despite a non-digital standard because the employer is watched.
         _add_column(cur, "scout_jobs", "needs_review", "INTEGER DEFAULT 0")
         _add_column(cur, "scout_jobs", "review_standard", "TEXT")

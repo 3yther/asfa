@@ -145,7 +145,6 @@ class ScoutJob(db.Model):
     alerted = db.Column(db.Integer, default=0)
     # 1 when the near-home route pass also returned this vacancy. A TAG, not a
     # filter: nothing is dropped for being outside the radius.
-    near_home = db.Column(db.Integer, default=0)
     # 1 when the relevance filter would have dropped this on its standard but
     # the employer is on the watchlist, so it was kept for a human to judge.
     needs_review = db.Column(db.Integer, default=0)

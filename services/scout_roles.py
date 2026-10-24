@@ -9,8 +9,13 @@ renders and does not decide. Three things it is responsible for:
   * BADGES. new / starred / multi-source / level-unknown, computed here so the
     rules live next to each other instead of in template conditionals.
   * NEVER HIDING ANYTHING. A filter narrows what is shown and says so; nothing
-    is dropped silently. `near_home` is a tag, not a filter, and the REVIEW
-    group is collapsed and sorted last but always present.
+    is dropped silently, and the REVIEW group is collapsed and sorted last but
+    always present.
+  * NO PROXIMITY BIAS. There is no near-home tag, filter or sort: the
+    apprenticeship is worth relocating for, so a listing being close to where
+    the user lives today is not a reason to rank it above one that is not.
+    Location is shown, and searchable by name, which is what you want when you
+    are choosing where to move to.
 
 Alerts go through services.scheduler._notify, which already writes the in-app
 bell and respects the Telegram toggle. There is deliberately no second sender
@@ -31,7 +36,10 @@ logger = logging.getLogger("asfa.scout_roles")
 TILE_TOKENS = ("--series-1", "--series-2", "--series-3", "--series-4",
                "--gold", "--primary")
 
-SORTS = ("recent", "closing", "level", "near", "fit")
+# "near" is deliberately absent. Sorting by proximity to where the user lives
+# today works against relocating for the right apprenticeship, which is the
+# whole point of the search.
+SORTS = ("recent", "closing", "level", "fit")
 
 
 def _tile_token(name: str) -> str:
@@ -119,7 +127,6 @@ def to_card(row: dict, last_visited: str = "", detail: dict = None,
         "source": row.get("source") or "",
         "url": row.get("url") or "",
         "status": row.get("status") or "open",
-        "near_home": bool(row.get("near_home")),
         "starred": starred,
         "needs_review": bool(row.get("needs_review")),
         "review_standard": row.get("review_standard") or "",
@@ -145,8 +152,6 @@ def _sort_key(card, sort):
         return (days is None, days if days is not None else 0)
     if sort == "level":
         return (card["level"] is None, -(card["level"] or 0))
-    if sort == "near":
-        return (not card["near_home"], card["employer"].casefold())
     if sort == "fit":
         return (0 if card["starred"] else 1, card["employer"].casefold())
     return (card["found_date"] < "", card["found_date"] * -1
@@ -169,14 +174,19 @@ def _matches(card, f) -> bool:
             pass
     if f.get("source") and card["source"] != f["source"]:
         return False
-    if f.get("near_home") and not card["near_home"]:
-        return False
     if f.get("watchlist_only") and not card["starred"]:
         return False
     if f.get("hide_closed") and card["status"] != "open":
         return False
     if f.get("new_only") and not card["is_new"]:
         return False
+    if f.get("location"):
+        # A plain name match, not a radius. You search for where you might MOVE
+        # TO, so "Manchester" has to work without the app knowing where you are.
+        needle = f["location"].strip().casefold()
+        places = " ".join(card["locations"]).casefold()
+        if needle and needle not in places:
+            return False
     if f.get("q"):
         needle = f["q"].strip().casefold()
         haystack = " ".join([card["title"], card["employer"], card["course"]]
@@ -235,7 +245,6 @@ def roles_view(filters: dict = None, sort: str = "recent",
             "level_unknown": len(level_unknown),
             "review": len(review),
             "new_since_last_visit": sum(1 for c in cards if c["is_new"]),
-            "near_home": sum(1 for c in cards if c["near_home"]),
             "saved": sum(1 for c in cards if c["saved"]),
         },
         "last_visited": last_visited,
@@ -252,8 +261,10 @@ def roles_view(filters: dict = None, sort: str = "recent",
         "sources": sorted({c["source"] for c in cards if c["source"]}),
         "levels": sorted({c["level"] for c in cards
                           if c["level"] is not None}),
-        "distances": list(scout_config.DISTANCE_VALUES),
-        "home_postcode": scout_config.home_postcode(),
+        # Every place any kept listing is in, so the location filter can offer
+        # real options instead of asking the user to guess at spellings.
+        "locations": sorted({place for c in cards for place in c["locations"]
+                             if place}),
     }
 
 

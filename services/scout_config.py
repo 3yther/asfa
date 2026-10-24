@@ -296,22 +296,21 @@ DIGITAL_ROUTE_ID = 7
 # degree apprenticeships.
 DEFAULT_LEVEL_IDS = (4, 5, 6, 7)
 
-# The only values gov.uk's distance filter accepts. Anything else is rejected
-# rather than silently coerced — a bad radius would quietly change what a sweep
-# covers, and a wrong "nothing found" is worse than an error.
-DISTANCE_VALUES = (2, 5, 10, 15, 20, 30, 40, "all")
-DEFAULT_DISTANCE = 20
+# There is deliberately NO distance or postcode setting here. Scout used to run
+# a second sweep centred on a home postcode and tag what it found as near_home.
+# That was removed: the apprenticeship is worth relocating for, so a listing
+# being close to where the user lives today is not a reason to rank it higher,
+# and a radius centred on home is a thumb on the scale towards staying put.
+#
+# The nationwide sweep is the only sweep. Location is shown on a card and can be
+# searched for by name (see services/scout_roles.py), which is what you want
+# when you are deciding where to move TO rather than filtering for near.
 
 _SCALARS = {
     "max_pages": DEFAULT_MAX_PAGES,
 }
 
 _KEYS = {
-    # Single-value settings carried as one-element lists so they ride the same
-    # JSON loader as the real lists. Empty by default: see distance_param().
-    "distance_param": (),
-    "postcode_param": (),
-    "home_postcode": (),
     "search_keywords": DEFAULT_SEARCH_KEYWORDS,
     "audit_keywords": AUDIT_SEARCH_KEYWORDS,
     "digital_standards": DEFAULT_DIGITAL_STANDARDS,
@@ -350,11 +349,6 @@ def _load_overrides(path: str) -> dict:
         if f"+{key}" in raw and isinstance(raw[f"+{key}"], list):
             extra = tuple(str(v) for v in raw[f"+{key}"] if str(v).strip())
             out[key] = tuple(out.get(key, default)) + extra
-    if "distance" in raw:
-        try:
-            out["distance"] = validate_distance(raw["distance"])
-        except ValueError as e:
-            logger.warning("scout_config: %s — ignoring", e)
     for key in _SCALARS:
         value = raw.get(key)
         if isinstance(value, bool):
@@ -467,12 +461,11 @@ def settings(refresh: bool = False) -> dict:
         if refresh or not _CACHE or _CACHE_STAMP != stamp:
             merged = dict(_KEYS)
             merged.update(_SCALARS)
-            merged["distance"] = DEFAULT_DISTANCE
             merged.update(_load_overrides(path))
             merged = _apply_db_overrides(merged)
             # Normalise the lists once so the matchers don't re-lower on every
             # listing; scalars are left as they are.
-            _CACHE = {k: (v if k in _SCALARS or k == "distance" else tuple(v))
+            _CACHE = {k: (v if k in _SCALARS else tuple(v))
                       for k, v in merged.items()}
             _CACHE_STAMP = stamp
         return _CACHE
@@ -491,61 +484,6 @@ def route_sweep_params() -> dict:
         "routeIds": DIGITAL_ROUTE_ID,
         "levelIds": list(DEFAULT_LEVEL_IDS),
     }
-
-
-def search_distance():
-    """The near-home radius, validated against gov.uk's own allowed values.
-
-    SCOUT_DISTANCE wins, then the JSON config. An unaccepted value raises
-    rather than falling back: distance changes which listings a sweep can see,
-    so quietly substituting a different radius would make the numbers a lie.
-    """
-    raw = os.environ.get("SCOUT_DISTANCE")
-    if raw is None:
-        raw = settings().get("distance", DEFAULT_DISTANCE)
-    return validate_distance(raw)
-
-
-def validate_distance(value):
-    """Return `value` as an accepted distance, or raise ValueError."""
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text == "all":
-            return "all"
-        try:
-            value = int(text)
-        except ValueError:
-            raise ValueError(
-                f"distance must be one of {list(DISTANCE_VALUES)}, got {value!r}")
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(
-            f"distance must be one of {list(DISTANCE_VALUES)}, got {value!r}")
-    if value not in DISTANCE_VALUES:
-        raise ValueError(
-            f"distance must be one of {list(DISTANCE_VALUES)}, got {value!r}")
-    return value
-
-
-def distance_param():
-    """gov.uk's distance field name, once confirmed. None until then.
-
-    No default: guessing a field name would send a query that looks local and
-    is silently nationwide, which is a worse failure than not filtering at all.
-    """
-    return (os.environ.get("SCOUT_DISTANCE_PARAM")
-            or (settings().get("distance_param") or [None])[0]) or None
-
-
-def postcode_param():
-    """gov.uk's postcode/location field name, once confirmed. None until then."""
-    return (os.environ.get("SCOUT_POSTCODE_PARAM")
-            or (settings().get("postcode_param") or [None])[0]) or None
-
-
-def home_postcode() -> str:
-    """The postcode a near-home sweep centres on. From config, never hardcoded."""
-    return (os.environ.get("SCOUT_HOME_POSTCODE")
-            or (settings().get("home_postcode") or [""])[0] or "").strip()
 
 
 def max_pages() -> int:

@@ -1157,60 +1157,41 @@ def test_the_sweep_can_be_skipped():
 
 # ── Near-home tagging: a TAG, never a filter ────────────────────────────────
 
-def _nv(ref, title, emp, course="Software developer (level 4)", level=4,
-        near=False):
-    v = RawVacancy(reference=ref, title=title, employer_name_raw=emp,
-                   training_course=course, level=level, location="London",
-                   url=f"https://example.test/{ref}")
-    v.near_home = near
-    return v
+def _nv(ref, title, emp, course="Software developer (level 4)", level=4):
+    return RawVacancy(reference=ref, title=title, employer_name_raw=emp,
+                      training_course=course, level=level, location="London",
+                      url=f"https://example.test/{ref}")
 
 
-def test_near_home_listings_are_counted():
+def test_the_report_says_nothing_about_proximity(capsys):
+    """The near-home pass is gone, so no count, tag or label for it survives
+    in the measurement tool either."""
     vacs = {"a": _nv("A", "Cyber Apprentice", "BT",
-                     "Cyber security technologist (level 4)", near=True),
+                     "Cyber security technologist (level 4)"),
             "b": _nv("B", "Cloud Apprentice", "AWS",
                      "Cloud engineer (level 4)")}
-    t = baseline._summarise(vacs, [], [], ["kw"], False)["totals"]
-    assert t["near_home"] == 1
+    summary = baseline._summarise(vacs, [], [], ["kw"], False)
+    assert not [k for k in summary.get("totals", {}) if "near" in k.lower()]
+
+    baseline.report(summary)
+    out = capsys.readouterr().out.lower()
+    assert "near home" not in out
+    assert "near_home" not in out
 
 
-def test_a_far_listing_is_kept_not_filtered():
-    """A role outside the radius is still a role — a degree apprenticeship is
-    worth commuting or relocating for, so distance only ever tags."""
-    vacs = {"far": _nv("FAR", "Cyber Apprentice", "BT",
-                       "Cyber security technologist (level 4)", near=False)}
-    snap = baseline._summarise(vacs, [], [], ["kw"], False)
-
-    assert snap["totals"]["unique_results"] == 1
-    assert snap["totals"]["near_home"] == 0
-    assert snap["listings"][0]["kept_by_filter"] is True
-    assert snap["listings"][0]["near_home"] is False
+def test_the_sweep_is_the_only_route_search():
+    """There used to be a second, radius-limited route search beside it."""
+    kinds = [kind for kind, _ in baseline._searches(False)]
+    assert kinds.count("route") == 1
+    assert "near_home" not in kinds
 
 
-def test_listings_carry_the_near_home_tag():
+def test_a_snapshot_carries_no_near_home_field():
     vacs = {"a": _nv("A", "Cyber Apprentice", "BT",
-                     "Cyber security technologist (level 4)", near=True)}
-    assert baseline._summarise(vacs, [], [], ["kw"], False)[
-        "listings"][0]["near_home"] is True
-
-
-def test_the_near_home_pass_is_a_separate_search():
-    searches = baseline._searches(use_employers=False)
-    kinds = [k for k, _ in searches]
-    assert "route" in kinds
-    assert "near_home" in kinds
-    assert kinds.index("route") < kinds.index("near_home"), \
-        "the nationwide sweep decides what we know; near-home only tags it"
-
-
-def test_the_near_home_count_is_reported(capsys):
-    vacs = {"a": _nv("A", "Cyber Apprentice", "BT",
-                     "Cyber security technologist (level 4)", near=True)}
-    baseline.report(baseline._summarise(vacs, [], [], ["kw"], False))
-    out = capsys.readouterr().out
-    assert "near home" in out
-    assert "nothing is filtered on distance" in out
+                     "Cyber security technologist (level 4)")}
+    summary = baseline._summarise(vacs, [], [], ["kw"], False)
+    blob = json.dumps(summary).lower()
+    assert "near_home" not in blob
 
 
 # ── The review group ────────────────────────────────────────────────────────
@@ -1236,7 +1217,7 @@ def test_watchlist_listings_are_surfaced_for_review_not_excluded():
 
 def test_the_review_group_is_printed_with_the_standard(capsys):
     vacs = {"a": _nv("A", "Engineering Apprentice", "Thales UK",
-                     "Engineering operative (level 4)", near=True)}
+                     "Engineering operative (level 4)")}
     baseline.report(baseline._summarise(vacs, [], [], ["kw"], False))
     out = capsys.readouterr().out
 
@@ -1244,7 +1225,6 @@ def test_the_review_group_is_printed_with_the_standard(capsys):
     assert "Thales UK" in out
     assert "engineering operative" in out
     assert "watchlist: thales" in out
-    assert "[near home]" in out
 
 
 def test_no_review_group_when_nothing_needs_one(capsys):

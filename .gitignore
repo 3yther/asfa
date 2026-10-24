@@ -44,3 +44,8 @@ static/cv/
 *.xlsm
 *.ods
 .scout-shots/
+
+# Interview prep bank: placement history and candid self-assessment. Kept
+# locally, never committed — this repository is public. scripts/seed_interview_qa.py
+# skips cleanly and exits 0 when it is absent.
+interview_qa_seed.json
