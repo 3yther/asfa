@@ -48,8 +48,10 @@ SERPAPI_BASE = "https://serpapi.com/search"
 # default now — nothing in Scout should assume the user stays where they are.
 #
 # SCOUT_JOB_LOCATIONS is a comma-separated list ("Leeds, York"). With it unset
-# the searches run WITHOUT a location, which Reed and Google Jobs both accept:
-# a nationwide keyword search rather than no search at all.
+# BOTH SOURCES SKIP, and say so once in the log. They do not fall back to a
+# nationwide search: a part-time retail shift is only useful within travelling
+# distance, so listings from the other end of the country are noise, not
+# coverage. The apprenticeship search is the opposite and is always nationwide.
 def locations() -> list:
     raw = os.environ.get("SCOUT_JOB_LOCATIONS", "")
     return [part.strip() for part in raw.split(",") if part.strip()]
@@ -59,6 +61,11 @@ def locations() -> list:
 # of "London, England" is a geographic thumb on the scale.
 def search_region() -> str:
     return (os.environ.get("SCOUT_JOB_REGION") or "").strip()
+
+
+# Message for the skip, in one place so the two sources cannot drift apart.
+_NO_LOCATIONS = ("scout: SCOUT_JOB_LOCATIONS not set — skipping %s source "
+                 "(part-time work is local; a nationwide sweep would be noise)")
 
 # Reed runs one request per (keyword x location), or one per keyword when no
 # location is configured.
@@ -127,22 +134,27 @@ def _fetch_reed(found_date: str, seen_urls: set, collected: list) -> int:
         logger.info("scout: REED_API_KEY not set — skipping Reed source")
         return 0
 
+    where = locations()
+    if not where:
+        # Unset means SKIP, not "search everywhere". A part-time retail shift is
+        # only useful within travelling distance, so a nationwide sweep would
+        # fill the dashboard with jobs that cannot be taken.
+        logger.info(_NO_LOCATIONS, "Reed")
+        return 0
+
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
     inserted = 0
 
-    # `or [""]` so an unset SCOUT_JOB_LOCATIONS runs one location-free pass per
-    # keyword rather than skipping the source entirely.
-    for location in (locations() or [""]):
+    for location in where:
         for keyword in REED_KEYWORDS:
             params = {
                 "keywords": keyword,
+                "locationName": location,
+                "distancefromLocation": 3,
                 "fullTime": "false",
                 "partTime": "true",
                 "minimumDate": yesterday,
             }
-            if location:
-                params["locationName"] = location
-                params["distancefromLocation"] = 3
             try:
                 resp = requests.get(
                     REED_BASE, params=params, auth=(api_key, ""),
@@ -195,13 +207,18 @@ def _fetch_serpapi(found_date: str, seen_urls: set, collected: list) -> int:
                        "skipping SerpAPI source")
         return 0
 
+    where = locations()
+    if not where:
+        logger.info(_NO_LOCATIONS, "Google Jobs")
+        return 0
+
     job_type = " ".join(JOB_TYPES)
     inserted = 0
 
-    for location in (locations() or [""]):
+    for location in where:
         params = {
             "engine": "google_jobs",
-            "q": f"part time {job_type} {location}".strip(),
+            "q": f"part time {job_type} {location}",
             "chips": "date_posted:today",
             "api_key": api_key,
         }
@@ -307,7 +324,10 @@ def scan_jobs_reed(keywords, location="", limit=20) -> list:
     if isinstance(keywords, str):
         keywords = [keywords]
     keywords = [k for k in (keywords or []) if k] or ["retail"]
-    search_in = [location] if location else (locations() or [""])
+    search_in = [location] if location else locations()
+    if not search_in:
+        logger.info(_NO_LOCATIONS, "Reed")
+        return []
 
     found_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     collected: list = []
