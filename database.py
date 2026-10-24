@@ -3912,10 +3912,10 @@ def find_scout_pipeline_row(job_url=None, job_title=None, company=None):
     url_key = _norm_pipeline_key(job_url)
     title_key = (_norm_pipeline_key(job_title), _norm_pipeline_key(company))
     with get_db() as conn:
-        rows = [dict(r) for r in conn.cursor().execute(
-            "SELECT * FROM scout_pipeline "
-            "ORDER BY COALESCE(updated_at, created_at) DESC, id DESC"
-        ).fetchall()]
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM scout_pipeline "
+                    "ORDER BY COALESCE(updated_at, created_at) DESC, id DESC")
+        rows = [dict(r) for r in cur.fetchall()]
 
     if url_key:
         for row in rows:
@@ -4030,15 +4030,18 @@ def get_apprenticeship_rows(include_closed: bool = True) -> list:
         sql += " AND COALESCE(j.status, 'open') = 'open'"
     sql += " ORDER BY j.found_date DESC, j.id DESC"
     with get_db() as conn:
-        return [dict(r) for r in conn.cursor().execute(sql).fetchall()]
+        cur = conn.cursor()
+        cur.execute(sql)
+        return [dict(r) for r in cur.fetchall()]
 
 
 def get_all_scout_job_details() -> dict:
     """{external_ref: detail row} for every listing that has been fetched."""
     _ensure_scout_tables()
     with get_db() as conn:
-        rows = conn.cursor().execute(
-            "SELECT * FROM scout_job_details").fetchall()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM scout_job_details")
+        rows = cur.fetchall()
     return {dict(r)["external_ref"]: dict(r) for r in rows}
 
 
@@ -4078,9 +4081,9 @@ def touch_scout_last_visited(stamp: str = None) -> str:
 def list_saved_searches() -> list:
     _ensure_scout_tables()
     with get_db() as conn:
-        rows = conn.cursor().execute(
-            "SELECT * FROM scout_saved_searches "
-            "ORDER BY id DESC").fetchall()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM scout_saved_searches ORDER BY id DESC")
+        rows = cur.fetchall()
     out = []
     for row in rows:
         d = dict(row)
@@ -4103,12 +4106,18 @@ def add_saved_search(name: str, filters: dict, channels=None) -> int:
     ph = "%s" if USE_POSTGRES else "?"
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            f"INSERT INTO scout_saved_searches "
-            f"(name, filters_json, channels, enabled, created_at) "
-            f"VALUES ({ph},{ph},{ph},1,{ph})",
-            (name, json.dumps(filters or {}), ",".join(keep),
-             datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        cols = ("name, filters_json, channels, enabled, created_at")
+        values = (name, json.dumps(filters or {}), ",".join(keep),
+                  datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        # psycopg2's cursor has a `lastrowid`, but it is always None for an
+        # INSERT — the new id has to come back from the statement itself.
+        if USE_POSTGRES:
+            cur.execute(f"INSERT INTO scout_saved_searches ({cols}) "
+                        f"VALUES ({ph},{ph},{ph},1,{ph}) RETURNING id", values)
+            row = cur.fetchone()
+            return dict(row)["id"] if row else 0
+        cur.execute(f"INSERT INTO scout_saved_searches ({cols}) "
+                    f"VALUES ({ph},{ph},{ph},1,{ph})", values)
         return cur.lastrowid or 0
 
 
@@ -4172,9 +4181,10 @@ def get_scout_job_detail(external_ref: str):
     _ensure_scout_tables()
     ph = "%s" if USE_POSTGRES else "?"
     with get_db() as conn:
-        row = conn.cursor().execute(
-            f"SELECT * FROM scout_job_details WHERE external_ref = {ph}",
-            (external_ref,)).fetchone()
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM scout_job_details WHERE external_ref = {ph}",
+                    (external_ref,))
+        row = cur.fetchone()
     return dict(row) if row else None
 
 
@@ -4240,11 +4250,12 @@ def scout_details_needing_fetch(limit: int = 25) -> list:
     _ensure_scout_tables()
     ph = "%s" if USE_POSTGRES else "?"
     with get_db() as conn:
-        rows = conn.cursor().execute(
-            _DETAIL_CANDIDATE_SQL +
-            f"  AND (d.fetched_at IS NULL OR d.fetched_at < {ph}) "
-            f"ORDER BY d.fetched_at IS NULL DESC, j.found_date DESC "
-            f"LIMIT {ph}", (_detail_cutoff(), limit)).fetchall()
+        cur = conn.cursor()
+        cur.execute(_DETAIL_CANDIDATE_SQL +
+                    f"  AND (d.fetched_at IS NULL OR d.fetched_at < {ph}) "
+                    f"ORDER BY d.fetched_at IS NULL DESC, j.found_date DESC "
+                    f"LIMIT {ph}", (_detail_cutoff(), limit))
+        rows = cur.fetchall()
     return [dict(r) for r in rows]
 
 
@@ -4266,9 +4277,10 @@ def scout_detail_candidate(external_ref: str) -> dict:
     _ensure_scout_tables()
     ph = "%s" if USE_POSTGRES else "?"
     with get_db() as conn:
-        row = conn.cursor().execute(
-            _DETAIL_CANDIDATE_SQL + f"  AND j.external_ref = {ph} LIMIT 1",
-            (external_ref,)).fetchone()
+        cur = conn.cursor()
+        cur.execute(_DETAIL_CANDIDATE_SQL +
+                    f"  AND j.external_ref = {ph} LIMIT 1", (external_ref,))
+        row = cur.fetchone()
     if not row:
         return out
     row = dict(row)
@@ -4288,15 +4300,15 @@ def count_scout_job_details() -> dict:
     out = {"total": 0, "by_status": {}, "stale": 0}
     with get_db() as conn:
         cur = conn.cursor()
-        for r in cur.execute("SELECT fetch_status, COUNT(*) AS n "
-                             "FROM scout_job_details "
-                             "GROUP BY fetch_status").fetchall():
+        cur.execute("SELECT fetch_status, COUNT(*) AS n "
+                    "FROM scout_job_details GROUP BY fetch_status")
+        for r in cur.fetchall():
             d = dict(r)
             out["by_status"][d["fetch_status"] or "(none)"] = d["n"]
         out["total"] = sum(out["by_status"].values())
-        out["stale"] = dict(cur.execute(
-            f"SELECT COUNT(*) AS n FROM scout_job_details "
-            f"WHERE fetched_at < {ph}", (cutoff,)).fetchone())["n"]
+        cur.execute(f"SELECT COUNT(*) AS n FROM scout_job_details "
+                    f"WHERE fetched_at < {ph}", (cutoff,))
+        out["stale"] = dict(cur.fetchone())["n"]
     return out
 
 
@@ -4450,7 +4462,9 @@ def get_scout_programmes(stage=None, with_stage_only: bool = False) -> list:
         sql += " WHERE stage IS NOT NULL AND stage <> ''"
     sql += " ORDER BY company, programme"
     with get_db() as conn:
-        return [dict(r) for r in conn.cursor().execute(sql, tuple(args)).fetchall()]
+        cur = conn.cursor()
+        cur.execute(sql, tuple(args))
+        return [dict(r) for r in cur.fetchall()]
 
 
 def get_scout_programme_companies() -> list:
@@ -4462,9 +4476,10 @@ def get_scout_programme_companies() -> list:
     """
     _ensure_scout_tables()
     with get_db() as conn:
-        rows = conn.cursor().execute(
-            "SELECT DISTINCT company_norm FROM scout_programmes "
-            "WHERE company_norm <> ''").fetchall()
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT company_norm FROM scout_programmes "
+                    "WHERE company_norm <> ''")
+        rows = cur.fetchall()
     return sorted({dict(r)["company_norm"] for r in rows})
 
 
@@ -4569,9 +4584,10 @@ def scout_filter_overrides_stamp():
     """
     _ensure_scout_tables()
     with get_db() as conn:
-        row = dict(conn.cursor().execute(
-            "SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS top "
-            "FROM scout_filter_overrides").fetchone())
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS top "
+                    "FROM scout_filter_overrides")
+        row = dict(cur.fetchone())
     return (current_database_id(), row["n"], row["top"])
 
 
@@ -4589,12 +4605,17 @@ def get_watched_employer_names() -> list:
     out = set()
     try:
         with get_db() as conn:
-            rows = conn.cursor().execute(
-                "SELECT name, aliases FROM employers "
-                "WHERE watching IS NULL OR watching NOT IN (0, FALSE)"
-                if USE_POSTGRES else
-                "SELECT name, aliases FROM employers "
-                "WHERE watching IS NULL OR watching <> 0").fetchall()
+            cur = conn.cursor()
+            # `employers.watching` is a SQLAlchemy Boolean: a real boolean on
+            # Postgres, an INTEGER 0/1 on SQLite. Comparing it to the integer 0
+            # on Postgres raises "operator does not exist: boolean = integer",
+            # so each dialect gets the predicate it can actually evaluate.
+            # Both treat NULL as watching, which is what the default means.
+            cur.execute("SELECT name, aliases FROM employers "
+                        "WHERE watching IS NOT FALSE" if USE_POSTGRES else
+                        "SELECT name, aliases FROM employers "
+                        "WHERE watching IS NULL OR watching <> 0")
+            rows = cur.fetchall()
     except Exception as e:
         logger.debug("get_watched_employer_names: no employers table (%s)", e)
         return []
@@ -4613,17 +4634,19 @@ def count_scout_programmes() -> dict:
     out = {"total": 0, "by_stage": {}, "not_started": 0, "edited_in_scout": 0}
     with get_db() as conn:
         cur = conn.cursor()
-        for r in cur.execute(
-                "SELECT stage, COUNT(*) AS n FROM scout_programmes "
-                "GROUP BY stage").fetchall():
+        cur.execute("SELECT stage, COUNT(*) AS n FROM scout_programmes "
+                    "GROUP BY stage")
+        for r in cur.fetchall():
             d = dict(r)
             key = d["stage"] or "(not started)"
             out["by_stage"][key] = d["n"]
         out["total"] = sum(out["by_stage"].values())
         out["not_started"] = out["by_stage"].get("(not started)", 0)
-        out["edited_in_scout"] = dict(cur.execute(
-            "SELECT COUNT(*) AS n FROM scout_programmes "
-            "WHERE edited_in_scout = 1").fetchone())["n"]
+        # `edited_in_scout` is INTEGER in the DDL on BOTH backends (the Postgres
+        # rewrite only touches the primary key), so = 1 is valid either way.
+        cur.execute("SELECT COUNT(*) AS n FROM scout_programmes "
+                    "WHERE edited_in_scout = 1")
+        out["edited_in_scout"] = dict(cur.fetchone())["n"]
     return out
 
 
