@@ -5077,6 +5077,31 @@ def scout_daily_scan():
         logger.error("scout audit log failed: %s", e)
 
 
+def apprenticeship_detail_job():
+    """Fills in the detail-panel fields for listings Scout has already kept.
+
+    Separate from the scan on purpose. The scan is one request per search; this
+    is one request per LISTING, so it is the heavier of the two and is kept to a
+    small batch on its own cadence. It only ever touches listings already in the
+    database, caches each page for a day, and stops the batch outright on a 429
+    or a 5xx rather than retrying — see services/scout_detail.py for the full
+    set of conditions.
+
+    Needs an app context only for the scan's SQLAlchemy half; the detail pass
+    itself uses the raw `db` layer, but the context costs nothing and keeps the
+    two jobs symmetrical.
+    """
+    try:
+        from services import scout_detail
+        summary = scout_detail.fetch_missing_details()
+        logger.info("Apprenticeship detail fetch: %s", summary)
+        if summary.get("stopped_early"):
+            logger.warning("Apprenticeship detail fetch stopped early: %s",
+                           summary.get("stop_reason"))
+    except Exception as e:
+        logger.error("apprenticeship detail fetch failed: %s", e)
+
+
 def apprenticeship_scan_job():
     """Every APPRENTICESHIP_POLL_MINUTES — scan gov.uk for apprenticeships.
 
@@ -5304,21 +5329,29 @@ def _start_background():
     # their own try/except so one failing can never abort the others.
     sched = start_scheduler()
 
-    # Scout job scan, daily at 06:00 (registered here to keep the scout feature
-    # self-contained without editing services/scheduler.py).
-    try:
-        sched.add_job(scout_daily_scan, "cron", hour=6, minute=0, id="scout_daily_scan")
-    except Exception as e:
-        logger.error("failed to register scout daily scan: %s", e)
+    # Scout jobs are registered here to keep the feature self-contained, but
+    # through services.scheduler._safe_add like every other job, so one bad
+    # registration cannot take the rest of the schedule down with it.
+    from services.scheduler import _safe_add
+
+    # Scout job scan, daily at 06:00.
+    _safe_add(sched, scout_daily_scan, "cron", hour=6, minute=0,
+              id="scout_daily_scan", replace_existing=True)
+
     # Apprenticeship scan on its own interval (default 6h) so we don't hammer
     # gov.uk. Same scheduler object as every other job — the Procfile pins
     # --workers 1 and ASFA_BG_STARTED guards double-start, so it runs once.
-    try:
-        from services.apprenticeships import poll_minutes
-        sched.add_job(apprenticeship_scan_job, "interval",
-                      minutes=poll_minutes(), id="apprenticeship_scan")
-    except Exception as e:
-        logger.error("failed to register apprenticeship scan: %s", e)
+    from services.apprenticeships import poll_minutes
+    _safe_add(sched, apprenticeship_scan_job, "interval",
+              minutes=poll_minutes(), id="apprenticeship_scan",
+              replace_existing=True)
+
+    # Detail pages for kept listings, hourly and in small batches. Offset from
+    # the scan so a fresh listing has been persisted before its page is asked
+    # for, and rate-limited by the scraper's own 1s floor regardless.
+    _safe_add(sched, apprenticeship_detail_job, "interval", minutes=60,
+              id="apprenticeship_detail_fetch", replace_existing=True,
+              misfire_grace_time=300)
 
     # Telegram bot — optional. A missing/invalid token must only warn, never
     # crash startup or take the scheduler down with it. start_bot() already

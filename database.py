@@ -3285,6 +3285,24 @@ def _ensure_scout_tables():
             created_at TEXT,
             updated_at TEXT
         )""",
+        # Detail-page fields, fetched one listing at a time from the vacancy's
+        # own page. Doubles as the fetch CACHE: `fetched_at` is what enforces
+        # "never re-fetch the same page within 24 hours".
+        #
+        # Only the six fields the detail panel shows are stored. The page HTML
+        # is parsed and discarded — there is deliberately no column for it, so
+        # a bulk copy of the site cannot accumulate here even by accident.
+        """CREATE TABLE IF NOT EXISTS scout_job_details (
+            external_ref TEXT PRIMARY KEY,
+            wage TEXT,
+            hours TEXT,
+            start_date TEXT,
+            duration TEXT,
+            closing_date TEXT,
+            description TEXT,
+            fetched_at TEXT,
+            fetch_status TEXT
+        )""",
         """CREATE TABLE IF NOT EXISTS scout_exclusions (
             external_ref TEXT PRIMARY KEY,
             title TEXT,
@@ -3880,6 +3898,112 @@ def get_scout_pipeline_reminders(days: int = 7) -> list:
             f"AND date_applied IS NOT NULL AND date_applied <= {ph} "
             f"ORDER BY date_applied ASC", (cutoff,))
         return [dict(r) for r in cur.fetchall()]
+
+
+# ── Scout detail pages (fetched per listing, cached for a day) ──────────────
+
+# How long a fetched detail page is considered current. The user's condition:
+# never re-fetch the same page within 24 hours.
+DETAIL_CACHE_HOURS = 24
+
+# Only these fields are stored. Anything else on the page is parsed and thrown
+# away; see the scout_job_details DDL.
+DETAIL_FIELDS = ("wage", "hours", "start_date", "duration", "closing_date",
+                 "description")
+
+
+def get_scout_job_detail(external_ref: str):
+    """The cached detail row for one listing, or None."""
+    if not external_ref:
+        return None
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        row = conn.cursor().execute(
+            f"SELECT * FROM scout_job_details WHERE external_ref = {ph}",
+            (external_ref,)).fetchone()
+    return dict(row) if row else None
+
+
+def save_scout_job_detail(external_ref: str, fields: dict,
+                          status: str = "ok") -> bool:
+    """Store the detail fields for one listing. Upsert on external_ref."""
+    if not external_ref:
+        return False
+    _ensure_scout_tables()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ph = "%s" if USE_POSTGRES else "?"
+    payload = {k: (fields or {}).get(k) for k in DETAIL_FIELDS}
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT external_ref FROM scout_job_details "
+            f"WHERE external_ref = {ph}", (external_ref,))
+        if cur.fetchone():
+            sets = ", ".join(f"{k} = {ph}" for k in DETAIL_FIELDS)
+            cur.execute(
+                f"UPDATE scout_job_details SET {sets}, fetched_at = {ph}, "
+                f"fetch_status = {ph} WHERE external_ref = {ph}",
+                tuple(payload[k] for k in DETAIL_FIELDS)
+                + (now, status, external_ref))
+        else:
+            cols = ", ".join(DETAIL_FIELDS)
+            cur.execute(
+                f"INSERT INTO scout_job_details "
+                f"(external_ref, {cols}, fetched_at, fetch_status) "
+                f"VALUES ({', '.join([ph] * (len(DETAIL_FIELDS) + 3))})",
+                (external_ref,) + tuple(payload[k] for k in DETAIL_FIELDS)
+                + (now, status))
+    return True
+
+
+def scout_details_needing_fetch(limit: int = 25) -> list:
+    """Listings Scout has KEPT whose detail is missing or older than a day.
+
+    Deliberately driven off scout_jobs, not off a search: the user's condition
+    is that only kept listings are ever fetched, so a row has to already exist
+    in the database to be eligible. Closed and archived listings are skipped —
+    there is nothing to act on and no reason to spend a request.
+    """
+    _ensure_scout_tables()
+    cutoff = (datetime.now() - timedelta(hours=DETAIL_CACHE_HOURS)
+              ).strftime("%Y-%m-%d %H:%M:%S")
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        rows = conn.cursor().execute(
+            f"SELECT j.external_ref, j.url FROM scout_jobs j "
+            f"LEFT JOIN scout_job_details d "
+            f"       ON d.external_ref = j.external_ref "
+            f"WHERE j.listing_type = 'apprenticeship' "
+            f"  AND j.external_ref IS NOT NULL AND j.external_ref <> '' "
+            f"  AND j.url IS NOT NULL AND j.url <> '' "
+            f"  AND COALESCE(j.status, 'open') = 'open' "
+            f"  AND j.archived_at IS NULL "
+            f"  AND (d.fetched_at IS NULL OR d.fetched_at < {ph}) "
+            f"ORDER BY d.fetched_at IS NULL DESC, j.found_date DESC "
+            f"LIMIT {ph}", (cutoff, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_scout_job_details() -> dict:
+    """{"total": N, "by_status": {...}, "stale": N} — for the fetch report."""
+    _ensure_scout_tables()
+    cutoff = (datetime.now() - timedelta(hours=DETAIL_CACHE_HOURS)
+              ).strftime("%Y-%m-%d %H:%M:%S")
+    ph = "%s" if USE_POSTGRES else "?"
+    out = {"total": 0, "by_status": {}, "stale": 0}
+    with get_db() as conn:
+        cur = conn.cursor()
+        for r in cur.execute("SELECT fetch_status, COUNT(*) AS n "
+                             "FROM scout_job_details "
+                             "GROUP BY fetch_status").fetchall():
+            d = dict(r)
+            out["by_status"][d["fetch_status"] or "(none)"] = d["n"]
+        out["total"] = sum(out["by_status"].values())
+        out["stale"] = dict(cur.execute(
+            f"SELECT COUNT(*) AS n FROM scout_job_details "
+            f"WHERE fetched_at < {ph}", (cutoff,)).fetchone())["n"]
+    return out
 
 
 # ── Scout programmes (the tracker's own entries + the watchlist) ────────────

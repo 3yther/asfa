@@ -125,6 +125,28 @@ def _canonical_query(query: str) -> str:
              if k.lower() not in _TRACKING_PARAMS]
     return urlencode(sorted(pairs))
 
+# A vacancy detail page on the apprenticeship site. Anything that is not this
+# shape is refused before a request is made, so an account page, a search URL or
+# an off-site cross-post can never be fetched by the detail pass.
+DETAIL_URL_RE = re.compile(
+    r"^https://(?:www\.)?findapprenticeship\.service\.gov\.uk"
+    r"/apprenticeship/[A-Za-z0-9._-]+/?(?:\?|#|$)")
+
+# The detail panel's fields, and the labels gov.uk uses for them. Matched on the
+# label text, so a layout change shows up as a missing field rather than as a
+# wrong one.
+DETAIL_LABELS = {
+    "wage": ("annual wage", "wage", "salary"),
+    "hours": ("working week", "hours", "working hours"),
+    "start_date": ("expected start date", "start date", "expected start"),
+    "duration": ("expected duration", "duration", "training course duration"),
+    "closing_date": ("closing date", "application closing date", "closes"),
+}
+
+# Hard cap on the stored description. The condition is a SHORT description for
+# the panel, not a copy of the page: two lines of prose, nothing more.
+DETAIL_DESCRIPTION_CHARS = 600
+
 # The site's own result count, from the <title> ("47 results found").
 #
 # Anchored at a word boundary and captured as a number ON PURPOSE. This used to
@@ -209,6 +231,7 @@ class GovUkScraper:
                  max_pages: Optional[int] = None):
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": user_agent, "Accept": "text/html"})
+        _block_cookies(self.session)
         self.timeout = timeout
         self.min_interval = min_interval
         # Read from config at construction, so one scan uses one cap throughout
@@ -307,6 +330,122 @@ class GovUkScraper:
                     "gov_uk: postcode=%r requested but no postcode_param is "
                     "configured, so the sweep stays nationwide", postcode)
         return params
+
+    # ------------------------------------------------------------------
+    # DETAIL PAGES
+    # ------------------------------------------------------------------
+    def fetch_detail(self, url: str) -> dict:
+        """Fetch ONE vacancy detail page and return the panel's fields.
+
+        Conditions this method enforces, rather than relies on a caller for:
+
+          * the URL must be a vacancy detail page on the apprenticeship site
+            (DETAIL_URL_RE). A search URL, an account page or an off-site
+            cross-post is refused WITHOUT a request;
+          * at least `min_interval` since the previous request on this scraper,
+            via the same `_throttle()` the search uses — so the 1s floor is
+            structural rather than something a caller has to remember;
+          * the identifying User-Agent already on the session;
+          * no cookies are sent or kept (see `_block_cookies`);
+          * 429 or any 5xx raises DetailFetchBackoff, which stops the batch.
+
+        Returns only the six stored fields. The HTML is parsed and discarded.
+        """
+        if not DETAIL_URL_RE.match((url or "").strip()):
+            raise ScraperError(f"not a vacancy detail URL: {url!r}")
+
+        self._throttle()
+        try:
+            resp = self.session.get(url, timeout=self.timeout,
+                                    allow_redirects=True)
+        except requests.RequestException as e:
+            raise ScraperError(f"HTTP error fetching detail: {e}") from e
+
+        status = getattr(resp, "status_code", 0)
+        if status == 429 or 500 <= status < 600:
+            raise DetailFetchBackoff(
+                f"gov.uk returned {status} — stopping the batch")
+        if status != 200:
+            raise ScraperError(f"detail page returned {status}")
+
+        return self.parse_detail(resp.text)
+
+    @staticmethod
+    def parse_detail(html: str) -> dict:
+        """The six panel fields from a detail page. Missing stays missing.
+
+        A field that cannot be found is returned as None, never as a guess: the
+        panel shows a muted dash for None, and an invented wage is worse than a
+        blank one.
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        found = {key: None for key in
+                 ("wage", "hours", "start_date", "duration", "closing_date",
+                  "description")}
+
+        # gov.uk renders these as definition lists, and elsewhere as a <b>/<p>
+        # pair like the search cards. Try both rather than betting on one.
+        pairs = []
+        for dl in soup.find_all("dl"):
+            terms = dl.find_all("dt")
+            definitions = dl.find_all("dd")
+            for dt, dd in zip(terms, definitions):
+                pairs.append((dt.get_text(" ", strip=True),
+                              dd.get_text(" ", strip=True)))
+        for tag in soup.find_all(["b", "strong", "th"]):
+            label = tag.get_text(" ", strip=True)
+            holder = tag.find_parent(["p", "li", "tr", "div"])
+            if not holder:
+                continue
+            value = holder.get_text(" ", strip=True)
+            if value.lower().startswith(label.lower()):
+                value = value[len(label):]
+            pairs.append((label, value.strip(" :\u00a0")))
+
+        for label, value in pairs:
+            key_text = " ".join(label.lower().split()).strip(" :")
+            if not value:
+                continue
+            for field, labels in DETAIL_LABELS.items():
+                if found[field] is None and key_text in labels:
+                    found[field] = value.strip()
+
+        # Description: the vacancy's own summary, capped. Prefer a labelled
+        # section, else the first substantial paragraph.
+        description = None
+        for heading in soup.find_all(["h2", "h3"]):
+            text = heading.get_text(" ", strip=True).lower()
+            if text in ("what you will do in your working day",
+                        "summary", "vacancy description",
+                        "what you'll do in your working day"):
+                parts = []
+                for sibling in heading.find_next_siblings():
+                    if sibling.name in ("h2", "h3"):
+                        break
+                    if sibling.name in ("p", "ul", "ol"):
+                        parts.append(sibling.get_text(" ", strip=True))
+                    if sum(len(p) for p in parts) > DETAIL_DESCRIPTION_CHARS:
+                        break
+                if parts:
+                    description = " ".join(parts)
+                    break
+        if description is None:
+            for paragraph in soup.find_all("p"):
+                text = paragraph.get_text(" ", strip=True)
+                if len(text) >= 80:
+                    description = text
+                    break
+        if description:
+            description = " ".join(description.split())[:DETAIL_DESCRIPTION_CHARS]
+        found["description"] = description or None
+
+        # Normalise the dates we can read, leaving the raw text when we cannot.
+        for field in ("start_date", "closing_date"):
+            if found[field]:
+                parsed = _parse_uk_date(found[field])
+                if parsed:
+                    found[field] = parsed.isoformat()
+        return found
 
     @staticmethod
     def search_params(term: str) -> dict:
@@ -624,6 +763,16 @@ class ScraperError(Exception):
     pass
 
 
+class DetailFetchBackoff(ScraperError):
+    """The site asked us to slow down, or had a server error.
+
+    Raised on 429 and 5xx so the CALLER STOPS THE WHOLE BATCH. It is
+    deliberately a distinct type from ScraperError, which a scan swallows and
+    carries on from: retrying a 429 in a loop is the one behaviour that turns a
+    polite scraper into an impolite one.
+    """
+
+
 # Keys accumulated by summing; everything else is merged by rule below.
 _COUNTER_KEYS = ("cards_seen", "kept", "dropped_no_ref", "dropped_below_level",
                  "level_unparsed", "duplicate_cards", "extra_locations")
@@ -653,6 +802,20 @@ def _merge_stats(target: dict, page: dict) -> None:
         for href in page["unmatched_href_samples"]:
             if href not in samples and len(samples) < 8:
                 samples.append(href)
+
+
+def _block_cookies(session) -> None:
+    """Refuse to send or store cookies.
+
+    Nothing this scraper reads needs a session, and a cookie jar is the first
+    step towards looking like a logged-in client. Blocking it at the policy
+    level means no code path can start one by accident.
+    """
+    try:
+        from http.cookiejar import DefaultCookiePolicy
+        session.cookies.set_policy(DefaultCookiePolicy(allowed_domains=[]))
+    except Exception:            # pragma: no cover - cookie jar is optional
+        pass
 
 
 def _note_unmatched(stats: dict, card, limit: int = 8) -> None:
