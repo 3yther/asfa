@@ -917,10 +917,11 @@ def export_all_data():
 # CV or an application form, so it must render without the passphrase and
 # without a guest session. It reads nothing from the database.
 #
-# Contact details come from PORTFOLIO_* env vars. There is NO default for the
-# email: this repository is public, so a default in the source is a personal
-# address published on GitHub. Unset simply drops the chip — templates/
-# portfolio.html guards each one with {% if %}, so the page renders without it.
+# Contact details come from PORTFOLIO_* env vars, none of which has a default:
+# this repository is public, so a default in the source is a phone number, an
+# address or a profile URL published on GitHub. Unset simply drops that chip —
+# templates/portfolio.html guards each one with {% if %}, so the page renders
+# without it rather than showing an empty link.
 CV_FILENAME = "Amir_Salah_CV.pdf"
 CV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "cv", CV_FILENAME)
 
@@ -930,10 +931,9 @@ def portfolio():
     return render_template(
         "portfolio.html",
         active="portfolio",
-        phone=os.environ.get("PORTFOLIO_PHONE", "07398 396363"),
+        phone=os.environ.get("PORTFOLIO_PHONE", "").strip(),
         email=os.environ.get("PORTFOLIO_EMAIL", "").strip(),
-        linkedin=os.environ.get("PORTFOLIO_LINKEDIN",
-                                "https://www.linkedin.com/in/amir-salah"),
+        linkedin=os.environ.get("PORTFOLIO_LINKEDIN", "").strip(),
         cv_available=os.path.exists(CV_PATH),
     )
 

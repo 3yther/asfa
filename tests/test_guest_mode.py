@@ -106,19 +106,25 @@ def test_portfolio_is_public_and_carries_the_cv():
         assert expected in body
 
 
-def test_the_portfolio_contact_email_comes_only_from_the_environment(monkeypatch):
-    """There is no default address in the source — this repository is public.
-    The address below is synthetic; it is set for this test and nowhere else."""
+def test_the_portfolio_contact_details_come_only_from_the_environment(monkeypatch):
+    """None of these has a default in the source — this repository is public.
+    Every value below is synthetic, set for this test and nowhere else."""
     monkeypatch.setenv("PORTFOLIO_EMAIL", "contact@example.invalid")
+    monkeypatch.setenv("PORTFOLIO_PHONE", "01234 567890")
+    monkeypatch.setenv("PORTFOLIO_LINKEDIN", "https://example.invalid/in/someone")
     body = A.app.test_client().get("/portfolio").get_data(as_text=True)
-    assert "contact@example.invalid" in body
     assert "mailto:contact@example.invalid" in body
+    assert "tel:01234567890" in body, "the template strips the spaces"
+    assert "https://example.invalid/in/someone" in body
 
 
-def test_the_portfolio_drops_the_email_chip_when_it_is_unset(monkeypatch):
-    monkeypatch.delenv("PORTFOLIO_EMAIL", raising=False)
+def test_the_portfolio_drops_each_chip_when_it_is_unset(monkeypatch):
+    for var in ("PORTFOLIO_EMAIL", "PORTFOLIO_PHONE", "PORTFOLIO_LINKEDIN"):
+        monkeypatch.delenv(var, raising=False)
     body = A.app.test_client().get("/portfolio").get_data(as_text=True)
     assert "mailto:" not in body, "unset means the chip is simply not rendered"
+    assert "tel:" not in body
+    assert "linkedin.com" not in body
     assert "AMIR SALAH" in body, "and the rest of the page is unaffected"
 
 
