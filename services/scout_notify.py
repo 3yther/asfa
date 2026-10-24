@@ -6,9 +6,11 @@ there is exactly one email system rather than one per source.
 
 Transport is unchanged from the original Scout notifier: Gmail SMTP over
 STARTTLS using SCOUT_EMAIL_USER / SCOUT_EMAIL_PASS, delivering to
-NOTIFY_EMAIL_TO. Discord is optional and only fires when DISCORD_WEBHOOK_URL is
-set. Best-effort throughout — a send failure is logged and swallowed, never
-raised into a scan.
+the address in SCOUT_NOTIFY_EMAIL_TO. Discord is optional and only fires when
+DISCORD_WEBHOOK_URL is set. Neither is configured on Railway today, so the live
+channels are the in-app bell and Telegram, both reached through
+services.scheduler._notify. Best-effort throughout — a send failure is logged
+and swallowed, never raised into a scan.
 
 Scout has no alerts table; outcomes are recorded via db.log_audit, matching how
 scout_daily_scan already reports itself.
@@ -27,7 +29,18 @@ logger = logging.getLogger("asfa.scout_notify")
 
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
-NOTIFY_EMAIL_TO = "ami.salax08@gmail.com"
+
+
+def notify_email_to() -> str:
+    """Where Scout's email would go, from the environment.
+
+    This repo is PUBLIC and the address used to be a literal here. It now comes
+    from SCOUT_NOTIFY_EMAIL_TO (falling back to NOTIFY_EMAIL_TO), and when
+    neither is set the email path is skipped SILENTLY — no fallback to the old
+    address, which would defeat the point of moving it.
+    """
+    return (os.environ.get("SCOUT_NOTIFY_EMAIL_TO")
+            or os.environ.get("NOTIFY_EMAIL_TO") or "").strip()
 
 JOB = "job"
 APPRENTICESHIP = "apprenticeship"
@@ -36,7 +49,12 @@ APPRENTICESHIP = "apprenticeship"
 # ── Transport ────────────────────────────────────────────────────────────────
 
 def send_email(subject: str, html: str, text: str = None) -> tuple:
-    """Send one HTML email. Returns (ok, error). Never raises."""
+    """Send one HTML email. Returns (ok, error). Never raises.
+
+    Skips silently unless BOTH the credentials and a recipient are configured.
+    On Railway today none of them are, so this path is dormant: alerts go via
+    the in-app bell and Telegram (see services/scheduler._notify).
+    """
     user = os.environ.get("SCOUT_EMAIL_USER")
     password = os.environ.get("SCOUT_EMAIL_PASS")
     if not (user and password):
@@ -44,10 +62,16 @@ def send_email(subject: str, html: str, text: str = None) -> tuple:
         logger.info("scout_notify: %s — skipping email", msg)
         return False, msg
 
+    recipient = notify_email_to()
+    if not recipient:
+        msg = "SCOUT_NOTIFY_EMAIL_TO not set"
+        logger.info("scout_notify: %s — skipping email", msg)
+        return False, msg
+
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = user
-    msg["To"] = NOTIFY_EMAIL_TO
+    msg["To"] = recipient
     msg.set_content(text or _html_to_text(html))
     msg.add_alternative(html, subtype="html")
 
@@ -59,7 +83,8 @@ def send_email(subject: str, html: str, text: str = None) -> tuple:
             server.ehlo()
             server.login(user, password)
             server.send_message(msg)
-        logger.info("scout_notify: emailed %r to %s", subject, NOTIFY_EMAIL_TO)
+        # The address is not logged: this repo is public and logs get pasted.
+        logger.info("scout_notify: emailed %r", subject)
         return True, ""
     except Exception as e:
         logger.warning("scout_notify: email send failed: %s", e)

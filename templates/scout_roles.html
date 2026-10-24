@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ ui_theme }}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#000408">
+<title>ASFA // SCOUT</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<link id="theme-css" rel="stylesheet" href="{{ url_for('static', filename='css/themes/' + ui_theme + '.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/scout_roles.css') }}">
+{% include "_csrf.html" %}
+<script src="{{ url_for('static', filename='js/scout_roles.js') }}" defer></script>
+</head>
+<body class="sr-body">
+
+{# ── Shell: a small ASFA mark and the four tabs. No avatar, no name. ───── #}
+<header class="sr-top">
+  <div class="sr-top-in">
+    <a class="sr-mark" href="/">ASFA</a>
+    <nav class="sr-tabs" role="tablist" aria-label="Scout screens">
+      <button type="button" class="sr-tab" role="tab" id="tab-find"
+              aria-controls="screen-find" aria-selected="true" data-screen="find">Find roles</button>
+      <button type="button" class="sr-tab" role="tab" id="tab-upcoming"
+              aria-controls="screen-upcoming" aria-selected="false" data-screen="upcoming">Upcoming</button>
+      <button type="button" class="sr-tab" role="tab" id="tab-tracker"
+              aria-controls="screen-tracker" aria-selected="false" data-screen="tracker">Tracker</button>
+      <button type="button" class="sr-tab" role="tab" id="tab-alerts"
+              aria-controls="screen-alerts" aria-selected="false" data-screen="alerts">Alerts</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+{# ══ FIND ROLES ════════════════════════════════════════════════════════ #}
+<section class="sr-screen" id="screen-find" role="tabpanel" aria-labelledby="tab-find">
+  <h1 class="sr-h1">Find roles</h1>
+  <p class="sr-sub">Digital apprenticeships Scout has kept. Filters narrow what you
+     see and say so — nothing is hidden.</p>
+
+  <form class="sr-searchbar" id="sr-search-form" role="search">
+    <div class="sr-search-pill">
+      <label class="sr-sr-only" for="sr-q">Search roles</label>
+      <input class="sr-input" type="search" id="sr-q" name="q"
+             placeholder="Search title, employer, standard or place" autocomplete="off">
+      <button type="submit" class="sr-btn sr-btn-icon sr-btn-primary"
+              aria-label="Search">&#x2315;</button>
+    </div>
+    <label class="sr-sr-only" for="sr-sort">Sort by</label>
+    <select class="sr-select" id="sr-sort" name="sort">
+      <option value="recent">Newest first</option>
+      <option value="closing">Closing soonest</option>
+      <option value="level">Highest level</option>
+      <option value="near">Nearest home</option>
+      <option value="fit">Watchlist first</option>
+    </select>
+    <button type="button" class="sr-btn" id="sr-filters-btn"
+            aria-expanded="false" aria-controls="sr-drawer">Filters</button>
+    <button type="button" class="sr-btn" id="sr-create-alert">Create alert</button>
+    <button type="button" class="sr-btn" id="sr-excluded-btn"
+            aria-expanded="false" aria-controls="screen-excluded">Excluded</button>
+  </form>
+
+  <div class="sr-drawer" id="sr-drawer" hidden>
+    <div class="sr-drawer-grid">
+      <label class="sr-field">
+        <span>Minimum level</span>
+        <select class="sr-select" id="sr-f-level"><option value="">Any level</option></select>
+      </label>
+      <label class="sr-field">
+        <span>Provider</span>
+        <select class="sr-select" id="sr-f-source"><option value="">Any provider</option></select>
+      </label>
+      <fieldset style="border:0;padding:0;margin:0;">
+        <legend class="sr-sr-only">Toggles</legend>
+        <label class="sr-check"><input type="checkbox" id="sr-f-near"> Near home only</label>
+        <label class="sr-check"><input type="checkbox" id="sr-f-watch"> Watchlist employers only</label>
+      </fieldset>
+      <fieldset style="border:0;padding:0;margin:0;">
+        <legend class="sr-sr-only">More toggles</legend>
+        <label class="sr-check"><input type="checkbox" id="sr-f-open"> Hide closed listings</label>
+        <label class="sr-check"><input type="checkbox" id="sr-f-new"> New since last visit only</label>
+      </fieldset>
+    </div>
+    <div class="sr-drawer-foot">
+      <button type="button" class="sr-btn sr-btn-primary" id="sr-apply">Apply filters</button>
+      <button type="button" class="sr-btn" id="sr-clear">Clear all</button>
+    </div>
+  </div>
+
+  <div class="sr-chips" id="sr-chips"></div>
+  <p class="sr-countline" id="sr-countline" role="status" aria-live="polite"></p>
+
+  <div id="sr-groups"></div>
+</section>
+
+{# ══ EXCLUDED (reached from Find roles, not a tab) ═════════════════════ #}
+<section class="sr-screen" id="screen-excluded" hidden aria-labelledby="sr-ex-h1">
+  <button type="button" class="sr-btn" id="sr-ex-back">&#x2190; Back to roles</button>
+  <h1 class="sr-h1" id="sr-ex-h1" style="margin-top:16px;">Excluded</h1>
+  <p class="sr-sub">Everything the relevance filter dropped, and why. If one is
+     wrong, allow it here and the filter config changes — no deploy.</p>
+  <div class="sr-reason-tally" id="sr-ex-tally"></div>
+  <div id="sr-ex-list"></div>
+</section>
+
+{# ══ UPCOMING ═════════════════════════════════════════════════════════ #}
+<section class="sr-screen" id="screen-upcoming" role="tabpanel" aria-labelledby="tab-upcoming" hidden>
+  <h1 class="sr-h1">Upcoming</h1>
+  <p class="sr-sub">When each programme opens, September to August. Dashed is
+     last cycle's window, solid is a date you've confirmed.</p>
+  <div class="sr-legend">
+    <span><i class="sr-swatch sr-mark-open" aria-hidden="true"></i> Last cycle (unconfirmed)</span>
+    <span><i class="sr-swatch sr-mark-open confirmed" aria-hidden="true"></i> Confirmed</span>
+    <span><i class="sr-swatch sr-mark-rolling" aria-hidden="true"></i> Rolling</span>
+  </div>
+  <div class="sr-year" id="sr-year"></div>
+  <div class="sr-upcoming-cards" id="sr-upcoming-cards"></div>
+</section>
+
+{# ══ TRACKER ══════════════════════════════════════════════════════════ #}
+<section class="sr-screen" id="screen-tracker" role="tabpanel" aria-labelledby="tab-tracker" hidden>
+  <h1 class="sr-h1">Tracker</h1>
+  <p class="sr-sub">Pick a stage from the select, or drag a card if you'd rather.
+     Both write the same record.</p>
+  <div class="sr-note" id="sr-cleanup-note" hidden></div>
+  <div class="sr-board" id="sr-board"></div>
+</section>
+
+{# ══ ALERTS ═══════════════════════════════════════════════════════════ #}
+<section class="sr-screen" id="screen-alerts" role="tabpanel" aria-labelledby="tab-alerts" hidden>
+  <h1 class="sr-h1">Alerts</h1>
+  <p class="sr-sub">A saved search notifies you when something new matches it.</p>
+
+  <h2 class="sr-h1" style="font-size:1rem;">Channels</h2>
+  <div class="sr-channels" id="sr-channels"></div>
+
+  <h2 class="sr-h1" style="font-size:1rem;">Saved searches</h2>
+  <div class="sr-saved" id="sr-saved"></div>
+</section>
+
+</main>
+
+{# ── Role detail slide-over ───────────────────────────────────────────── #}
+<div class="sr-scrim" id="sr-scrim" hidden></div>
+<aside class="sr-panel" id="sr-panel" hidden role="dialog" aria-modal="true"
+       aria-labelledby="sr-panel-title">
+  <div class="sr-panel-head">
+    <div style="flex:1 1 auto;min-width:0;">
+      <h2 id="sr-panel-title">Role</h2>
+      <p class="sr-card-employer" id="sr-panel-employer"></p>
+    </div>
+    <button type="button" class="sr-btn sr-btn-icon" id="sr-panel-close"
+            aria-label="Close role details">&#x2715;</button>
+  </div>
+  <div class="sr-panel-body" id="sr-panel-body"></div>
+  <div class="sr-panel-foot">
+    <a class="sr-btn sr-btn-primary" id="sr-panel-link" href="#" target="_blank"
+       rel="noopener noreferrer">Open on gov.uk</a>
+    <button type="button" class="sr-btn" id="sr-panel-fetch">Fetch details</button>
+  </div>
+</aside>
+
+<div class="sr-toasts" id="sr-toasts" role="status" aria-live="polite"></div>
+</body>
+</html>

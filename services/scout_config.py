@@ -729,3 +729,152 @@ def judge(title: str, employer: str = "", course: str = "",
 
     return Verdict(True, KEEP_UNSURE, detail=",".join(terms),
                    digital=bool(terms), terms=terms)
+
+
+# ── Correcting a wrong exclusion, from the Excluded audit view ───────────────
+#
+# The exclusion lists are guesses about words, and the audit log is where a bad
+# guess shows up. These write the JSON overrides rather than Python, which is
+# the whole point of the overrides existing: a filter the user cannot correct
+# without a deploy is a filter they will stop trusting.
+
+ALLOW_KINDS = ("standard", "employer")
+
+
+def _read_raw() -> dict:
+    """The overrides file as written, not merged with the defaults.
+
+    A scan tolerates a broken file by falling back to defaults; a WRITE must
+    not, because overwriting it would throw away whatever the user was editing.
+    So this raises where `_load_overrides` shrugs.
+    """
+    path = config_path()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        raise ValueError(f"{path} could not be read as JSON ({e}) — refusing "
+                         f"to overwrite it") from e
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path} is not a JSON object — refusing to "
+                         f"overwrite it")
+    return raw
+
+
+def _write_raw(raw: dict) -> None:
+    """Replace the overrides file, then drop the cache.
+
+    Written to a temporary file and renamed: `os.replace` is atomic, so an
+    interrupted write cannot leave a truncated config — which would silently
+    reset every exclusion list to the defaults on the next scan.
+    """
+    path = config_path()
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(raw, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    os.replace(tmp, path)
+    settings(refresh=True)
+
+
+def _append_override(raw: dict, key: str, value: str, changed: dict) -> bool:
+    """Add `value` to `key` via the append form, unless it is already in effect.
+
+    The `+key` form adds to the defaults instead of replacing them, so allowing
+    one standard cannot quietly drop the other fifty-odd.
+    """
+    fold = value.casefold()
+    if any(fold == str(v).strip().casefold() for v in settings()[key]):
+        return False
+    plus = f"+{key}"
+    current = raw.get(plus)
+    raw[plus] = ([str(v) for v in current] if isinstance(current, list)
+                 else []) + [value]
+    changed["added"].setdefault(key, []).append(value)
+    return True
+
+
+def _remove_matching(raw: dict, key: str, employer: str, changed: dict) -> bool:
+    """Drop every `key` term that would match this employer.
+
+    `matched_employer_exclusion` is a substring test, so the term that caused
+    the drop is often not the employer's full name — "greggs" excludes "Greggs
+    plc". Removing exactly what WOULD match is what makes the button do what it
+    says, rather than removing a name that was never on the list.
+    """
+    name = employer.casefold()
+    drop = {t.strip().casefold() for t in settings()[key]
+            if t.strip().casefold() and t.strip().casefold() in name}
+    if not drop:
+        return False
+
+    def _without(seq):
+        return [str(v) for v in seq if str(v).strip().casefold() not in drop]
+
+    for form in (key, f"+{key}"):
+        if isinstance(raw.get(form), list):
+            raw[form] = _without(raw[form])
+
+    # A term that survives the file came from this module's defaults, and the
+    # only way to lift one of those is a full-replace list.
+    if any(str(v).strip().casefold() in drop for v in _KEYS[key]):
+        base = raw[key] if isinstance(raw.get(key), list) else _KEYS[key]
+        raw[key] = _without(base)
+
+    changed["removed"].setdefault(key, []).extend(sorted(drop))
+    return True
+
+
+def allow_forever(kind: str, value: str) -> dict:
+    """"Never exclude this standard" / "...this employer" from the audit view.
+
+    What each kind actually changes, because "never" has to mean something:
+
+      * standard — the course joins `digital_standards`. `judge()` keeps a
+        digital standard OUTRIGHT at step 1, before any exclusion runs, so this
+        is a real guarantee for every listing training to that standard.
+      * employer — every `employer_exclusions` term matching them is removed,
+        and they join `watchlist_employers`. The removal is what lifts the drop;
+        the watchlist entry is what turns a non-digital standard from them into
+        a REVIEW row rather than a silent one. A title exclusion still applies
+        — an "Apprentice Chef" at a watched employer is still an apprentice
+        chef — so this is "stop excluding them for being them", not "keep
+        everything they post".
+
+    Returns what changed, per list, so a caller can report what happened rather
+    than claim more than it did. Idempotent: a value already in effect writes
+    nothing and comes back with both maps empty.
+
+    ON RAILWAY THIS IS NOT PERMANENT. The container filesystem is ephemeral, so
+    a correction made from the Excluded screen holds until the next deploy or
+    restart and is then back to whatever `config/scout_filters.json` says in the
+    repo. Commit the change there to keep it. Making these DB-backed instead is
+    the fix, and is deliberately not done here: the brief said the action writes
+    the filter config, and one source of truth beats two that disagree.
+    """
+    kind = (kind or "").strip().casefold()
+    value = " ".join((value or "").split())
+    if kind not in ALLOW_KINDS:
+        raise ValueError(f"kind must be one of {', '.join(ALLOW_KINDS)}")
+    if not value:
+        raise ValueError("a value is required")
+
+    raw = _read_raw()
+    changed = {"added": {}, "removed": {}}
+
+    if kind == "standard":
+        _append_override(raw, "digital_standards", value, changed)
+    else:
+        _remove_matching(raw, "employer_exclusions", value, changed)
+        _append_override(raw, "watchlist_employers", value, changed)
+
+    if changed["added"] or changed["removed"]:
+        _write_raw(raw)
+        logger.info("scout_config: allow_forever(%s) added=%s removed=%s",
+                    kind, changed["added"], changed["removed"])
+    return changed

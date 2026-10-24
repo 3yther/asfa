@@ -3292,6 +3292,19 @@ def _ensure_scout_tables():
         # Only the six fields the detail panel shows are stored. The page HTML
         # is parsed and discarded — there is deliberately no column for it, so
         # a bulk copy of the site cannot accumulate here even by accident.
+        # Saved searches. `channels` is a comma-separated list of channel keys
+        # ("bell", "telegram"); only channels that are actually configured are
+        # ever used, and the Alerts screen shows each one's state.
+        """CREATE TABLE IF NOT EXISTS scout_saved_searches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            filters_json TEXT,
+            channels TEXT,
+            enabled INTEGER DEFAULT 1,
+            last_run_at TEXT,
+            last_match_count INTEGER DEFAULT 0,
+            created_at TEXT
+        )""",
         """CREATE TABLE IF NOT EXISTS scout_job_details (
             external_ref TEXT PRIMARY KEY,
             wage TEXT,
@@ -3862,6 +3875,81 @@ def update_scout_pipeline(pid, stage=None, notes=None, cv_version=None):
     return get_scout_pipeline_job(pid)
 
 
+def find_scout_pipeline_row(job_url=None, job_title=None, company=None):
+    """The pipeline row for a listing: url first, then normalised title+company.
+
+    Both identities are checked for the same reason `_backfill_scout_pipeline()`
+    checks both — a listing can already be on the board under either, and
+    treating them as two rows is exactly what strands the stage the user set on
+    the copy the screen does not read.
+
+    Normalisation happens in Python rather than SQL so SQLite and Postgres agree
+    on what "the same listing" means; the table is small enough (one row per
+    tracked listing) that reading it whole is cheaper than keeping two dialects
+    of LOWER/TRIM in step.
+    """
+    _ensure_scout_tables()
+    url_key = _norm_pipeline_key(job_url)
+    title_key = (_norm_pipeline_key(job_title), _norm_pipeline_key(company))
+    with get_db() as conn:
+        rows = [dict(r) for r in conn.cursor().execute(
+            "SELECT * FROM scout_pipeline "
+            "ORDER BY COALESCE(updated_at, created_at) DESC, id DESC"
+        ).fetchall()]
+
+    if url_key:
+        for row in rows:
+            if _norm_pipeline_key(row.get("job_url")) == url_key:
+                return row
+    if all(title_key):
+        for row in rows:
+            if (_norm_pipeline_key(row.get("job_title")),
+                    _norm_pipeline_key(row.get("company"))) == title_key:
+                return row
+    return None
+
+
+def upsert_scout_pipeline_for_listing(job_title, company, job_url=None,
+                                      location=None, stage=SCOUT_AUTO_STAGE,
+                                      source=None):
+    """Put a scraped listing on the board at `stage`, or move the row it has.
+
+    ONE SOURCE OF TRUTH. The stage select on a Find-roles card and the Tracker
+    board are the same `scout_pipeline` rows, so saving a role from a card and
+    moving it on the board cannot disagree about where it is.
+
+    The row is matched on url first, then on normalised title+company, so a
+    listing already tracked under either identity is MOVED rather than
+    duplicated. Returns the row, or None when there is nothing to identify it
+    by.
+    """
+    if not (job_title or "").strip() or not (company or "").strip():
+        return None
+    if stage not in SCOUT_ALL_STAGES:
+        stage = SCOUT_AUTO_STAGE
+
+    existing = find_scout_pipeline_row(job_url, job_title, company)
+    if not existing:
+        pid = add_scout_pipeline_job(job_title, company, job_url=job_url,
+                                     location=location, source=source,
+                                     stage=stage)
+        return get_scout_pipeline_job(pid)
+
+    # Matched on title+company by a row with no url of its own: carry the url
+    # over, or `get_apprenticeship_rows()` — which joins on job_url — will never
+    # see the stage this call just set, and the card would snap back to unsaved.
+    if (job_url or "").strip() and not (existing.get("job_url") or "").strip():
+        with get_db() as conn:
+            cur = conn.cursor()
+            ph = "%s" if USE_POSTGRES else "?"
+            cur.execute(f"UPDATE scout_pipeline SET job_url = {ph}, "
+                        f"updated_at = {ph} WHERE id = {ph}",
+                        (job_url, datetime.now().isoformat(), existing["id"]))
+
+    return (update_scout_pipeline(existing["id"], stage=stage)
+            or get_scout_pipeline_job(existing["id"]))
+
+
 def delete_scout_pipeline(pid) -> bool:
     _ensure_scout_tables()
     with get_db() as conn:
@@ -3898,6 +3986,151 @@ def get_scout_pipeline_reminders(days: int = 7) -> list:
             f"AND date_applied IS NOT NULL AND date_applied <= {ph} "
             f"ORDER BY date_applied ASC", (cutoff,))
         return [dict(r) for r in cur.fetchall()]
+
+
+# ── The roles read model's two queries ─────────────────────────────────────
+
+def get_apprenticeship_rows(include_closed: bool = True) -> list:
+    """Apprenticeship listings for the Find-roles screen.
+
+    Joined to the pipeline so a card knows whether it is saved and what stage
+    it is at, because that is what the bookmark toggle and the stage select
+    read. Archived rows are left out: they are history, and the screen has its
+    own Closed handling.
+    """
+    _ensure_scout_tables()
+    sql = ("SELECT j.*, p.stage AS stage, "
+           "       CASE WHEN p.id IS NULL THEN 0 ELSE 1 END AS saved "
+           "FROM scout_jobs j "
+           "LEFT JOIN scout_pipeline p "
+           "       ON p.job_url = j.url AND p.job_url <> '' "
+           "WHERE j.listing_type = 'apprenticeship' "
+           "  AND j.archived_at IS NULL")
+    if not include_closed:
+        sql += " AND COALESCE(j.status, 'open') = 'open'"
+    sql += " ORDER BY j.found_date DESC, j.id DESC"
+    with get_db() as conn:
+        return [dict(r) for r in conn.cursor().execute(sql).fetchall()]
+
+
+def get_all_scout_job_details() -> dict:
+    """{external_ref: detail row} for every listing that has been fetched."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        rows = conn.cursor().execute(
+            "SELECT * FROM scout_job_details").fetchall()
+    return {dict(r)["external_ref"]: dict(r) for r in rows}
+
+
+# ── Saved searches, and "new since your last visit" ────────────────────────
+
+# Channels Scout can actually reach. Email and Discord are deliberately absent:
+# neither is configured on Railway, and offering a channel that silently does
+# nothing is worse than not offering it.
+SCOUT_ALERT_CHANNELS = ("bell", "telegram")
+
+_LAST_VISIT_KEY = "scout_roles_last_visited"
+
+
+def scout_last_visited() -> str:
+    """When the roles screen was last opened, or "" the first time."""
+    try:
+        return kv_get(_LAST_VISIT_KEY) or ""
+    except Exception:
+        return ""
+
+
+def touch_scout_last_visited(stamp: str = None) -> str:
+    """Record this visit and return the PREVIOUS one.
+
+    The previous value is what "new since your last visit" is measured
+    against, so it has to be returned before being overwritten.
+    """
+    previous = scout_last_visited()
+    try:
+        kv_set(_LAST_VISIT_KEY,
+               stamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    except Exception as e:
+        logger.warning("touch_scout_last_visited failed: %s", e)
+    return previous
+
+
+def list_saved_searches() -> list:
+    _ensure_scout_tables()
+    with get_db() as conn:
+        rows = conn.cursor().execute(
+            "SELECT * FROM scout_saved_searches "
+            "ORDER BY id DESC").fetchall()
+    out = []
+    for row in rows:
+        d = dict(row)
+        try:
+            d["filters"] = json.loads(d.get("filters_json") or "{}")
+        except (TypeError, ValueError):
+            d["filters"] = {}
+        d["channel_list"] = [c for c in (d.get("channels") or "").split(",") if c]
+        out.append(d)
+    return out
+
+
+def add_saved_search(name: str, filters: dict, channels=None) -> int:
+    """Create a saved search. Unknown channels are dropped, not stored."""
+    _ensure_scout_tables()
+    name = (name or "").strip()[:120]
+    if not name:
+        return 0
+    keep = [c for c in (channels or []) if c in SCOUT_ALERT_CHANNELS]
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO scout_saved_searches "
+            f"(name, filters_json, channels, enabled, created_at) "
+            f"VALUES ({ph},{ph},{ph},1,{ph})",
+            (name, json.dumps(filters or {}), ",".join(keep),
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        return cur.lastrowid or 0
+
+
+def update_saved_search(search_id: int, enabled=None, channels=None) -> bool:
+    _ensure_scout_tables()
+    updates, vals = [], []
+    ph = "%s" if USE_POSTGRES else "?"
+    if enabled is not None:
+        updates.append(f"enabled = {ph}")
+        vals.append(1 if enabled else 0)
+    if channels is not None:
+        keep = [c for c in channels if c in SCOUT_ALERT_CHANNELS]
+        updates.append(f"channels = {ph}")
+        vals.append(",".join(keep))
+    if not updates:
+        return False
+    vals.append(search_id)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"UPDATE scout_saved_searches SET {', '.join(updates)} "
+                    f"WHERE id = {ph}", tuple(vals))
+        return bool(cur.rowcount)
+
+
+def delete_saved_search(search_id: int) -> bool:
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM scout_saved_searches WHERE id = {ph}",
+                    (search_id,))
+        return bool(cur.rowcount)
+
+
+def record_saved_search_run(search_id: int, matches: int) -> None:
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        conn.cursor().execute(
+            f"UPDATE scout_saved_searches SET last_run_at = {ph}, "
+            f"last_match_count = {ph} WHERE id = {ph}",
+            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), matches, search_id))
 
 
 # ── Scout detail pages (fetched per listing, cached for a day) ──────────────
@@ -3957,6 +4190,25 @@ def save_scout_job_detail(external_ref: str, fields: dict,
     return True
 
 
+# Who is eligible for a detail fetch, as one clause shared by the batch and the
+# single-listing path. The user's conditions are "kept listings only" and "never
+# within 24 hours", and two copies of that rule would eventually disagree.
+_DETAIL_CANDIDATE_SQL = (
+    "SELECT j.external_ref, j.url, d.fetched_at FROM scout_jobs j "
+    "LEFT JOIN scout_job_details d ON d.external_ref = j.external_ref "
+    "WHERE j.listing_type = 'apprenticeship' "
+    "  AND j.external_ref IS NOT NULL AND j.external_ref <> '' "
+    "  AND j.url IS NOT NULL AND j.url <> '' "
+    "  AND COALESCE(j.status, 'open') = 'open' "
+    "  AND j.archived_at IS NULL "
+)
+
+
+def _detail_cutoff() -> str:
+    return (datetime.now() - timedelta(hours=DETAIL_CACHE_HOURS)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def scout_details_needing_fetch(limit: int = 25) -> list:
     """Listings Scout has KEPT whose detail is missing or older than a day.
 
@@ -3966,23 +4218,45 @@ def scout_details_needing_fetch(limit: int = 25) -> list:
     there is nothing to act on and no reason to spend a request.
     """
     _ensure_scout_tables()
-    cutoff = (datetime.now() - timedelta(hours=DETAIL_CACHE_HOURS)
-              ).strftime("%Y-%m-%d %H:%M:%S")
     ph = "%s" if USE_POSTGRES else "?"
     with get_db() as conn:
         rows = conn.cursor().execute(
-            f"SELECT j.external_ref, j.url FROM scout_jobs j "
-            f"LEFT JOIN scout_job_details d "
-            f"       ON d.external_ref = j.external_ref "
-            f"WHERE j.listing_type = 'apprenticeship' "
-            f"  AND j.external_ref IS NOT NULL AND j.external_ref <> '' "
-            f"  AND j.url IS NOT NULL AND j.url <> '' "
-            f"  AND COALESCE(j.status, 'open') = 'open' "
-            f"  AND j.archived_at IS NULL "
+            _DETAIL_CANDIDATE_SQL +
             f"  AND (d.fetched_at IS NULL OR d.fetched_at < {ph}) "
             f"ORDER BY d.fetched_at IS NULL DESC, j.found_date DESC "
-            f"LIMIT {ph}", (cutoff, limit)).fetchall()
+            f"LIMIT {ph}", (_detail_cutoff(), limit)).fetchall()
     return [dict(r) for r in rows]
+
+
+def scout_detail_candidate(external_ref: str) -> dict:
+    """Whether ONE listing may be fetched now, and why not if it may not.
+
+    The panel's "Fetch details" button needs the same answer the batch gets, so
+    it asks the same question of the same clause:
+
+        {"eligible": bool, "url": str, "fresh": bool}
+
+    `eligible` is False when there is no such kept, open, unarchived listing at
+    all; `fresh` is True when it was fetched inside DETAIL_CACHE_HOURS, which is
+    a refusal to make a second request rather than a failure.
+    """
+    out = {"eligible": False, "url": "", "fresh": False}
+    if not (external_ref or "").strip():
+        return out
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        row = conn.cursor().execute(
+            _DETAIL_CANDIDATE_SQL + f"  AND j.external_ref = {ph} LIMIT 1",
+            (external_ref,)).fetchone()
+    if not row:
+        return out
+    row = dict(row)
+    out["eligible"] = True
+    out["url"] = row.get("url") or ""
+    fetched = row.get("fetched_at")
+    out["fresh"] = bool(fetched and str(fetched) >= _detail_cutoff())
+    return out
 
 
 def count_scout_job_details() -> dict:
@@ -4172,6 +4446,38 @@ def get_scout_programme_companies() -> list:
             "SELECT DISTINCT company_norm FROM scout_programmes "
             "WHERE company_norm <> ''").fetchall()
     return sorted({dict(r)["company_norm"] for r in rows})
+
+
+def get_watched_employer_names() -> list:
+    """Names and aliases of every WATCHED employer, for the read model.
+
+    `employers` is a SQLAlchemy table (models.Employer) but this is plain SQL
+    on purpose: the Find-roles read model must not need an app context to
+    answer "is this employer on the watchlist", and the question is one SELECT.
+
+    Returns [] when the table does not exist yet — a fresh install has not run
+    create_all(), and an empty watchlist is the honest answer, not an error.
+    """
+    _ensure_scout_tables()
+    out = set()
+    try:
+        with get_db() as conn:
+            rows = conn.cursor().execute(
+                "SELECT name, aliases FROM employers "
+                "WHERE watching IS NULL OR watching NOT IN (0, FALSE)"
+                if USE_POSTGRES else
+                "SELECT name, aliases FROM employers "
+                "WHERE watching IS NULL OR watching <> 0").fetchall()
+    except Exception as e:
+        logger.debug("get_watched_employer_names: no employers table (%s)", e)
+        return []
+    for row in rows:
+        d = dict(row)
+        out.add((d.get("name") or "").strip())
+        for alias in (d.get("aliases") or "").split(","):
+            if alias.strip():
+                out.add(alias.strip())
+    return sorted(n for n in out if n)
 
 
 def count_scout_programmes() -> dict:

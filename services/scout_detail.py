@@ -120,3 +120,75 @@ def detail_for(external_ref: str) -> dict:
     """
     row = db.get_scout_job_detail(external_ref) or {}
     return {key: row.get(key) or None for key in db.DETAIL_FIELDS}
+
+
+def fetch_one(external_ref: str, scraper=None) -> dict:
+    """Fetch ONE listing's detail page, for the slide-over panel.
+
+    The same six conditions as the batch, enforced the same way rather than
+    re-stated. Eligibility and the 24-hour cache are both answered by
+    `db.scout_detail_candidate`, which is the clause the batch runs, so the
+    button cannot be a looser door than the scheduled job:
+
+      * the listing must already be a kept, open, unarchived apprenticeship —
+        so this cannot be pointed at an arbitrary URL;
+      * a page fetched inside DETAIL_CACHE_HOURS is served from the cache with
+        NO request;
+      * the URL is re-checked against the vacancy-detail shape;
+      * the scraper's one-second spacing, identifying User-Agent and blocked
+        cookie jar are the search's, not a second configuration;
+      * a 429 or 5xx returns "backoff" and stops. There is no retry.
+
+    Returns {"status", "cached", "fields_filled"}, where status is one of:
+    cached / ok / ok_empty / backoff / error / not_found /
+    refused_not_detail_url. Never raises — the panel shows a message.
+    """
+    out = {"status": "error", "cached": False, "fields_filled": 0}
+    ref = (external_ref or "").strip()
+    if not ref:
+        out["status"] = "not_found"
+        return out
+
+    try:
+        candidate = db.scout_detail_candidate(ref)
+    except Exception as e:
+        logger.error("scout_detail: fetch_one(%s) lookup failed: %s", ref, e)
+        return out
+
+    if not candidate.get("eligible"):
+        out["status"] = "not_found"
+        return out
+    if candidate.get("fresh"):
+        out["status"], out["cached"] = "cached", True
+        return out
+
+    url = (candidate.get("url") or "").strip()
+    if not DETAIL_URL_RE.match(url):
+        db.save_scout_job_detail(ref, {}, status="refused_not_detail_url")
+        out["status"] = "refused_not_detail_url"
+        return out
+
+    scraper = scraper or GovUkScraper()
+    try:
+        fields = scraper.fetch_detail(url)
+    except DetailFetchBackoff as e:
+        # No retry here either. One request, and if the site pushed back that
+        # is the end of it until the user asks again.
+        logger.warning("scout_detail: fetch_one backing off on %s — %s", ref, e)
+        out["status"] = "backoff"
+        return out
+    except ScraperError as e:
+        logger.info("scout_detail: fetch_one(%s) failed: %s", ref, e)
+        db.save_scout_job_detail(ref, {}, status="error")
+        return out
+    except Exception as e:                              # pragma: no cover
+        logger.warning("scout_detail: fetch_one(%s) unexpected error: %s",
+                       ref, e)
+        db.save_scout_job_detail(ref, {}, status="error")
+        return out
+
+    filled = sum(1 for key in db.DETAIL_FIELDS if fields.get(key))
+    db.save_scout_job_detail(ref, fields, status="ok" if filled else "ok_empty")
+    out["status"] = "ok" if filled else "ok_empty"
+    out["fields_filled"] = filled
+    return out
