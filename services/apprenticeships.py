@@ -30,21 +30,31 @@ from datetime import date, datetime, timedelta
 import database as db
 from models import Employer, ScanLog, ScoutJob
 from models import db as orm
+from services import scout_config
 from services.scrapers.gov_uk import GovUkScraper, RawVacancy, ScraperError
 
 logger = logging.getLogger("asfa.apprenticeships")
 
-DEFAULT_KEYWORDS = ("cyber security,software developer,data,cloud,"
-                    "network engineer,devops")
-
 # Aliases this short only match on a word boundary — see _alias_matches.
 _SHORT_ALIAS_LEN = 3
 
+# Set once the first scan has recorded what already exists. Until then a scan is
+# a silent baseline: widening the keyword list makes ~50 long-standing roles
+# look new, and mailing all of them would train the user to ignore the alert.
+_BASELINE_KEY = "apprenticeship_alert_baseline_done"
+
+# A new role is alerted at this level or above, or when its level is unknown.
+# Below it, the listing is still persisted and still on the dashboard.
+_ALERT_MIN_LEVEL = 4
+
 
 def keyword_scans() -> list:
-    """The keyword list, from KEYWORD_SCANS."""
-    raw = os.environ.get("KEYWORD_SCANS") or DEFAULT_KEYWORDS
-    return [k.strip() for k in raw.split(",") if k.strip()]
+    """The search terms, from services/scout_config (KEYWORD_SCANS still wins).
+
+    The list itself lives in scout_config so the production scan and the
+    coverage measurement cannot search different things.
+    """
+    return scout_config.search_keywords()
 
 
 def min_level() -> int:
@@ -106,16 +116,23 @@ def match_employer(raw_name: str, employers=None):
 
 # ── Persistence ──────────────────────────────────────────────────────────────
 
-def _persist_vacancies(raws, employer, new_bucket, employers=None) -> int:
+def _persist_vacancies(raws, employer, new_bucket, employers=None,
+                       excluded=None, alert_skipped=None,
+                       watchlist=None) -> int:
     """Insert new apprenticeships, refresh last_seen on ones we already have.
 
-    Dedup is by `external_ref` (the gov.uk VAC reference), which is what makes
-    the same posting surfacing under several keyword scans collapse to one row.
+    Dedup is by `external_ref` (the gov.uk VAC reference, or a namespaced id for
+    an off-site cross-post), which is what makes the same posting surfacing
+    under several keyword scans collapse to one row — and what keeps one
+    vacancy to one alert however many locations or searches found it.
     Returns the count newly inserted.
 
-    Only vacancies matched to a *watched* employer go into `new_bucket` (and so
-    into an alert). Unmatched ones are still persisted — the record is worth
-    having — they just don't notify.
+    Relevance filtering happens here, before the insert, via
+    `scout_config.judge`. An excluded listing is not persisted; it is appended
+    to `excluded` with its reason so the caller can log it. Every new listing
+    that survives goes into `new_bucket`, not only watchlist matches — a Level
+    4+ digital role is worth knowing about whoever posts it. A watchlist match
+    is flagged for a star rather than being the price of admission.
     """
     new_count = 0
     now = datetime.utcnow()
@@ -135,6 +152,23 @@ def _persist_vacancies(raws, employer, new_bucket, employers=None) -> int:
             continue
 
         matched = employer or match_employer(raw.employer_name_raw, employers)
+
+        verdict = scout_config.judge(raw.title, raw.employer_name_raw,
+                                     raw.training_course,
+                                     watchlist=watchlist)
+        if not verdict.keep:
+            if excluded is not None:
+                excluded.append({
+                    "external_ref": raw.reference,
+                    "title": raw.title,
+                    "employer": raw.employer_name_raw,
+                    "reason": verdict.reason,
+                    "detail": verdict.detail,
+                    "course": raw.training_course,
+                    "url": raw.url,
+                    "listing_type": "apprenticeship",
+                })
+            continue
 
         row = ScoutJob(
             listing_type="apprenticeship",
@@ -168,8 +202,23 @@ def _persist_vacancies(raws, employer, new_bucket, employers=None) -> int:
         orm.session.add(row)
         orm.session.flush()                   # assign an id before we bucket it
         new_count += 1
-        if matched:
+        # A watchlist match earns a star, not the right to be alerted at all.
+        # Either source counts: the Employer table (which has alias handling and
+        # the /scout/employers toggles) or an imported programme company.
+        row.starred = bool(matched) or bool(
+            scout_config.matched_watchlist_employer(
+                raw.employer_name_raw, watchlist=watchlist))
+        row.needs_review = bool(getattr(verdict, "review", False))
+        row.review_standard = verdict.detail if row.needs_review else ""
+        # The keyword passes no longer apply a level floor, so Level 2/3 roles
+        # are now PERSISTED — they are real listings and worth having on the
+        # dashboard. They are not ALERTED: the rule is a new Level 4+ digital
+        # role, plus the level-unknown group. Alerting Level 2 would undo the
+        # reason the floor existed.
+        if row.level is None or row.level >= _ALERT_MIN_LEVEL:
             new_bucket.append(row)
+        elif alert_skipped is not None:
+            alert_skipped.append(row.external_ref)
     orm.session.commit()
     return new_count
 
@@ -266,10 +315,27 @@ def scan_apprenticeships() -> dict:
     scraper = GovUkScraper()
     level = min_level()
     summary = {"employers_scanned": 0, "keywords_scanned": 0, "new": 0,
-               "closed": 0, "alerted": 0, "errors": []}
+               "closed": 0, "alerted": 0, "excluded": 0, "errors": [],
+               "baseline_run": False, "route_scanned": 0, "route_found": 0,
+               "near_home_found": 0, "near_home_tagged": 0,
+               "not_alerted_below_level": 0}
     new_bucket = []
+    excluded = []
+    alert_skipped = []
 
     employers = Employer.query.filter_by(watching=True).all()
+
+    # The imported programmes ARE the watchlist once they exist: these are the
+    # employers the user actually tracks, and they replace the placeholder list
+    # in services/scout_config.py. `judge` is a pure function and cannot reach
+    # the database, so the list is read once here and passed down. None means
+    # "fall back to the config list", which is what a fresh install with no
+    # import yet still needs.
+    try:
+        watchlist = db.get_scout_programme_companies() or None
+    except Exception as e:
+        logger.warning("apprenticeships: programme watchlist unavailable: %s", e)
+        watchlist = None
 
     # ---- Per-employer scans ----
     for emp in employers:
@@ -285,16 +351,72 @@ def scan_apprenticeships() -> dict:
             duration_ms = int((time.time() - started) * 1000)
             new_count = _persist_vacancies(raws, employer=emp,
                                            new_bucket=new_bucket,
-                                           employers=employers)
+                                           employers=employers,
+                                           excluded=excluded,
+                                           alert_skipped=alert_skipped,
+                                           watchlist=watchlist)
             summary["employers_scanned"] += 1
             summary["new"] += new_count
             _log_scan("employer", alias, len(raws), new_count, duration_ms)
+
+    # ---- Digital-route sweep (no search term) ----
+    # The one pass that does not depend on wording: gov.uk's own route filter
+    # selects Digital Level 4+ listings, so a role whose advert uses none of our
+    # keywords is still found. Runs first so the keyword scans that follow are
+    # mostly confirming what it already has.
+    started = time.time()
+    try:
+        raws = scraper.by_route(min_level=1)
+    except ScraperError as e:
+        summary["errors"].append(f"route: {e}")
+        _log_scan("route", "digital L4+", 0, 0,
+                  int((time.time() - started) * 1000), error=str(e))
+    else:
+        duration_ms = int((time.time() - started) * 1000)
+        new_count = _persist_vacancies(raws, employer=None,
+                                       new_bucket=new_bucket,
+                                       employers=employers,
+                                       excluded=excluded,
+                                       alert_skipped=alert_skipped,
+                                       watchlist=watchlist)
+        summary["route_scanned"] = 1
+        summary["route_found"] = len(raws)
+        summary["new"] += new_count
+        _log_scan("route", "digital L4+", len(raws), new_count, duration_ms)
+
+    # ---- Near-home pass: TAG only, never filter ----
+    # The same route query narrowed to the configured radius from home. A role
+    # outside the radius is still a role — a degree apprenticeship is worth
+    # commuting or relocating for — so this only marks what is close, and
+    # nothing is dropped for being far.
+    try:
+        near = scraper.by_route_near_home(min_level=1)
+    except ScraperError as e:
+        summary["errors"].append(f"near_home: {e}")
+        near = []
+    if near:
+        near_refs = {r.reference for r in near}
+        summary["near_home_found"] = len(near_refs)
+        tagged = (ScoutJob.query
+                  .filter(ScoutJob.listing_type == "apprenticeship",
+                          ScoutJob.external_ref.in_(near_refs))
+                  .all())
+        for row in tagged:
+            row.near_home = 1
+        if tagged:
+            orm.session.commit()
+        summary["near_home_tagged"] = len(tagged)
 
     # ---- Keyword scans (surface employers we don't track by name) ----
     for kw in keyword_scans():
         started = time.time()
         try:
-            raws = scraper.by_keyword(kw, min_level=level)
+            # NO level filter on the keyword passes. The route sweep already
+            # covers Level 4+ for anything gov.uk tagged to the Digital route;
+            # these passes exist to catch what it cannot see, above all the
+            # off-site Civil Service cross-posts, which carry no course and so
+            # no readable level. A level floor here would discard exactly those.
+            raws = scraper.by_keyword(kw, min_level=1)
         except ScraperError as e:
             summary["errors"].append(f"kw:{kw}: {e}")
             _log_scan("keyword", kw, 0, 0,
@@ -303,7 +425,10 @@ def scan_apprenticeships() -> dict:
         duration_ms = int((time.time() - started) * 1000)
         new_count = _persist_vacancies(raws, employer=None,
                                        new_bucket=new_bucket,
-                                       employers=employers)
+                                       employers=employers,
+                                       excluded=excluded,
+                                       alert_skipped=alert_skipped,
+                                       watchlist=watchlist)
         summary["keywords_scanned"] += 1
         summary["new"] += new_count
         _log_scan("keyword", kw, len(raws), new_count, duration_ms)
@@ -315,17 +440,50 @@ def scan_apprenticeships() -> dict:
         logger.error("apprenticeships: closure detection failed: %s", e)
         orm.session.rollback()
 
-    # ---- Alert on new, employer-matched postings only ----
+    # ---- Record what the relevance filter dropped ----
+    # Logged, not discarded: a wide keyword net is only defensible if what it
+    # throws away can be audited.
+    try:
+        db.log_scout_exclusions(excluded)
+        summary["excluded"] = len(excluded)
+        summary["not_alerted_below_level"] = len(alert_skipped)
+    except Exception as e:
+        logger.error("apprenticeships: exclusion log failed: %s", e)
+
+    # ---- Alert, unless this is the first-ever run ----
+    # The first run is a SILENT BASELINE. Widening the keyword list makes every
+    # role already on the site look new; mailing ~50 of them at once would
+    # teach the user to ignore the alert, which is the one failure this feature
+    # cannot recover from. So the first scan marks everything it finds as
+    # already seen and sends nothing.
     if new_bucket:
         try:
-            scout_notify.alert_new_listings(apprenticeships=new_bucket)
-            for row in new_bucket:
-                row.alerted = 1
-            orm.session.commit()
-            summary["alerted"] = len(new_bucket)
+            if db.kv_get(_BASELINE_KEY) != "1":
+                for row in new_bucket:
+                    row.alerted = 1
+                orm.session.commit()
+                db.kv_set(_BASELINE_KEY, "1")
+                summary["baseline_run"] = True
+                summary["alerted"] = 0
+                logger.info("apprenticeships: silent baseline — %d listing(s) "
+                            "marked as seen, no alert sent", len(new_bucket))
+            else:
+                scout_notify.alert_new_listings(apprenticeships=new_bucket)
+                for row in new_bucket:
+                    row.alerted = 1
+                orm.session.commit()
+                summary["alerted"] = len(new_bucket)
         except Exception as e:
             orm.session.rollback()
             logger.error("apprenticeships: alert failed: %s", e)
+    elif db.kv_get(_BASELINE_KEY) != "1":
+        # Nothing found on the first run; still close the baseline so the next
+        # genuinely-new role alerts rather than being swallowed.
+        try:
+            db.kv_set(_BASELINE_KEY, "1")
+            summary["baseline_run"] = True
+        except Exception as e:
+            logger.error("apprenticeships: baseline flag failed: %s", e)
 
     # ---- Once-daily closing-soon reminder ----
     try:
@@ -334,6 +492,9 @@ def scan_apprenticeships() -> dict:
         logger.error("apprenticeships: closing-soon failed: %s", e)
         orm.session.rollback()
 
-    logger.info("Apprenticeship scan complete — %d new, %d closed, %d alerted",
-                summary["new"], summary["closed"], summary["alerted"])
+    logger.info("Apprenticeship scan complete — %d new, %d closed, %d alerted, "
+                "%d excluded, route sweep found %d%s",
+                summary["new"], summary["closed"], summary["alerted"],
+                summary["excluded"], summary["route_found"],
+                " (silent baseline)" if summary["baseline_run"] else "")
     return summary

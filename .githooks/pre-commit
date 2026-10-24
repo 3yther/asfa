@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# ASFA pre-commit hook — block secrets before they reach a commit.
+#
+# Install (or re-install after editing this file):
+#     git config core.hooksPath .githooks
+#
+# That one setting makes git use this directory directly, so the hook travels
+# with the repo and cannot drift from a copy under .git/hooks. See SECURITY.md.
+#
+# Scope: the STAGED diff only. That is the pre-commit question ("may this change
+# be committed?") and it keeps the hook fast. History is a separate, slower scan
+# (`gitleaks detect`) — run that occasionally, not on every commit.
+#
+# This repository is PUBLIC. A literal Postgres password did reach a commit here
+# once, so the hook deliberately FAILS CLOSED: if gitleaks is missing it refuses
+# the commit rather than passing silently. A secret-scanning hook that no-ops
+# when its scanner is absent is worse than no hook, because it is trusted.
+
+set -uo pipefail
+
+RED=$'\033[31m'; YEL=$'\033[33m'; BOLD=$'\033[1m'; OFF=$'\033[0m'
+[ -t 2 ] || { RED=""; YEL=""; BOLD=""; OFF=""; }
+
+die() { printf '%s\n' "$@" >&2; exit 1; }
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    die "" \
+        "${RED}${BOLD}pre-commit: gitleaks is not installed — commit refused.${OFF}" \
+        "" \
+        "This hook fails closed on purpose: this repo is public, and a hook that" \
+        "skips scanning when the scanner is missing gives false confidence." \
+        "" \
+        "Install it:" \
+        "    macOS         brew install gitleaks" \
+        "    Linux         see https://github.com/gitleaks/gitleaks/releases" \
+        "    Go toolchain  go install github.com/zricethezav/gitleaks/v8@latest" \
+        "" \
+        "If you genuinely must bypass this once, you are telling git you have" \
+        "checked the diff yourself:  git commit --no-verify" \
+        ""
+fi
+
+# Nothing staged (e.g. `git commit` during a merge resolution with no changes).
+git diff --cached --quiet && exit 0
+
+# Pick an invocation this gitleaks build supports. The CLI changed across 8.x:
+# `protect --staged` is the long-standing form, `git --staged` replaced it in
+# 8.19+, and `stdin` works everywhere as a fallback via the diff on stdin.
+# --redact keeps any finding's value out of the terminal and CI logs.
+COMMON=(--redact --no-banner)
+HELP="$(gitleaks --help 2>&1 || true)"
+
+run_scan() {
+    if printf '%s' "$HELP" | grep -qE '^[[:space:]]+git[[:space:]]'; then
+        gitleaks git --staged "${COMMON[@]}" 2>&1
+    elif printf '%s' "$HELP" | grep -qE '^[[:space:]]+protect[[:space:]]'; then
+        gitleaks protect --staged "${COMMON[@]}" 2>&1
+    else
+        git diff --cached | gitleaks stdin "${COMMON[@]}" 2>&1
+    fi
+}
+
+OUTPUT="$(run_scan)"
+STATUS=$?
+
+if [ "$STATUS" -ne 0 ]; then
+    printf '%s\n' "$OUTPUT" >&2
+    printf '%s\n' "" \
+        "${RED}${BOLD}pre-commit: gitleaks found a potential secret — commit refused.${OFF}" \
+        "" \
+        "Values above are redacted. To deal with it:" \
+        "" \
+        "  ${BOLD}A real secret${OFF} — remove it from the staged change and put it in an" \
+        "  environment variable (see .env.example). If it was ever pushed, treat it" \
+        "  as compromised and ROTATE it; deleting it from the file is not enough," \
+        "  because git history keeps the old blob." \
+        "" \
+        "  ${BOLD}A false positive${OFF} — prefer rewording the line (a placeholder that reads" \
+        "  as one, e.g. \"\$MY_TOKEN\" rather than a realistic-looking literal)." \
+        "  If it cannot be reworded, add the finding's fingerprint to" \
+        "  .gitleaksignore with a comment saying why it is safe. Get the" \
+        "  fingerprint from:  gitleaks git --staged --report-format json" \
+        "" >&2
+    exit 1
+fi
+
+exit 0

@@ -25,5 +25,9 @@ pillow==11.1.0
 beautifulsoup4==4.12.3
 google-search-results==2.4.2
 pypdf==4.3.1
+# Reads the tracker spreadsheet in scripts/import_scout_spreadsheet.py (a
+# one-time import, not used by the web app). read_only+data_only, so no macros
+# or formulas are evaluated.
+openpyxl==3.1.5
 # For scripts/asfa_mcp.py (the stdio MCP server); not used by the Flask web app.
 mcp>=1.2,<2

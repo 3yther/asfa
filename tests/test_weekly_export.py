@@ -190,6 +190,7 @@ def test_skips_cleanly_when_smtp_unconfigured(monkeypatch):
 
 
 def test_email_carries_five_csv_attachments(monkeypatch):
+    monkeypatch.setenv("EXPORT_EMAIL_TO", "exports@example.invalid")
     sent = {}
 
     def fake_send(subject, body, attachments, to_addr=None):
@@ -211,16 +212,33 @@ def test_email_carries_five_csv_attachments(monkeypatch):
         "gym.csv", "nutrition.csv", "steps.csv", "sleep.csv", "cardio.csv"]
 
 
-def test_recipient_defaults_to_owner_and_env_overrides(monkeypatch):
+def test_the_recipient_comes_from_the_environment_and_has_no_default(monkeypatch):
+    """This repository is public. A default address in the source is a personal
+    address published on GitHub, so there is none — unset means no send."""
     monkeypatch.delenv("EXPORT_EMAIL_TO", raising=False)
     res = weekly_export.send_weekly_export(
         start="2026-03-01", end="2026-03-07", dry_run=True)
-    assert res["to"] == weekly_export.DEFAULT_RECIPIENT
+    assert res["to"] == ""
 
     monkeypatch.setenv("EXPORT_EMAIL_TO", "someone.else@example.com")
     res = weekly_export.send_weekly_export(
         start="2026-03-01", end="2026-03-07", dry_run=True)
     assert res["to"] == "someone.else@example.com"
+
+
+def test_an_unset_recipient_skips_the_send_without_an_error(monkeypatch):
+    monkeypatch.delenv("EXPORT_EMAIL_TO", raising=False)
+    monkeypatch.setattr(weekly_export.alerts, "smtp_configured", lambda: True)
+
+    def _boom(*a, **k):                       # pragma: no cover - must not run
+        raise AssertionError("no recipient, so nothing should be sent")
+
+    monkeypatch.setattr(weekly_export.alerts, "send_email_with_attachments",
+                        _boom)
+    res = weekly_export.send_weekly_export(start="2026-03-01", end="2026-03-07")
+    assert res["skipped"] == "no_recipient"
+    assert res["emailed"] is False
+    assert res["rows"] >= 0, "the CSVs are still built"
 
 
 def test_scheduler_registers_the_job_for_sunday_noon_london():

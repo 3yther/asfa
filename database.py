@@ -1,6 +1,7 @@
 import calendar
 import hashlib
 import json
+import logging
 import os
 import random
 import re
@@ -9,6 +10,8 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger("asfa.database")
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -2103,7 +2106,11 @@ def get_nutrition_trends(days: int = 7, end_date: str = None) -> dict:
     code path powers 7-day trends and the 30-day energy-balance view."""
     days = max(1, min(90, int(days)))
     if end_date is None:
-        end_date = datetime.now().strftime("%Y-%m-%d")
+        # today_str(), not datetime.now(): meals are written against APP_TZ, so
+        # a window ending on the CONTAINER's date asked for a different day.
+        # Between 23:00 UTC and midnight while London is on BST the two are
+        # different dates, and the chart's newest column read back empty.
+        end_date = today_str()
     end = datetime.strptime(end_date, "%Y-%m-%d")
     dates = [(end - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
              for i in range(days)]
@@ -3226,6 +3233,118 @@ def _ensure_scout_tables():
             created_at TEXT,
             updated_at TEXT
         )""",
+        # Listings the relevance filter dropped. Kept so a wide keyword net is
+        # auditable instead of a black box: the bias is to keep anything
+        # uncertain, and this is how you check what that bias actually cost.
+        # One row per external_ref — a listing excluded on every scan must not
+        # grow the log without bound.
+        # Programmes: a company's apprenticeship scheme, tracked whether or not
+        # a live vacancy exists yet. Most of what the user follows is a
+        # programme they are waiting to open, so the tracker cannot be keyed on
+        # scraped vacancies alone.
+        #
+        # Columns are grouped by OWNER, which is what makes a re-import safe:
+        #   - identity: company/programme plus their normalised forms (the key)
+        #   - import-owned: refreshed from the spreadsheet on every run
+        #   - user-owned: the tracker state, never touched by an import
+        #   - provenance: imported_at / edited_in_scout
+        """CREATE TABLE IF NOT EXISTS scout_programmes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT NOT NULL,
+            programme TEXT NOT NULL,
+            company_norm TEXT NOT NULL,
+            programme_norm TEXT NOT NULL,
+
+            sector TEXT, specialization TEXT, level TEXT, duration TEXT,
+            university_partner TEXT, degree_awarded TEXT, locations TEXT,
+            salary_y1 TEXT, entry_requirements TEXT, t_level_accepted TEXT,
+            typical_opens TEXT, typical_closes TEXT, rolling TEXT,
+            cohort_size TEXT, assessment_process TEXT, official_link TEXT,
+            import_notes TEXT, cloud_sec_fit TEXT,
+
+            open_months TEXT,
+            timeline_close TEXT,
+            timeline_fit TEXT,
+            confirmed_open_date TEXT,
+            confirmed_close_date TEXT,
+            confirmed_source TEXT,
+
+            stage TEXT,
+            next_step TEXT,
+            next_step_date TEXT,
+            deadline TEXT,
+            applied_date TEXT,
+            link TEXT,
+            notes TEXT,
+
+            linked_external_ref TEXT,
+            suggested_external_ref TEXT,
+
+            imported_at TEXT,
+            edited_in_scout INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+        )""",
+        # Detail-page fields, fetched one listing at a time from the vacancy's
+        # own page. Doubles as the fetch CACHE: `fetched_at` is what enforces
+        # "never re-fetch the same page within 24 hours".
+        #
+        # Only the six fields the detail panel shows are stored. The page HTML
+        # is parsed and discarded — there is deliberately no column for it, so
+        # a bulk copy of the site cannot accumulate here even by accident.
+        # Saved searches. `channels` is a comma-separated list of channel keys
+        # ("bell", "telegram"); only channels that are actually configured are
+        # ever used, and the Alerts screen shows each one's state.
+        """CREATE TABLE IF NOT EXISTS scout_saved_searches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            filters_json TEXT,
+            channels TEXT,
+            enabled INTEGER DEFAULT 1,
+            last_run_at TEXT,
+            last_match_count INTEGER DEFAULT 0,
+            created_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS scout_job_details (
+            external_ref TEXT PRIMARY KEY,
+            wage TEXT,
+            hours TEXT,
+            start_date TEXT,
+            duration TEXT,
+            closing_date TEXT,
+            description TEXT,
+            fetched_at TEXT,
+            fetch_status TEXT
+        )""",
+        # Corrections the user made from the Excluded screen. A DELTA on top
+        # of config/scout_filters.json, not a replacement for it: the file
+        # stays the hand-editable default layer and these are applied over it.
+        #
+        # DB-backed rather than written into the file because Railway's
+        # container filesystem is ephemeral — a correction written to the file
+        # in production lasts until the next deploy and then silently reverts,
+        # which is the worst of both worlds.
+        """CREATE TABLE IF NOT EXISTS scout_filter_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            list_key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            op TEXT NOT NULL DEFAULT 'add',
+            source TEXT,
+            created_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS scout_exclusions (
+            external_ref TEXT PRIMARY KEY,
+            title TEXT,
+            employer TEXT,
+            reason TEXT,
+            detail TEXT,
+            course TEXT,
+            url TEXT,
+            listing_type TEXT,
+            first_excluded_at TEXT,
+            last_excluded_at TEXT,
+            times_seen INTEGER DEFAULT 1
+        )""",
     ]
     with get_db() as conn:
         cur = conn.cursor()
@@ -3234,6 +3353,9 @@ def _ensure_scout_tables():
                 stmt = stmt.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
             cur.execute(stmt)
         # CV keyword-match analysis (Part 4). All nullable.
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "idx_scout_programmes_key "
+                    "ON scout_programmes (company_norm, programme_norm)")
         _add_column(cur, "scout_pipeline", "cv_match_score", "INTEGER")
         _add_column(cur, "scout_pipeline", "missing_keywords", "TEXT")
         _add_column(cur, "scout_pipeline", "match_analysis_at", "TEXT")
@@ -3420,6 +3542,12 @@ def init_apprenticeships():
         _add_column(cur, "scout_jobs", "status", "TEXT DEFAULT 'open'")
         _add_column(cur, "scout_jobs", "last_seen", dt_t)
         _add_column(cur, "scout_jobs", "alerted", "INTEGER DEFAULT 0")
+        # Near-home tag from the radius-limited route pass. Nullable and
+        # defaulted, so every existing row reads back as "not known to be near".
+        _add_column(cur, "scout_jobs", "near_home", "INTEGER DEFAULT 0")
+        # Kept despite a non-digital standard because the employer is watched.
+        _add_column(cur, "scout_jobs", "needs_review", "INTEGER DEFAULT 0")
+        _add_column(cur, "scout_jobs", "review_standard", "TEXT")
 
         # Rows that predate the column (SQLite backfills the DEFAULT, but a
         # pre-existing NULL from an earlier partial run would break filtering).
@@ -3491,7 +3619,69 @@ def delete_scout_application(app_id) -> None:
 
 
 # ── Scout pipeline (CRM-style stage board) ──────────────────────────────────
-SCOUT_STAGES = ("saved", "applied", "interview", "offer", "rejected")
+# Board order, left to right. `interested` sits between saved and applied: the
+# "I mean to apply for this" tier, which `saved` cannot express because the boot
+# backfill assigns it automatically (see SCOUT_AUTO_STAGE).
+# Board order, left to right. Matches the real application process: an
+# assessment centre follows a video interview, which follows an online
+# assessment, and "withdrawn" is a distinct outcome from "rejected".
+SCOUT_STAGES = (
+    "saved",
+    "interested",
+    "applied",
+    "online_assessment",
+    "video_interview",
+    "assessment_centre",
+    "offer",
+    "rejected",
+    "withdrawn",
+)
+
+# Stages no longer offered but still valid in the database. Rows are NOT
+# migrated: "interview" was a real thing the user recorded, and rewriting it to
+# one of the newer stages would be inventing detail they never entered. It is
+# accepted on write, treated as tracked, exempt from the cleanup, and displayed
+# as "Interview".
+SCOUT_LEGACY_STAGES = ("interview",)
+
+# Every stage a row may legitimately hold.
+SCOUT_ALL_STAGES = SCOUT_STAGES + SCOUT_LEGACY_STAGES
+
+# The stage `_backfill_scout_pipeline()` inserts scraped listings at. It is a
+# default, not a user decision, which is why it is the only stage the nightly
+# cleanup may delete.
+SCOUT_AUTO_STAGE = "saved"
+
+# Stages that only exist because the user put a listing there. `cleanup_job_pipeline`
+# must never delete these: an apprenticeship cycle runs for months, far longer
+# than the 14-day window the cleanup was tuned for, so age alone says nothing
+# about whether a tracked role still matters. Legacy stages are included — a
+# retired label is still a decision the user made.
+SCOUT_TRACKED_STAGES = tuple(s for s in SCOUT_ALL_STAGES
+                             if s != SCOUT_AUTO_STAGE)
+
+# Display labels. Derived from the key except where the key is an abbreviation
+# or a retired label, so the UI never has to special-case one.
+SCOUT_STAGE_LABELS = {
+    "saved": "Saved",
+    "interested": "Interested",
+    "applied": "Applied",
+    "online_assessment": "Online Assessment",
+    "video_interview": "Video Interview",
+    "assessment_centre": "Assessment Centre",
+    "offer": "Offer",
+    "rejected": "Rejected",
+    "withdrawn": "Withdrawn",
+    "interview": "Interview",
+}
+
+# Outcomes that belong in the board's muted "Closed" column.
+SCOUT_CLOSED_STAGES = ("rejected", "withdrawn")
+
+
+def scout_stage_label(stage: str) -> str:
+    """Human label for a stage key, including the retired ones."""
+    return SCOUT_STAGE_LABELS.get(stage or "", (stage or "").replace("_", " ").title())
 
 
 def get_scout_pipeline(stage=None) -> list:
@@ -3654,7 +3844,7 @@ def add_scout_pipeline_job(job_title, company, job_url=None, location=None,
                            source=None, stage="saved", notes=None, cv_version=None):
     """Add a job to the pipeline. Returns the new row id."""
     _ensure_scout_tables()
-    if stage not in SCOUT_STAGES:
+    if stage not in SCOUT_ALL_STAGES:
         stage = "saved"
     now = datetime.now().isoformat()
     today = date.today().isoformat()
@@ -3684,7 +3874,7 @@ def update_scout_pipeline(pid, stage=None, notes=None, cv_version=None):
         return None
     now = datetime.now().isoformat()
     sets, params = ["updated_at = {ph}"], [now]
-    if stage is not None and stage in SCOUT_STAGES and stage != existing.get("stage"):
+    if stage is not None and stage in SCOUT_ALL_STAGES and stage != existing.get("stage"):
         sets.append("stage = {ph}"); params.append(stage)
         sets.append("date_stage_changed = {ph}"); params.append(now)
         if stage == "applied" and not existing.get("date_applied"):
@@ -3701,6 +3891,81 @@ def update_scout_pipeline(pid, stage=None, notes=None, cv_version=None):
     return get_scout_pipeline_job(pid)
 
 
+def find_scout_pipeline_row(job_url=None, job_title=None, company=None):
+    """The pipeline row for a listing: url first, then normalised title+company.
+
+    Both identities are checked for the same reason `_backfill_scout_pipeline()`
+    checks both — a listing can already be on the board under either, and
+    treating them as two rows is exactly what strands the stage the user set on
+    the copy the screen does not read.
+
+    Normalisation happens in Python rather than SQL so SQLite and Postgres agree
+    on what "the same listing" means; the table is small enough (one row per
+    tracked listing) that reading it whole is cheaper than keeping two dialects
+    of LOWER/TRIM in step.
+    """
+    _ensure_scout_tables()
+    url_key = _norm_pipeline_key(job_url)
+    title_key = (_norm_pipeline_key(job_title), _norm_pipeline_key(company))
+    with get_db() as conn:
+        rows = [dict(r) for r in conn.cursor().execute(
+            "SELECT * FROM scout_pipeline "
+            "ORDER BY COALESCE(updated_at, created_at) DESC, id DESC"
+        ).fetchall()]
+
+    if url_key:
+        for row in rows:
+            if _norm_pipeline_key(row.get("job_url")) == url_key:
+                return row
+    if all(title_key):
+        for row in rows:
+            if (_norm_pipeline_key(row.get("job_title")),
+                    _norm_pipeline_key(row.get("company"))) == title_key:
+                return row
+    return None
+
+
+def upsert_scout_pipeline_for_listing(job_title, company, job_url=None,
+                                      location=None, stage=SCOUT_AUTO_STAGE,
+                                      source=None):
+    """Put a scraped listing on the board at `stage`, or move the row it has.
+
+    ONE SOURCE OF TRUTH. The stage select on a Find-roles card and the Tracker
+    board are the same `scout_pipeline` rows, so saving a role from a card and
+    moving it on the board cannot disagree about where it is.
+
+    The row is matched on url first, then on normalised title+company, so a
+    listing already tracked under either identity is MOVED rather than
+    duplicated. Returns the row, or None when there is nothing to identify it
+    by.
+    """
+    if not (job_title or "").strip() or not (company or "").strip():
+        return None
+    if stage not in SCOUT_ALL_STAGES:
+        stage = SCOUT_AUTO_STAGE
+
+    existing = find_scout_pipeline_row(job_url, job_title, company)
+    if not existing:
+        pid = add_scout_pipeline_job(job_title, company, job_url=job_url,
+                                     location=location, source=source,
+                                     stage=stage)
+        return get_scout_pipeline_job(pid)
+
+    # Matched on title+company by a row with no url of its own: carry the url
+    # over, or `get_apprenticeship_rows()` — which joins on job_url — will never
+    # see the stage this call just set, and the card would snap back to unsaved.
+    if (job_url or "").strip() and not (existing.get("job_url") or "").strip():
+        with get_db() as conn:
+            cur = conn.cursor()
+            ph = "%s" if USE_POSTGRES else "?"
+            cur.execute(f"UPDATE scout_pipeline SET job_url = {ph}, "
+                        f"updated_at = {ph} WHERE id = {ph}",
+                        (job_url, datetime.now().isoformat(), existing["id"]))
+
+    return (update_scout_pipeline(existing["id"], stage=stage)
+            or get_scout_pipeline_job(existing["id"]))
+
+
 def delete_scout_pipeline(pid) -> bool:
     _ensure_scout_tables()
     with get_db() as conn:
@@ -3713,7 +3978,7 @@ def delete_scout_pipeline(pid) -> bool:
 def get_scout_pipeline_stage_counts() -> dict:
     """{stage: count} across all five stages (zero-filled)."""
     _ensure_scout_tables()
-    counts = {s: 0 for s in SCOUT_STAGES}
+    counts = {s: 0 for s in SCOUT_ALL_STAGES}
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT stage, COUNT(*) AS n FROM scout_pipeline GROUP BY stage")
@@ -3739,12 +4004,827 @@ def get_scout_pipeline_reminders(days: int = 7) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
+# ── The roles read model's two queries ─────────────────────────────────────
+
+def get_apprenticeship_rows(include_closed: bool = True) -> list:
+    """Apprenticeship listings for the Find-roles screen.
+
+    Joined to the pipeline so a card knows whether it is saved and what stage
+    it is at, because that is what the bookmark toggle and the stage select
+    read. Archived rows are left out: they are history, and the screen has its
+    own Closed handling.
+    """
+    _ensure_scout_tables()
+    sql = ("SELECT j.*, p.stage AS stage, "
+           "       CASE WHEN p.id IS NULL THEN 0 ELSE 1 END AS saved "
+           "FROM scout_jobs j "
+           "LEFT JOIN scout_pipeline p "
+           "       ON p.job_url = j.url AND p.job_url <> '' "
+           "WHERE j.listing_type = 'apprenticeship' "
+           "  AND j.archived_at IS NULL")
+    if not include_closed:
+        sql += " AND COALESCE(j.status, 'open') = 'open'"
+    sql += " ORDER BY j.found_date DESC, j.id DESC"
+    with get_db() as conn:
+        return [dict(r) for r in conn.cursor().execute(sql).fetchall()]
+
+
+def get_all_scout_job_details() -> dict:
+    """{external_ref: detail row} for every listing that has been fetched."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        rows = conn.cursor().execute(
+            "SELECT * FROM scout_job_details").fetchall()
+    return {dict(r)["external_ref"]: dict(r) for r in rows}
+
+
+# ── Saved searches, and "new since your last visit" ────────────────────────
+
+# Channels Scout can actually reach. Email and Discord are deliberately absent:
+# neither is configured on Railway, and offering a channel that silently does
+# nothing is worse than not offering it.
+SCOUT_ALERT_CHANNELS = ("bell", "telegram")
+
+_LAST_VISIT_KEY = "scout_roles_last_visited"
+
+
+def scout_last_visited() -> str:
+    """When the roles screen was last opened, or "" the first time."""
+    try:
+        return kv_get(_LAST_VISIT_KEY) or ""
+    except Exception:
+        return ""
+
+
+def touch_scout_last_visited(stamp: str = None) -> str:
+    """Record this visit and return the PREVIOUS one.
+
+    The previous value is what "new since your last visit" is measured
+    against, so it has to be returned before being overwritten.
+    """
+    previous = scout_last_visited()
+    try:
+        kv_set(_LAST_VISIT_KEY,
+               stamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    except Exception as e:
+        logger.warning("touch_scout_last_visited failed: %s", e)
+    return previous
+
+
+def list_saved_searches() -> list:
+    _ensure_scout_tables()
+    with get_db() as conn:
+        rows = conn.cursor().execute(
+            "SELECT * FROM scout_saved_searches "
+            "ORDER BY id DESC").fetchall()
+    out = []
+    for row in rows:
+        d = dict(row)
+        try:
+            d["filters"] = json.loads(d.get("filters_json") or "{}")
+        except (TypeError, ValueError):
+            d["filters"] = {}
+        d["channel_list"] = [c for c in (d.get("channels") or "").split(",") if c]
+        out.append(d)
+    return out
+
+
+def add_saved_search(name: str, filters: dict, channels=None) -> int:
+    """Create a saved search. Unknown channels are dropped, not stored."""
+    _ensure_scout_tables()
+    name = (name or "").strip()[:120]
+    if not name:
+        return 0
+    keep = [c for c in (channels or []) if c in SCOUT_ALERT_CHANNELS]
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"INSERT INTO scout_saved_searches "
+            f"(name, filters_json, channels, enabled, created_at) "
+            f"VALUES ({ph},{ph},{ph},1,{ph})",
+            (name, json.dumps(filters or {}), ",".join(keep),
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        return cur.lastrowid or 0
+
+
+def update_saved_search(search_id: int, enabled=None, channels=None) -> bool:
+    _ensure_scout_tables()
+    updates, vals = [], []
+    ph = "%s" if USE_POSTGRES else "?"
+    if enabled is not None:
+        updates.append(f"enabled = {ph}")
+        vals.append(1 if enabled else 0)
+    if channels is not None:
+        keep = [c for c in channels if c in SCOUT_ALERT_CHANNELS]
+        updates.append(f"channels = {ph}")
+        vals.append(",".join(keep))
+    if not updates:
+        return False
+    vals.append(search_id)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"UPDATE scout_saved_searches SET {', '.join(updates)} "
+                    f"WHERE id = {ph}", tuple(vals))
+        return bool(cur.rowcount)
+
+
+def delete_saved_search(search_id: int) -> bool:
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM scout_saved_searches WHERE id = {ph}",
+                    (search_id,))
+        return bool(cur.rowcount)
+
+
+def record_saved_search_run(search_id: int, matches: int) -> None:
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        conn.cursor().execute(
+            f"UPDATE scout_saved_searches SET last_run_at = {ph}, "
+            f"last_match_count = {ph} WHERE id = {ph}",
+            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), matches, search_id))
+
+
+# ── Scout detail pages (fetched per listing, cached for a day) ──────────────
+
+# How long a fetched detail page is considered current. The user's condition:
+# never re-fetch the same page within 24 hours.
+DETAIL_CACHE_HOURS = 24
+
+# Only these fields are stored. Anything else on the page is parsed and thrown
+# away; see the scout_job_details DDL.
+DETAIL_FIELDS = ("wage", "hours", "start_date", "duration", "closing_date",
+                 "description")
+
+
+def get_scout_job_detail(external_ref: str):
+    """The cached detail row for one listing, or None."""
+    if not external_ref:
+        return None
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        row = conn.cursor().execute(
+            f"SELECT * FROM scout_job_details WHERE external_ref = {ph}",
+            (external_ref,)).fetchone()
+    return dict(row) if row else None
+
+
+def save_scout_job_detail(external_ref: str, fields: dict,
+                          status: str = "ok") -> bool:
+    """Store the detail fields for one listing. Upsert on external_ref."""
+    if not external_ref:
+        return False
+    _ensure_scout_tables()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ph = "%s" if USE_POSTGRES else "?"
+    payload = {k: (fields or {}).get(k) for k in DETAIL_FIELDS}
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT external_ref FROM scout_job_details "
+            f"WHERE external_ref = {ph}", (external_ref,))
+        if cur.fetchone():
+            sets = ", ".join(f"{k} = {ph}" for k in DETAIL_FIELDS)
+            cur.execute(
+                f"UPDATE scout_job_details SET {sets}, fetched_at = {ph}, "
+                f"fetch_status = {ph} WHERE external_ref = {ph}",
+                tuple(payload[k] for k in DETAIL_FIELDS)
+                + (now, status, external_ref))
+        else:
+            cols = ", ".join(DETAIL_FIELDS)
+            cur.execute(
+                f"INSERT INTO scout_job_details "
+                f"(external_ref, {cols}, fetched_at, fetch_status) "
+                f"VALUES ({', '.join([ph] * (len(DETAIL_FIELDS) + 3))})",
+                (external_ref,) + tuple(payload[k] for k in DETAIL_FIELDS)
+                + (now, status))
+    return True
+
+
+# Who is eligible for a detail fetch, as one clause shared by the batch and the
+# single-listing path. The user's conditions are "kept listings only" and "never
+# within 24 hours", and two copies of that rule would eventually disagree.
+_DETAIL_CANDIDATE_SQL = (
+    "SELECT j.external_ref, j.url, d.fetched_at FROM scout_jobs j "
+    "LEFT JOIN scout_job_details d ON d.external_ref = j.external_ref "
+    "WHERE j.listing_type = 'apprenticeship' "
+    "  AND j.external_ref IS NOT NULL AND j.external_ref <> '' "
+    "  AND j.url IS NOT NULL AND j.url <> '' "
+    "  AND COALESCE(j.status, 'open') = 'open' "
+    "  AND j.archived_at IS NULL "
+)
+
+
+def _detail_cutoff() -> str:
+    return (datetime.now() - timedelta(hours=DETAIL_CACHE_HOURS)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def scout_details_needing_fetch(limit: int = 25) -> list:
+    """Listings Scout has KEPT whose detail is missing or older than a day.
+
+    Deliberately driven off scout_jobs, not off a search: the user's condition
+    is that only kept listings are ever fetched, so a row has to already exist
+    in the database to be eligible. Closed and archived listings are skipped —
+    there is nothing to act on and no reason to spend a request.
+    """
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        rows = conn.cursor().execute(
+            _DETAIL_CANDIDATE_SQL +
+            f"  AND (d.fetched_at IS NULL OR d.fetched_at < {ph}) "
+            f"ORDER BY d.fetched_at IS NULL DESC, j.found_date DESC "
+            f"LIMIT {ph}", (_detail_cutoff(), limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def scout_detail_candidate(external_ref: str) -> dict:
+    """Whether ONE listing may be fetched now, and why not if it may not.
+
+    The panel's "Fetch details" button needs the same answer the batch gets, so
+    it asks the same question of the same clause:
+
+        {"eligible": bool, "url": str, "fresh": bool}
+
+    `eligible` is False when there is no such kept, open, unarchived listing at
+    all; `fresh` is True when it was fetched inside DETAIL_CACHE_HOURS, which is
+    a refusal to make a second request rather than a failure.
+    """
+    out = {"eligible": False, "url": "", "fresh": False}
+    if not (external_ref or "").strip():
+        return out
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        row = conn.cursor().execute(
+            _DETAIL_CANDIDATE_SQL + f"  AND j.external_ref = {ph} LIMIT 1",
+            (external_ref,)).fetchone()
+    if not row:
+        return out
+    row = dict(row)
+    out["eligible"] = True
+    out["url"] = row.get("url") or ""
+    fetched = row.get("fetched_at")
+    out["fresh"] = bool(fetched and str(fetched) >= _detail_cutoff())
+    return out
+
+
+def count_scout_job_details() -> dict:
+    """{"total": N, "by_status": {...}, "stale": N} — for the fetch report."""
+    _ensure_scout_tables()
+    cutoff = (datetime.now() - timedelta(hours=DETAIL_CACHE_HOURS)
+              ).strftime("%Y-%m-%d %H:%M:%S")
+    ph = "%s" if USE_POSTGRES else "?"
+    out = {"total": 0, "by_status": {}, "stale": 0}
+    with get_db() as conn:
+        cur = conn.cursor()
+        for r in cur.execute("SELECT fetch_status, COUNT(*) AS n "
+                             "FROM scout_job_details "
+                             "GROUP BY fetch_status").fetchall():
+            d = dict(r)
+            out["by_status"][d["fetch_status"] or "(none)"] = d["n"]
+        out["total"] = sum(out["by_status"].values())
+        out["stale"] = dict(cur.execute(
+            f"SELECT COUNT(*) AS n FROM scout_job_details "
+            f"WHERE fetched_at < {ph}", (cutoff,)).fetchone())["n"]
+    return out
+
+
+# ── Scout programmes (the tracker's own entries + the watchlist) ────────────
+
+# Fields the spreadsheet owns. A re-import refreshes these.
+PROGRAMME_IMPORT_FIELDS = (
+    "sector", "specialization", "level", "duration", "university_partner",
+    "degree_awarded", "locations", "salary_y1", "entry_requirements",
+    "t_level_accepted", "typical_opens", "typical_closes", "rolling",
+    "cohort_size", "assessment_process", "official_link", "import_notes",
+    "cloud_sec_fit", "open_months", "timeline_close", "timeline_fit",
+)
+
+# Fields the USER owns. An import may seed them on first insert and must never
+# touch them afterwards — see upsert_scout_programme.
+PROGRAMME_USER_FIELDS = (
+    "stage", "next_step", "next_step_date", "deadline", "applied_date",
+    "link", "notes", "confirmed_open_date", "confirmed_close_date",
+    "confirmed_source", "linked_external_ref",
+)
+
+
+def normalise_programme_key(value) -> str:
+    """Trimmed, case-folded, inner whitespace collapsed, punctuation dropped.
+
+    The import key is (company, programme), and the spreadsheet spells them
+    inconsistently across sheets ("BT Group" vs "BT  group."), so the key has to
+    survive that or a re-import would duplicate every row.
+    """
+    text = re.sub(r"[^a-z0-9 ]+", " ", (str(value or "")).casefold())
+    return " ".join(text.split())
+
+
+def upsert_scout_programme(company: str, programme: str, fields: dict,
+                           seed_user_fields: dict = None,
+                           mark_imported: bool = True) -> str:
+    """Insert or refresh one programme. Returns "inserted" | "updated" | "skipped".
+
+    The contract that makes a re-import safe:
+
+      * identity is the NORMALISED (company, programme), so re-running cannot
+        duplicate a row that was spelled differently;
+      * import-owned fields are refreshed every run;
+      * user-owned fields are written ONLY on first insert. Once a row exists,
+        an import never touches the tracker state — that is the user's, and the
+        spreadsheet is no longer the source of truth after the first import;
+      * `edited_in_scout` is set the moment anything is changed inside Scout,
+        and a row carrying it has even its import-owned fields left alone, so a
+        correction made in Scout is not undone by the next import.
+    """
+    _ensure_scout_tables()
+    cn, pn = normalise_programme_key(company), normalise_programme_key(programme)
+    if not cn:
+        return "skipped"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ph = "%s" if USE_POSTGRES else "?"
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT id, edited_in_scout FROM scout_programmes "
+            f"WHERE company_norm = {ph} AND programme_norm = {ph}", (cn, pn))
+        row = cur.fetchone()
+
+        if row is None:
+            cols = ["company", "programme", "company_norm", "programme_norm",
+                    "created_at", "updated_at"]
+            vals = [company, programme, cn, pn, now, now]
+            if mark_imported:
+                cols.append("imported_at")
+                vals.append(now)
+            for key in PROGRAMME_IMPORT_FIELDS:
+                if key in fields:
+                    cols.append(key)
+                    vals.append(fields[key])
+            for key in PROGRAMME_USER_FIELDS:
+                if seed_user_fields and key in seed_user_fields:
+                    cols.append(key)
+                    vals.append(seed_user_fields[key])
+            cur.execute(
+                f"INSERT INTO scout_programmes ({', '.join(cols)}) "
+                f"VALUES ({', '.join([ph] * len(cols))})", tuple(vals))
+            return "inserted"
+
+        existing = dict(row)
+        if existing.get("edited_in_scout"):
+            # Touched inside Scout: leave it entirely alone.
+            return "skipped"
+
+        updates, vals = [], []
+        for key in PROGRAMME_IMPORT_FIELDS:
+            if key in fields:
+                updates.append(f"{key} = {ph}")
+                vals.append(fields[key])
+        if not updates:
+            return "skipped"
+        updates.append(f"updated_at = {ph}")
+        vals.append(now)
+        if mark_imported:
+            updates.append(f"imported_at = {ph}")
+            vals.append(now)
+        vals.append(existing["id"])
+        cur.execute(
+            f"UPDATE scout_programmes SET {', '.join(updates)} WHERE id = {ph}",
+            tuple(vals))
+        return "updated"
+
+
+def set_scout_programme_stage(programme_id: int, stage: str, **user_fields) -> bool:
+    """Set the tracker state on a programme, from inside Scout.
+
+    Marks `edited_in_scout`, which is what stops a later import overwriting it.
+    """
+    if stage is not None and stage not in SCOUT_ALL_STAGES:
+        return False
+    _ensure_scout_tables()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ph = "%s" if USE_POSTGRES else "?"
+    updates, vals = [], []
+    if stage is not None:
+        updates.append(f"stage = {ph}")
+        vals.append(stage)
+    for key, value in user_fields.items():
+        if key in PROGRAMME_USER_FIELDS:
+            updates.append(f"{key} = {ph}")
+            vals.append(value)
+    if not updates:
+        return False
+    updates += [f"edited_in_scout = 1", f"updated_at = {ph}"]
+    vals.append(now)
+    vals.append(programme_id)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"UPDATE scout_programmes SET {', '.join(updates)} WHERE id = {ph}",
+            tuple(vals))
+        return bool(cur.rowcount)
+
+
+def get_scout_programmes(stage=None, with_stage_only: bool = False) -> list:
+    """Programmes, newest-touched first. Optional stage filter."""
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    sql = "SELECT * FROM scout_programmes"
+    args = []
+    if stage:
+        sql += f" WHERE stage = {ph}"
+        args.append(stage)
+    elif with_stage_only:
+        sql += " WHERE stage IS NOT NULL AND stage <> ''"
+    sql += " ORDER BY company, programme"
+    with get_db() as conn:
+        return [dict(r) for r in conn.cursor().execute(sql, tuple(args)).fetchall()]
+
+
+def get_scout_programme_companies() -> list:
+    """Normalised company names from the programme list.
+
+    This is Scout's watchlist once the spreadsheet is imported: the employers
+    the user actually tracks, replacing the placeholder list in
+    services/scout_config.py.
+    """
+    _ensure_scout_tables()
+    with get_db() as conn:
+        rows = conn.cursor().execute(
+            "SELECT DISTINCT company_norm FROM scout_programmes "
+            "WHERE company_norm <> ''").fetchall()
+    return sorted({dict(r)["company_norm"] for r in rows})
+
+
+# ── Scout filter overrides: the Excluded screen's corrections ──────────────
+#
+# A DELTA applied over config/scout_filters.json, which stays the default
+# layer. Two ops, which is all the Excluded screen's two buttons need:
+#
+#   add     — put this value into that list (a standard into digital_standards,
+#             an employer onto the watchlist)
+#   remove  — take this value out of that list (an exclusion term that was
+#             wrongly matching an employer)
+#
+# They live in the database because Railway's filesystem is ephemeral: a
+# correction written into the JSON file in production survives until the next
+# deploy and then silently reverts.
+SCOUT_FILTER_OPS = ("add", "remove")
+
+
+def list_scout_filter_overrides(list_key: str = None) -> list:
+    """Every stored override, oldest first so later ones win on replay."""
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        if list_key:
+            cur.execute(f"SELECT * FROM scout_filter_overrides "
+                        f"WHERE list_key = {ph} ORDER BY id", (list_key,))
+        else:
+            cur.execute("SELECT * FROM scout_filter_overrides ORDER BY id")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def add_scout_filter_override(list_key: str, value: str, op: str = "add",
+                              source: str = "excluded_screen") -> bool:
+    """Store one override. Idempotent on (list_key, value, op).
+
+    An `add` and a `remove` of the same value cannot both stand — the later one
+    is what the user meant — so storing one clears the other.
+    """
+    list_key = (list_key or "").strip()
+    value = " ".join((value or "").split())
+    op = (op or "add").strip().lower()
+    if not list_key or not value or op not in SCOUT_FILTER_OPS:
+        return False
+    _ensure_scout_tables()
+    opposite = "remove" if op == "add" else "add"
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"DELETE FROM scout_filter_overrides "
+            f"WHERE list_key = {ph} AND LOWER(value) = LOWER({ph}) "
+            f"  AND op IN ({ph}, {ph})",
+            (list_key, value, op, opposite))
+        cur.execute(
+            f"INSERT INTO scout_filter_overrides "
+            f"(list_key, value, op, source, created_at) "
+            f"VALUES ({ph}, {ph}, {ph}, {ph}, {ph})",
+            (list_key, value, op, source, datetime.now().isoformat()))
+    return True
+
+
+def delete_scout_filter_override(override_id) -> bool:
+    """Undo one correction. The Excluded screen's "allowed" list uses this."""
+    _ensure_scout_tables()
+    ph = "%s" if USE_POSTGRES else "?"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM scout_filter_overrides WHERE id = {ph}",
+                    (override_id,))
+        return cur.rowcount > 0
+
+
+def current_database_id() -> str:
+    """Which database this process is actually talking to.
+
+    Part of the override cache's key, so a reader cannot serve rows it read
+    from a different database. In production this never changes; under test
+    each module gets its own SQLite file, and a cache that ignored that would
+    hand one module's state to the next.
+
+    The Postgres URL is a credential, so it is hashed rather than returned.
+    """
+    if USE_POSTGRES:
+        return "pg:" + hashlib.sha256(
+            (DATABASE_URL or "").encode("utf-8")).hexdigest()[:16]
+    return "sqlite:" + str(SQLITE_PATH)
+
+
+def scout_filter_overrides_stamp():
+    """A cheap fingerprint of the overrides layer, so a reader can cache it.
+
+    `settings()` is consulted several times per listing, which is thousands of
+    times per scan, so the overrides cannot be re-read on every call — but a
+    cache that never notices a write would silently ignore the correction the
+    user just made. This is one small aggregate query, used as the cache key.
+
+    The database identity is part of it: (count, max_id) alone would compare
+    equal across two different databases that happen to hold the same number
+    of rows.
+    """
+    _ensure_scout_tables()
+    with get_db() as conn:
+        row = dict(conn.cursor().execute(
+            "SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS top "
+            "FROM scout_filter_overrides").fetchone())
+    return (current_database_id(), row["n"], row["top"])
+
+
+def get_watched_employer_names() -> list:
+    """Names and aliases of every WATCHED employer, for the read model.
+
+    `employers` is a SQLAlchemy table (models.Employer) but this is plain SQL
+    on purpose: the Find-roles read model must not need an app context to
+    answer "is this employer on the watchlist", and the question is one SELECT.
+
+    Returns [] when the table does not exist yet — a fresh install has not run
+    create_all(), and an empty watchlist is the honest answer, not an error.
+    """
+    _ensure_scout_tables()
+    out = set()
+    try:
+        with get_db() as conn:
+            rows = conn.cursor().execute(
+                "SELECT name, aliases FROM employers "
+                "WHERE watching IS NULL OR watching NOT IN (0, FALSE)"
+                if USE_POSTGRES else
+                "SELECT name, aliases FROM employers "
+                "WHERE watching IS NULL OR watching <> 0").fetchall()
+    except Exception as e:
+        logger.debug("get_watched_employer_names: no employers table (%s)", e)
+        return []
+    for row in rows:
+        d = dict(row)
+        out.add((d.get("name") or "").strip())
+        for alias in (d.get("aliases") or "").split(","):
+            if alias.strip():
+                out.add(alias.strip())
+    return sorted(n for n in out if n)
+
+
+def count_scout_programmes() -> dict:
+    """{"total": N, "by_stage": {...}, "not_started": N, "edited_in_scout": N}."""
+    _ensure_scout_tables()
+    out = {"total": 0, "by_stage": {}, "not_started": 0, "edited_in_scout": 0}
+    with get_db() as conn:
+        cur = conn.cursor()
+        for r in cur.execute(
+                "SELECT stage, COUNT(*) AS n FROM scout_programmes "
+                "GROUP BY stage").fetchall():
+            d = dict(r)
+            key = d["stage"] or "(not started)"
+            out["by_stage"][key] = d["n"]
+        out["total"] = sum(out["by_stage"].values())
+        out["not_started"] = out["by_stage"].get("(not started)", 0)
+        out["edited_in_scout"] = dict(cur.execute(
+            "SELECT COUNT(*) AS n FROM scout_programmes "
+            "WHERE edited_in_scout = 1").fetchone())["n"]
+    return out
+
+
+# ── Scout relevance-filter exclusion log ────────────────────────────────────
+
+def log_scout_exclusions(rows) -> int:
+    """Record listings the relevance filter dropped. Returns rows newly logged.
+
+    Upserts on external_ref: a listing excluded on every scan bumps a counter
+    rather than adding a row, so the log stays a catalogue of what was dropped
+    instead of a per-scan transcript. Never raises — a failure to log must not
+    abort a scan.
+    """
+    if not rows:
+        return 0
+    _ensure_scout_tables()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    inserted = 0
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            ph = "%s" if USE_POSTGRES else "?"
+            for r in rows:
+                ref = (r.get("external_ref") or "").strip()
+                if not ref:
+                    continue
+                cur.execute(
+                    f"SELECT times_seen FROM scout_exclusions "
+                    f"WHERE external_ref = {ph}", (ref,))
+                existing = cur.fetchone()
+                if existing:
+                    cur.execute(
+                        f"UPDATE scout_exclusions SET last_excluded_at = {ph}, "
+                        f"times_seen = times_seen + 1, reason = {ph}, "
+                        f"detail = {ph} WHERE external_ref = {ph}",
+                        (now, r.get("reason"), r.get("detail"), ref))
+                    continue
+                cur.execute(
+                    f"INSERT INTO scout_exclusions (external_ref, title, employer, "
+                    f"reason, detail, course, url, listing_type, "
+                    f"first_excluded_at, last_excluded_at, times_seen) "
+                    f"VALUES ({','.join([ph] * 11)})",
+                    (ref, r.get("title"), r.get("employer"), r.get("reason"),
+                     r.get("detail"), r.get("course"), r.get("url"),
+                     r.get("listing_type", "apprenticeship"), now, now, 1))
+                inserted += 1
+    except Exception as e:
+        logger.warning("log_scout_exclusions failed: %s", e)
+        return 0
+    return inserted
+
+
+def get_scout_exclusions(limit: int = 200, listing_type=None) -> list:
+    """The exclusion log, most recently excluded first."""
+    _ensure_scout_tables()
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if listing_type:
+            cur.execute(
+                f"SELECT * FROM scout_exclusions WHERE listing_type = {ph} "
+                f"ORDER BY last_excluded_at DESC, external_ref LIMIT {ph}",
+                (listing_type, limit))
+        else:
+            cur.execute(
+                f"SELECT * FROM scout_exclusions "
+                f"ORDER BY last_excluded_at DESC, external_ref LIMIT {ph}",
+                (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def count_scout_exclusions(listing_type=None) -> dict:
+    """{"total": N, "by_reason": {reason: n}} — the "excluded: N" the UI shows."""
+    _ensure_scout_tables()
+    out = {"total": 0, "by_reason": {}}
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+        if listing_type:
+            cur.execute(
+                f"SELECT reason, COUNT(*) AS n FROM scout_exclusions "
+                f"WHERE listing_type = {ph} GROUP BY reason", (listing_type,))
+        else:
+            cur.execute("SELECT reason, COUNT(*) AS n FROM scout_exclusions "
+                        "GROUP BY reason")
+        for row in cur.fetchall():
+            r = dict(row)
+            out["by_reason"][r["reason"] or "(none)"] = r["n"]
+    out["total"] = sum(out["by_reason"].values())
+    return out
+
+
+def preview_job_pipeline_cleanup(days: int = 14) -> dict:
+    """Read-only dry run of `cleanup_job_pipeline`. Deletes NOTHING.
+
+    Same cutoff arithmetic and the same WHERE clauses as the real job, but
+    SELECTed and grouped so you can see what it would take, broken down by
+    pipeline stage and application status.
+
+    `pipeline_exempt_by_stage` is the part worth reading: rows past the cutoff
+    that the stage exemption saves. It is reported separately from
+    `pipeline_surviving_by_stage` (rows simply inside the window) so the
+    exemption's effect is visible rather than inferred.
+
+    Returns:
+        {
+          "days": N, "cutoff": "...", "cutoff_date": "...",
+          "pipeline_by_stage":   {stage: count, ...},   # would be deleted
+          "pipeline_total":      N,
+          "pipeline_exempt_by_stage": {stage: count, ...},  # old but tracked
+          "pipeline_exempt_total":    N,
+          "applications_by_status": {status: count, ...},
+          "applications_total":  N,
+          "total":               N,
+          "pipeline_surviving_by_stage": {stage: count, ...},  # inside window
+        }
+    """
+    _ensure_scout_tables()
+    now = datetime.now()
+    cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    out = {
+        "days": days,
+        "cutoff": cutoff,
+        "cutoff_date": cutoff_date,
+        "pipeline_by_stage": {},
+        "pipeline_total": 0,
+        "pipeline_exempt_by_stage": {},
+        "pipeline_exempt_total": 0,
+        "applications_by_status": {},
+        "applications_total": 0,
+        "total": 0,
+        "pipeline_surviving_by_stage": {},
+    }
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        ph = "%s" if USE_POSTGRES else "?"
+
+        # Doomed pipeline rows, by stage — mirrors the job's WHERE exactly.
+        cur.execute(
+            f"SELECT stage, COUNT(*) AS n FROM scout_pipeline "
+            f"WHERE COALESCE(updated_at, created_at) < {ph} "
+            f"AND (stage IS NULL OR stage = {ph}) "
+            f"GROUP BY stage ORDER BY stage",
+            (cutoff, SCOUT_AUTO_STAGE))
+        for row in cur.fetchall():
+            r = dict(row)
+            out["pipeline_by_stage"][r["stage"] or "(null)"] = r["n"]
+        out["pipeline_total"] = sum(out["pipeline_by_stage"].values())
+
+        # Past the cutoff but saved by the stage exemption.
+        cur.execute(
+            f"SELECT stage, COUNT(*) AS n FROM scout_pipeline "
+            f"WHERE COALESCE(updated_at, created_at) < {ph} "
+            f"AND stage IS NOT NULL AND stage <> {ph} "
+            f"GROUP BY stage ORDER BY stage",
+            (cutoff, SCOUT_AUTO_STAGE))
+        for row in cur.fetchall():
+            r = dict(row)
+            out["pipeline_exempt_by_stage"][r["stage"]] = r["n"]
+        out["pipeline_exempt_total"] = sum(out["pipeline_exempt_by_stage"].values())
+
+        # What would survive, for context on how much of the table this is.
+        cur.execute(
+            f"SELECT stage, COUNT(*) AS n FROM scout_pipeline "
+            f"WHERE COALESCE(updated_at, created_at) >= {ph} "
+            f"GROUP BY stage ORDER BY stage",
+            (cutoff,))
+        for row in cur.fetchall():
+            r = dict(row)
+            out["pipeline_surviving_by_stage"][r["stage"] or "(null)"] = r["n"]
+
+        cur.execute(
+            f"SELECT status, COUNT(*) AS n FROM scout_applications "
+            f"WHERE applied_date IS NOT NULL AND applied_date < {ph} "
+            f"GROUP BY status ORDER BY status",
+            (cutoff_date,))
+        for row in cur.fetchall():
+            r = dict(row)
+            out["applications_by_status"][r["status"] or "(null)"] = r["n"]
+        out["applications_total"] = sum(out["applications_by_status"].values())
+
+    out["total"] = out["pipeline_total"] + out["applications_total"]
+    return out
+
+
 def cleanup_job_pipeline(days: int = 14) -> dict:
-    """Permanently delete job pipeline and application entries older than `days`.
+    """Delete untouched job pipeline entries, and applications, older than `days`.
 
     Deletes from:
-    - scout_pipeline: where updated_at (or created_at if null) is older than cutoff
+    - scout_pipeline: rows older than the cutoff that are still at
+      SCOUT_AUTO_STAGE. Anything the user moved to a SCOUT_TRACKED_STAGES stage
+      is EXEMPT and kept indefinitely — see below.
     - scout_applications: where applied_date is older than cutoff
+
+    The stage exemption is the point of this function, not an optimisation. The
+    job exists to stop auto-backfilled job alerts piling up, and every scraped
+    listing arrives at stage='saved' from `_backfill_scout_pipeline()`. Deleting
+    by age alone also took rows the user had moved to applied / interview /
+    offer, which is data they entered by hand, about apprenticeship cycles that
+    run for months. Age is evidence about an untouched listing and nothing else.
+
+    `preview_job_pipeline_cleanup` models this exactly; keep the two in step.
 
     Returns dict with counts: {"pipeline": N, "applications": M, "total": N+M}
     """
@@ -3759,11 +4839,14 @@ def cleanup_job_pipeline(days: int = 14) -> dict:
         cur = conn.cursor()
         ph = "%s" if USE_POSTGRES else "?"
 
-        # Delete scout_pipeline entries older than cutoff
+        # Delete only untouched (still auto-staged) pipeline rows past the cutoff.
+        # A NULL stage is treated as untouched: it predates the NOT NULL default
+        # and carries no user intent either.
         cur.execute(
             f"DELETE FROM scout_pipeline WHERE "
-            f"COALESCE(updated_at, created_at) < {ph}",
-            (cutoff,))
+            f"COALESCE(updated_at, created_at) < {ph} "
+            f"AND (stage IS NULL OR stage = {ph})",
+            (cutoff, SCOUT_AUTO_STAGE))
         deleted["pipeline"] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
         # Delete scout_applications entries older than cutoff (by date, not datetime)
@@ -3777,10 +4860,31 @@ def cleanup_job_pipeline(days: int = 14) -> dict:
     return deleted
 
 
+def _norm_pipeline_key(value) -> str:
+    """Normalise a dedup key: trimmed, case-folded, inner whitespace collapsed.
+
+    Only ever makes two spellings of the same listing compare EQUAL, so it can
+    cause a skip but never an extra insert — the safe direction, given a
+    spurious insert is what shadows a user's stage.
+    """
+    return " ".join((value or "").split()).casefold()
+
+
 def _backfill_scout_pipeline() -> int:
     """Idempotently pull already-scraped scout_jobs into the pipeline at
-    stage='saved'. Dedups by job_url (or title+company when the url is blank),
-    so re-running never creates duplicates. Returns the number inserted."""
+    SCOUT_AUTO_STAGE. Returns the number inserted.
+
+    INSERT-only by construction: there is no UPDATE here, so a stage the user
+    set by hand can never be written back to 'saved' by a boot.
+
+    Dedup checks the url AND the (title, company) key, both normalised, and
+    skips on either. It used to check them exclusively — url when the job had
+    one, title+company only when it didn't — which let a scraped job carrying a
+    url insert a SECOND row beside a pipeline row the user had already moved to
+    applied/interview. That left the role on the board twice, the user's stage
+    stranded on one copy and a fresh 'saved' duplicate on the other. Checking
+    both unconditionally keeps it to one pipeline row per listing.
+    """
     _ensure_scout_tables()
     inserted = 0
     with get_db() as conn:
@@ -3789,8 +4893,10 @@ def _backfill_scout_pipeline() -> int:
         jobs = [dict(r) for r in cur.fetchall()]
         cur.execute("SELECT job_url, job_title, company FROM scout_pipeline")
         existing = [dict(r) for r in cur.fetchall()]
-        by_url = {e["job_url"] for e in existing if e.get("job_url")}
-        by_key = {(e["job_title"], e["company"]) for e in existing}
+        by_url = {_norm_pipeline_key(e["job_url"])
+                  for e in existing if e.get("job_url")}
+        by_key = {(_norm_pipeline_key(e["job_title"]), _norm_pipeline_key(e["company"]))
+                  for e in existing}
         ph = "%s" if USE_POSTGRES else "?"
         now = datetime.now().isoformat()
         cols = ("job_title, company, job_url, location, stage, source, "
@@ -3798,16 +4904,22 @@ def _backfill_scout_pipeline() -> int:
         for j in jobs:
             if not j.get("title") or not j.get("company"):
                 continue
-            if j.get("url") and j["url"] in by_url:
+            url_key = _norm_pipeline_key(j.get("url"))
+            title_key = (_norm_pipeline_key(j["title"]), _norm_pipeline_key(j["company"]))
+            # Already tracked under either identity — leave it exactly as it is.
+            if url_key and url_key in by_url:
                 continue
-            if not j.get("url") and (j["title"], j["company"]) in by_key:
+            if title_key in by_key:
                 continue
             cur.execute(
                 f"INSERT INTO scout_pipeline ({cols}) VALUES ({','.join([ph]*10)})",
-                (j["title"], j["company"], j.get("url"), j.get("location"), "saved",
+                (j["title"], j["company"], j.get("url"), j.get("location"),
+                 SCOUT_AUTO_STAGE,
                  j.get("source"), j.get("found_date") or date.today().isoformat(),
                  now, now, now))
-            by_url.add(j.get("url")); by_key.add((j["title"], j["company"]))
+            if url_key:
+                by_url.add(url_key)
+            by_key.add(title_key)
             inserted += 1
     return inserted
 

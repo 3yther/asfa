@@ -19,8 +19,17 @@ Parsing strategy: BeautifulSoup on the search results page. The card layout
 is stable HTML with class names starting `das-search-results` / `faa-`.
 If gov.uk changes its markup, only the CSS selectors here need updating.
 
-Politeness (do not loosen): at most 5 pages per search, a 1s sleep between
-page fetches, and a descriptive User-Agent identifying the client.
+Politeness (do not loosen): at most 5 pages per search, a minimum 1s gap
+between *every* HTTP request, and a descriptive User-Agent identifying the
+client.
+
+The gap is enforced at the request layer (`_throttle`), not in the pagination
+loop. A scan issues one search per employer alias plus one per keyword, and a
+per-loop sleep only spaced out pages *within* a search — consecutive searches
+still fired their first request back-to-back, so a scan with many aliases sent
+a burst of page-1 requests with no gap at all. Throttling every request against
+the previous one closes that, and costs nothing when DB work between searches
+has already used up the interval.
 """
 from __future__ import annotations
 
@@ -28,10 +37,17 @@ import re
 import time
 from dataclasses import dataclass, asdict
 from datetime import date
-from typing import Optional
+from typing import NamedTuple, Optional
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
+
+import logging
 
 import requests
 from bs4 import BeautifulSoup
+
+from services import scout_config
+
+logger = logging.getLogger("asfa.gov_uk")
 
 
 BASE_URL = "https://www.findapprenticeship.service.gov.uk"
@@ -41,7 +57,109 @@ SEARCH_URL = BASE_URL + "/apprenticeships"
 USER_AGENT = "ASFA-Scout/1.0 (+https://github.com/3yther/asfa; apprenticeship watcher)"
 
 LEVEL_RE = re.compile(r"level\s+(\d)", re.I)
+
+# The reference format this scraper was written against.
 VAC_REF_RE = re.compile(r"/apprenticeship/(VAC\d+)")
+
+# Any trailing path segment that looks like an id (has a digit in it). Used to
+# derive a stable reference from a detail link whose shape VAC_REF_RE does not
+# cover, so an unrecognised format costs us the tidy reference and NOT the
+# listing. Dropping 16 of 21 "software developer" results for failing a regex
+# is the single largest source of the coverage gap measured on 2026-10-23.
+ID_SEGMENT_RE = re.compile(r"^(?=[^/]*\d)([A-Za-z0-9][A-Za-z0-9._-]*)$")
+
+# Hrefs that are never a vacancy's identity.
+_NON_DETAIL_HREF_RE = re.compile(
+    r"^\s*(#|mailto:|tel:|javascript:|data:)", re.I)
+
+# Where a listing's detail page lives. gov.uk cross-posts public-sector roles to
+# external recruitment systems, and those links carry their identity in the
+# QUERY STRING, not the path.
+HOST_FINDAPPRENTICESHIP = "findapprenticeship.service.gov.uk"
+HOST_CIVIL_SERVICE = "civilservicejobs.service.gov.uk"
+
+SOURCE_FINDAPPRENTICESHIP = "findapprenticeship"
+SOURCE_CIVIL_SERVICE = "civil_service"
+SOURCE_OTHER = "other"
+
+# Query parameters that identify a vacancy on an external system, most specific
+# first. `jcode` is Civil Service Jobs: every one of the 16 dropped "software
+# developer" cards was /csr/viewjob.cgi?jcode=<n>, so stripping the query made
+# them all the same reference and the in-page dedup kept exactly one.
+EXTERNAL_ID_PARAMS = ("jcode", "vacancyref", "vacancyid", "jobid", "jobref",
+                      "requisitionid", "id")
+
+# Analytics parameters, which differ between two links to the SAME vacancy and
+# so must not reach the reference.
+_TRACKING_PARAMS = ("utm_source", "utm_medium", "utm_campaign", "utm_term",
+                    "utm_content", "gclid", "fbclid", "mc_cid", "mc_eid",
+                    "_ga", "msclkid")
+
+# gov.uk appends this to the link text of an off-site listing. It is screen
+# reader guidance, not part of the job title.
+OPENS_IN_NEW_TAB_RE = re.compile(
+    r"\s*\(\s*opens?\s+in\s+(?:a\s+)?new\s+(?:tab|window)\s*\)\s*", re.I)
+
+
+def clean_title(text: str) -> str:
+    """Strip gov.uk's "(opens in new tab)" suffix and tidy whitespace."""
+    return " ".join(OPENS_IN_NEW_TAB_RE.sub(" ", text or "").split())
+
+
+def _source_for_host(host: str) -> str:
+    host = (host or "").lower().removeprefix("www.")
+    if not host or host.endswith(HOST_FINDAPPRENTICESHIP):
+        return SOURCE_FINDAPPRENTICESHIP
+    if host.endswith(HOST_CIVIL_SERVICE):
+        return SOURCE_CIVIL_SERVICE
+    return SOURCE_OTHER
+
+
+def _canonical_query(query: str) -> str:
+    """Query string with tracking params dropped and the rest ordered.
+
+    Ordering matters: two links to one vacancy that differ only in parameter
+    order must produce one reference, or the same role alerts twice.
+    """
+    pairs = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True)
+             if k.lower() not in _TRACKING_PARAMS]
+    return urlencode(sorted(pairs))
+
+# A vacancy detail page on the apprenticeship site. Anything that is not this
+# shape is refused before a request is made, so an account page, a search URL or
+# an off-site cross-post can never be fetched by the detail pass.
+DETAIL_URL_RE = re.compile(
+    r"^https://(?:www\.)?findapprenticeship\.service\.gov\.uk"
+    r"/apprenticeship/[A-Za-z0-9._-]+/?(?:\?|#|$)")
+
+# The detail panel's fields, and the labels gov.uk uses for them. Matched on the
+# label text, so a layout change shows up as a missing field rather than as a
+# wrong one.
+DETAIL_LABELS = {
+    "wage": ("annual wage", "wage", "salary"),
+    "hours": ("working week", "hours", "working hours"),
+    "start_date": ("expected start date", "start date", "expected start"),
+    "duration": ("expected duration", "duration", "training course duration"),
+    "closing_date": ("closing date", "application closing date", "closes"),
+}
+
+# Hard cap on the stored description. The condition is a SHORT description for
+# the panel, not a copy of the page: two lines of prose, nothing more.
+DETAIL_DESCRIPTION_CHARS = 600
+
+# The site's own result count, from the <title> ("47 results found").
+#
+# Anchored at a word boundary and captured as a number ON PURPOSE. This used to
+# be `if "0 results found" in title`, a plain substring test — which is also true
+# of "10 results found", "20", "50", "100", "1000"... Any total ending in a zero
+# digit was read as "no results" and the whole page was discarded. Where the
+# title carries the total (identical on every page) that silently zeroed the
+# entire search. See test_zero_results_detection_is_not_a_substring_match.
+RESULT_COUNT_RE = re.compile(r"\b([\d,]+)\s+results?\s+found", re.I)
+
+# Minimum seconds between any two requests this scraper makes. Floor, not a
+# target: see the module docstring.
+MIN_REQUEST_INTERVAL = 1.0
 
 
 @dataclass
@@ -58,6 +176,43 @@ class RawVacancy:
     start_date: Optional[date] = None
     posted_text: str = ""
     url: str = ""
+    # Which system hosts the detail page: findapprenticeship / civil_service /
+    # other. gov.uk cross-posts public-sector roles off-site, and those listings
+    # carry no level or training course, so a caller has to be able to tell them
+    # apart rather than treat a missing level as bad parsing.
+    source: str = SOURCE_FINDAPPRENTICESHIP
+    # Every location this vacancy was listed under. gov.uk renders a
+    # multi-location vacancy as one card PER LOCATION and counts each of them in
+    # "N results found", so the extra cards are the site repeating itself, not
+    # separate jobs. They are merged into one listing and the locations kept
+    # here, rather than discarded — which is what the old per-page dedup did.
+    # `location` stays the first one seen, so existing callers are unaffected.
+    locations: tuple = ()
+    # True when the near-home pass also returned this vacancy. A TAG, never a
+    # filter: a role outside the radius is still a role, and quietly dropping
+    # it would hide the degree apprenticeships that are worth relocating or
+    # commuting for. Set by the caller after the near-home sweep.
+    near_home: bool = False
+
+    def __post_init__(self):
+        # Seed from `location` so a single-location vacancy still reports
+        # locations == (its location,) and location_count == 1.
+        if not self.locations and self.location:
+            self.locations = (self.location,)
+
+    @property
+    def location_count(self) -> int:
+        return len(self.locations)
+
+    def add_location(self, location: str) -> bool:
+        """Record another location for this same vacancy. True if it was new."""
+        location = (location or "").strip()
+        if not location or location in self.locations:
+            return False
+        self.locations = self.locations + (location,)
+        if not self.location:
+            self.location = location
+        return True
 
     def as_dict(self):
         d = asdict(self)
@@ -65,108 +220,464 @@ class RawVacancy:
             d["closing_date"] = self.closing_date.isoformat()
         if self.start_date:
             d["start_date"] = self.start_date.isoformat()
+        d["locations"] = list(self.locations)
+        d["location_count"] = self.location_count
         return d
 
 
 class GovUkScraper:
-    def __init__(self, user_agent: str = USER_AGENT, timeout: int = 20):
+    def __init__(self, user_agent: str = USER_AGENT, timeout: int = 20,
+                 min_interval: float = MIN_REQUEST_INTERVAL,
+                 max_pages: Optional[int] = None):
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": user_agent, "Accept": "text/html"})
+        _block_cookies(self.session)
         self.timeout = timeout
+        self.min_interval = min_interval
+        # Read from config at construction, so one scan uses one cap throughout
+        # even if the config file is edited mid-run.
+        self.max_pages = (max_pages if max_pages is not None
+                          else scout_config.max_pages())
+        # None until the first request, so a fresh scraper doesn't stall a second.
+        self._last_request_at: Optional[float] = None
 
     # ------------------------------------------------------------------
     # PUBLIC
     # ------------------------------------------------------------------
-    def by_employer(self, employer_name: str, min_level: int = 4) -> list[RawVacancy]:
+    def by_employer(self, employer_name: str, min_level: int = 4,
+                    stats: Optional[dict] = None) -> list[RawVacancy]:
         """Search for one employer's live vacancies."""
-        params = {
-            "searchTerm": employer_name,
-            "sort": "AgeAsc",
-        }
-        return self._search_all_pages(params, min_level)
+        return self._search_all_pages(
+            self.search_params(employer_name), min_level, stats=stats)
 
-    def by_keyword(self, keyword: str, min_level: int = 4) -> list[RawVacancy]:
+    def by_keyword(self, keyword: str, min_level: int = 4,
+                   stats: Optional[dict] = None) -> list[RawVacancy]:
         """Broad keyword search — useful for spotting new employers."""
-        params = {
-            "searchTerm": keyword,
-            "sort": "AgeAsc",
-        }
-        return self._search_all_pages(params, min_level)
+        return self._search_all_pages(
+            self.search_params(keyword), min_level, stats=stats)
+
+    def by_route_near_home(self, min_level: int = 1,
+                           stats: Optional[dict] = None) -> list[RawVacancy]:
+        """The same route sweep, narrowed to the configured radius from home.
+
+        Used only to TAG listings as near_home; the nationwide sweep is what
+        decides what Scout knows about. Returns [] when no postcode is
+        configured, since a distance with no centre is meaningless.
+        """
+        postcode = scout_config.home_postcode()
+        if not postcode:
+            logger.info("gov_uk: no home_postcode configured — "
+                        "skipping the near-home pass")
+            return []
+        return self.by_route(min_level=min_level,
+                             distance=scout_config.search_distance(),
+                             postcode=postcode, stats=stats)
+
+    def by_route(self, min_level: int = 1, distance=None, postcode: str = "",
+                 stats: Optional[dict] = None) -> list[RawVacancy]:
+        """Sweep the whole Digital route at Level 4+, with no search term.
+
+        This is the method that does not depend on wording. A keyword search
+        only finds a vacancy if the right word appears in it; the route filter
+        selects on what the apprenticeship IS, so one pass covers the route.
+
+        min_level defaults to 1 here, not 4: gov.uk has already filtered to
+        Level 4+ via levelIds, so re-filtering locally would only discard the
+        listings whose level we failed to parse.
+        """
+        params = self.route_sweep_params(distance=distance, postcode=postcode)
+        return self._search_all_pages(params, min_level, stats=stats)
+
+    @staticmethod
+    def route_sweep_params(distance=None, postcode: str = "") -> dict:
+        """The route sweep's query. Field names verified against the live site.
+
+            ?routeIds=7&levelIds=4&levelIds=5&levelIds=6&levelIds=7&sort=AgeAsc
+
+        `distance` and `postcode` are accepted and VALIDATED but only appear in
+        the query when the parameter names for them are configured. gov.uk's
+        allowed distance values are known (2/5/10/15/20/30/40/all); the names of
+        the distance and postcode fields are not, and guessing a field name
+        would silently produce a nationwide search while reporting a local one.
+        Set "distance_param" and "postcode_param" in config/scout_filters.json
+        once they are confirmed and this starts sending them.
+        """
+        params = dict(scout_config.route_sweep_params())
+        params["sort"] = "AgeAsc"
+
+        if distance is None and not postcode:
+            return params
+
+        # Validate even when we cannot send it, so a bad value is caught here
+        # rather than being quietly dropped.
+        if distance is not None:
+            distance = scout_config.validate_distance(distance)
+
+        distance_param = scout_config.distance_param()
+        postcode_param = scout_config.postcode_param()
+        if distance is not None:
+            if distance_param:
+                params[distance_param] = distance
+            else:
+                logger.warning(
+                    "gov_uk: distance=%r requested but no distance_param is "
+                    "configured, so the sweep stays nationwide", distance)
+        if postcode:
+            if postcode_param:
+                params[postcode_param] = postcode
+            else:
+                logger.warning(
+                    "gov_uk: postcode=%r requested but no postcode_param is "
+                    "configured, so the sweep stays nationwide", postcode)
+        return params
+
+    # ------------------------------------------------------------------
+    # DETAIL PAGES
+    # ------------------------------------------------------------------
+    def fetch_detail(self, url: str) -> dict:
+        """Fetch ONE vacancy detail page and return the panel's fields.
+
+        Conditions this method enforces, rather than relies on a caller for:
+
+          * the URL must be a vacancy detail page on the apprenticeship site
+            (DETAIL_URL_RE). A search URL, an account page or an off-site
+            cross-post is refused WITHOUT a request;
+          * at least `min_interval` since the previous request on this scraper,
+            via the same `_throttle()` the search uses — so the 1s floor is
+            structural rather than something a caller has to remember;
+          * the identifying User-Agent already on the session;
+          * no cookies are sent or kept (see `_block_cookies`);
+          * 429 or any 5xx raises DetailFetchBackoff, which stops the batch.
+
+        Returns only the six stored fields. The HTML is parsed and discarded.
+        """
+        if not DETAIL_URL_RE.match((url or "").strip()):
+            raise ScraperError(f"not a vacancy detail URL: {url!r}")
+
+        self._throttle()
+        try:
+            resp = self.session.get(url, timeout=self.timeout,
+                                    allow_redirects=True)
+        except requests.RequestException as e:
+            raise ScraperError(f"HTTP error fetching detail: {e}") from e
+
+        status = getattr(resp, "status_code", 0)
+        if status == 429 or 500 <= status < 600:
+            raise DetailFetchBackoff(
+                f"gov.uk returned {status} — stopping the batch")
+        if status != 200:
+            raise ScraperError(f"detail page returned {status}")
+
+        return self.parse_detail(resp.text)
+
+    @staticmethod
+    def parse_detail(html: str) -> dict:
+        """The six panel fields from a detail page. Missing stays missing.
+
+        A field that cannot be found is returned as None, never as a guess: the
+        panel shows a muted dash for None, and an invented wage is worse than a
+        blank one.
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        found = {key: None for key in
+                 ("wage", "hours", "start_date", "duration", "closing_date",
+                  "description")}
+
+        # gov.uk renders these as definition lists, and elsewhere as a <b>/<p>
+        # pair like the search cards. Try both rather than betting on one.
+        pairs = []
+        for dl in soup.find_all("dl"):
+            terms = dl.find_all("dt")
+            definitions = dl.find_all("dd")
+            for dt, dd in zip(terms, definitions):
+                pairs.append((dt.get_text(" ", strip=True),
+                              dd.get_text(" ", strip=True)))
+        for tag in soup.find_all(["b", "strong", "th"]):
+            label = tag.get_text(" ", strip=True)
+            holder = tag.find_parent(["p", "li", "tr", "div"])
+            if not holder:
+                continue
+            value = holder.get_text(" ", strip=True)
+            if value.lower().startswith(label.lower()):
+                value = value[len(label):]
+            pairs.append((label, value.strip(" :\u00a0")))
+
+        for label, value in pairs:
+            key_text = " ".join(label.lower().split()).strip(" :")
+            if not value:
+                continue
+            for field, labels in DETAIL_LABELS.items():
+                if found[field] is None and key_text in labels:
+                    found[field] = value.strip()
+
+        # Description: the vacancy's own summary, capped. Prefer a labelled
+        # section, else the first substantial paragraph.
+        description = None
+        for heading in soup.find_all(["h2", "h3"]):
+            text = heading.get_text(" ", strip=True).lower()
+            if text in ("what you will do in your working day",
+                        "summary", "vacancy description",
+                        "what you'll do in your working day"):
+                parts = []
+                for sibling in heading.find_next_siblings():
+                    if sibling.name in ("h2", "h3"):
+                        break
+                    if sibling.name in ("p", "ul", "ol"):
+                        parts.append(sibling.get_text(" ", strip=True))
+                    if sum(len(p) for p in parts) > DETAIL_DESCRIPTION_CHARS:
+                        break
+                if parts:
+                    description = " ".join(parts)
+                    break
+        if description is None:
+            for paragraph in soup.find_all("p"):
+                text = paragraph.get_text(" ", strip=True)
+                if len(text) >= 80:
+                    description = text
+                    break
+        if description:
+            description = " ".join(description.split())[:DETAIL_DESCRIPTION_CHARS]
+        found["description"] = description or None
+
+        # Normalise the dates we can read, leaving the raw text when we cannot.
+        for field in ("start_date", "closing_date"):
+            if found[field]:
+                parsed = _parse_uk_date(found[field])
+                if parsed:
+                    found[field] = parsed.isoformat()
+        return found
+
+    @staticmethod
+    def search_params(term: str) -> dict:
+        """The query this scraper sends for a search term.
+
+        One place, so what goes on the wire can be asserted in a test and
+        printed by the baseline tool rather than reconstructed by reading
+        `by_keyword`. Today that is the search term and a fixed sort, and
+        nothing else — no location, distance, level or route filter. Page 1
+        carries no page parameter; `_search_all_pages` adds PageNumber for 2+.
+        """
+        return {"searchTerm": term, "sort": "AgeAsc"}
 
     # ------------------------------------------------------------------
     # INTERNALS
     # ------------------------------------------------------------------
+    def _throttle(self) -> None:
+        """Block until `min_interval` has passed since the previous request.
+
+        Uses a monotonic clock so a system clock adjustment mid-scan can't turn
+        the wait into a long sleep (or skip it).
+        """
+        if self._last_request_at is not None:
+            elapsed = time.monotonic() - self._last_request_at
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+        self._last_request_at = time.monotonic()
+
     def _search_all_pages(
-        self, params: dict, min_level: int, max_pages: int = 5
+        self, params: dict, min_level: int, max_pages: Optional[int] = None,
+        stats: Optional[dict] = None
     ) -> list[RawVacancy]:
-        """Walk pagination. Stop once we hit an empty page or max_pages."""
-        results: list[RawVacancy] = []
-        seen_refs = set()
+        """Walk pagination, newest first, until there is nothing left to fetch.
+
+        Stop conditions, in the order they are checked:
+
+          "empty_page"        a page returned no cards at all;
+          "identical_page"    this page is the same cards in the same order as
+                              the previous one, so paging is having no effect
+                              and the next request would repeat it. Identity is
+                              (reference, locations) per card, NOT reference
+                              alone: a page carrying further LOCATIONS for
+                              vacancies already seen has the same references
+                              but is a different page with real slots behind
+                              it, which is the case that broke the old rule;
+          "reached_site_total" we have fetched as many result slots as the site
+                              says exist, so there is provably nothing more;
+          "page_cap"          `max_pages` reached — the site may well have more.
+
+        The old condition was "this page added no NEW REFERENCES", which is
+        wrong whenever a page is full of additional LOCATIONS for vacancies
+        already seen: that page adds no reference but is a different page with
+        real slots behind it. Measured on the "software" search, it stopped
+        after 20 of the site's 32 slots and lost 12 vacancies. Identity of the
+        page itself is the only safe signal, because gov.uk serves the same page
+        for an out-of-range PageNumber rather than an empty one.
+        """
+        if max_pages is None:
+            max_pages = self.max_pages
+        by_ref: dict[str, RawVacancy] = {}
+        order: list[str] = []
+        slots_fetched = 0
+        reported_total = None
+        previous_page_identity = None
 
         for page in range(1, max_pages + 1):
             p = dict(params)
             if page > 1:
                 p["PageNumber"] = page
-            page_results = self._search_one_page(p, min_level)
+
+            # Per-page stats, merged into the caller's dict afterwards, so the
+            # page's own slot count can be read here instead of being inferred
+            # from a running total.
+            page_stats: dict = {}
+            page_results = self._search_one_page(p, min_level, stats=page_stats)
+            slots_fetched += page_stats.get("cards_seen", 0)
+            if page_stats.get("reported_total") is not None:
+                reported_total = page_stats["reported_total"]
+            if stats is not None:
+                _merge_stats(stats, page_stats)
+                stats["pages_fetched"] = stats.get("pages_fetched", 0) + 1
+                stats["slots_fetched"] = slots_fetched
+
             if not page_results:
+                if stats is not None:
+                    stats.setdefault("stopped_because", "empty_page")
                 break
 
-            fresh = [r for r in page_results if r.reference not in seen_refs]
-            if not fresh:  # we're seeing repeats — pagination exhausted
+            page_identity = [(r.reference, r.locations) for r in page_results]
+
+            for r in page_results:
+                existing = by_ref.get(r.reference)
+                if existing is not None:
+                    # A multi-location vacancy can straddle a page boundary, so
+                    # the merge has to happen here too, not only within a page.
+                    for loc in r.locations or ((r.location,) if r.location else ()):
+                        if existing.add_location(loc) and stats is not None:
+                            stats["extra_locations"] = stats.get("extra_locations", 0) + 1
+                    continue
+                by_ref[r.reference] = r
+                order.append(r.reference)
+
+            if page_identity == previous_page_identity:
+                # The same page served twice: paging has stopped working.
+                if stats is not None:
+                    stats.setdefault("stopped_because", "identical_page")
                 break
-            for r in fresh:
-                seen_refs.add(r.reference)
-                results.append(r)
+            previous_page_identity = page_identity
 
-            time.sleep(1.0)  # be polite
+            if reported_total is not None and slots_fetched >= reported_total:
+                # Every slot the site claims is accounted for. Fetching further
+                # pages can only repeat what we have.
+                if stats is not None:
+                    stats.setdefault("stopped_because", "reached_site_total")
+                break
+        else:
+            if stats is not None:
+                # Ran the full range without breaking: the cap is what stopped
+                # us, so the site may well have more.
+                stats.setdefault("stopped_because", "page_cap")
 
-        return results
+        return [by_ref[r] for r in order]
 
-    def _search_one_page(self, params: dict, min_level: int) -> list[RawVacancy]:
+    def _search_one_page(self, params: dict, min_level: int,
+                         stats: Optional[dict] = None) -> list[RawVacancy]:
+        self._throttle()
         try:
             resp = self.session.get(SEARCH_URL, params=params, timeout=self.timeout)
             resp.raise_for_status()
         except requests.RequestException as e:
             raise ScraperError(f"HTTP error searching gov.uk: {e}") from e
 
-        return self._parse_search_page(resp.text, min_level)
+        return self._parse_search_page(resp.text, min_level, stats=stats)
 
-    def _parse_search_page(self, html: str, min_level: int) -> list[RawVacancy]:
+    @staticmethod
+    def reported_total(html: str):
+        """The total the site itself claims, or None if the title doesn't say.
+
+        This is the number to compare a scrape against: if gov.uk reports 300
+        results and we collected 43, the gap is ours, not the site's.
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        title = soup.find("title")
+        if not title:
+            return None
+        m = RESULT_COUNT_RE.search(title.get_text())
+        return int(m.group(1).replace(",", "")) if m else None
+
+    def _parse_search_page(self, html: str, min_level: int,
+                           stats: Optional[dict] = None) -> list[RawVacancy]:
+        """Parse one results page.
+
+        `stats`, when given, is accumulated in place so a caller can see why a
+        page yielded what it did rather than inferring it. A silent drop is the
+        failure mode that made the coverage shortfall impossible to diagnose:
+        cards that do not match the expected link shape simply vanished, which
+        looks identical to the site having fewer listings.
+        """
         soup = BeautifulSoup(html, "html.parser")
 
-        # Result count sanity check — "0 results found" short-circuits
-        title = soup.find("title")
-        if title and "0 results found" in title.get_text():
+        total = self.reported_total(html)
+        if stats is not None and total is not None:
+            stats["reported_total"] = total
+
+        # The site explicitly says there are none. Parsed as a number, not a
+        # substring — see RESULT_COUNT_RE.
+        if total == 0:
             return []
 
         cards = soup.find_all("li", class_=re.compile(r"das-search-results__list-item"))
-        vacancies: list[RawVacancy] = []
-        seen_in_page = set()
+        if stats is not None:
+            stats["cards_seen"] = stats.get("cards_seen", 0) + len(cards)
+
+        # Keyed by reference so a vacancy repeated once per location becomes one
+        # listing carrying every location, rather than one listing and N-1
+        # silently discarded cards.
+        in_page: dict[str, RawVacancy] = {}
+        order: list[str] = []
         for card in cards:
-            v = self._parse_card(card)
+            v = self._parse_card(card, stats=stats)
             if not v:
+                # No parseable detail link at all. Counted, because a link shape
+                # we don't cover would drop real listings without a trace.
+                if stats is not None:
+                    stats["dropped_no_ref"] = stats.get("dropped_no_ref", 0) + 1
+                    _note_unmatched(stats, card)
                 continue
-            if v.reference in seen_in_page:
-                continue  # multi-location postings render as duplicate cards
-            seen_in_page.add(v.reference)
+            existing = in_page.get(v.reference)
+            if existing is not None:
+                # Same vacancy, another location. The site counted this card in
+                # its result total, so it consumed a result slot.
+                added = existing.add_location(v.location)
+                if stats is not None:
+                    stats["duplicate_cards"] = stats.get("duplicate_cards", 0) + 1
+                    if added:
+                        stats["extra_locations"] = stats.get("extra_locations", 0) + 1
+                continue
             if v.level is not None and v.level < min_level:
+                if stats is not None:
+                    stats["dropped_below_level"] = stats.get("dropped_below_level", 0) + 1
                 continue
-            vacancies.append(v)
+            if stats is not None and v.level is None:
+                stats["level_unparsed"] = stats.get("level_unparsed", 0) + 1
+            in_page[v.reference] = v
+            order.append(v.reference)
+        vacancies = [in_page[r] for r in order]
+        if stats is not None:
+            stats["kept"] = stats.get("kept", 0) + len(vacancies)
         return vacancies
 
-    def _parse_card(self, card) -> Optional[RawVacancy]:
-        # Reference from URL
-        link = card.find("a", href=VAC_REF_RE)
+    def _parse_card(self, card, stats: Optional[dict] = None) -> Optional[RawVacancy]:
+        # Reference from the card's title link. Prefer the VAC form this scraper
+        # was built for; otherwise derive a stable id rather than discard the
+        # listing (see reference_from_href).
+        link = card.find("a", href=VAC_REF_RE) or _primary_link(card)
         if not link:
             return None
-        m = VAC_REF_RE.search(link["href"])
-        if not m:
+        reference, kind, source = reference_from_href(link.get("href", ""))
+        if not reference:
             return None
-        reference = m.group(1)
-        url = BASE_URL + link["href"]
+        if stats is not None:
+            kinds = stats.setdefault("ref_kinds", {})
+            kinds[kind] = kinds.get(kind, 0) + 1
+            sources = stats.setdefault("sources", {})
+            sources[source] = sources.get(source, 0) + 1
 
-        # Title
-        title = link.get_text(strip=True)
+        # urljoin handles both a site-relative href and an absolute one, so a
+        # fully-qualified link can't become BASE_URL + "https://...".
+        url = urljoin(BASE_URL + "/", link["href"].strip())
+
+        # Title, less gov.uk's "(opens in new tab)" screen-reader suffix.
+        title = clean_title(link.get_text(strip=True))
 
         # The card has a series of <p class="govuk-body"> paragraphs after the h2.
         # First one is employer name (unlabelled), rest have <b>Label</b> value.
@@ -244,11 +755,181 @@ class GovUkScraper:
             start_date=start_date,
             posted_text=posted_text,
             url=url,
+            source=source,
         )
 
 
 class ScraperError(Exception):
     pass
+
+
+class DetailFetchBackoff(ScraperError):
+    """The site asked us to slow down, or had a server error.
+
+    Raised on 429 and 5xx so the CALLER STOPS THE WHOLE BATCH. It is
+    deliberately a distinct type from ScraperError, which a scan swallows and
+    carries on from: retrying a 429 in a loop is the one behaviour that turns a
+    polite scraper into an impolite one.
+    """
+
+
+# Keys accumulated by summing; everything else is merged by rule below.
+_COUNTER_KEYS = ("cards_seen", "kept", "dropped_no_ref", "dropped_below_level",
+                 "level_unparsed", "duplicate_cards", "extra_locations")
+
+
+def _merge_stats(target: dict, page: dict) -> None:
+    """Fold one page's stats into the per-search totals.
+
+    `_search_all_pages` gives each page its own dict so it can read that page's
+    slot count, then merges here. Counters add, the reported total is the
+    latest seen, and the dicts and sample list are combined rather than
+    replaced.
+    """
+    for key in _COUNTER_KEYS:
+        if key in page:
+            target[key] = target.get(key, 0) + page[key]
+    if page.get("reported_total") is not None:
+        target["reported_total"] = page["reported_total"]
+    for key in ("ref_kinds", "sources"):
+        if key in page:
+            merged = dict(target.get(key, {}))
+            for k, v in page[key].items():
+                merged[k] = merged.get(k, 0) + v
+            target[key] = merged
+    if page.get("unmatched_href_samples"):
+        samples = target.setdefault("unmatched_href_samples", [])
+        for href in page["unmatched_href_samples"]:
+            if href not in samples and len(samples) < 8:
+                samples.append(href)
+
+
+def _block_cookies(session) -> None:
+    """Refuse to send or store cookies.
+
+    Nothing this scraper reads needs a session, and a cookie jar is the first
+    step towards looking like a logged-in client. Blocking it at the policy
+    level means no code path can start one by accident.
+    """
+    try:
+        from http.cookiejar import DefaultCookiePolicy
+        session.cookies.set_policy(DefaultCookiePolicy(allowed_domains=[]))
+    except Exception:            # pragma: no cover - cookie jar is optional
+        pass
+
+
+def _note_unmatched(stats: dict, card, limit: int = 8) -> None:
+    """Record EVERY href on a dropped card, unfiltered.
+
+    The previous version kept only hrefs containing "apprentice" — it filtered
+    by a guess about the very format it existed to discover. A card linking to
+    e.g. /vacancy/<id> was dropped AND left unsampled, so the diagnostic read
+    "16 dropped, 0 samples" and said nothing. Record everything and let the
+    reader judge; a handful of raw hrefs is cheap.
+    """
+    samples = stats.setdefault("unmatched_href_samples", [])
+    for a in card.find_all("a", href=True):
+        if len(samples) >= limit:
+            return
+        href = (a["href"] or "").strip()
+        if href and href not in samples:
+            samples.append(href)
+
+
+def _primary_link(card):
+    """The anchor that identifies this card: its title link.
+
+    Prefers an anchor inside a heading, which is where the job title sits in
+    gov.uk's card markup. Falls back to the first anchor with real text that is
+    not a fragment or mailto, so a "save this vacancy" control or an icon-only
+    link cannot become the listing's identity.
+    """
+    for level in ("h1", "h2", "h3", "h4"):
+        for heading in card.find_all(level):
+            a = heading.find("a", href=True)
+            if a and not _NON_DETAIL_HREF_RE.match(a["href"] or ""):
+                return a
+    for a in card.find_all("a", href=True):
+        href = a["href"] or ""
+        if _NON_DETAIL_HREF_RE.match(href):
+            continue
+        if a.get_text(strip=True):
+            return a
+    return None
+
+
+class LinkIdentity(NamedTuple):
+    """How a card's detail link identifies its vacancy.
+
+    `kind` is reported in the scrape stats so an unexpected link shape shows up
+    as a count rather than as a quiet shortfall:
+
+      "vac"    /apprenticeship/VAC1000123                  -> VAC1000123
+      "id"     /vacancy/1000284512                         -> 1000284512
+      "jcode"  …/viewjob.cgi?jcode=2017911                 -> jcode:2017911
+      "url"    external, no recognised id param            -> host/path?query
+      "path"   on-site, no id segment at all               -> the path
+    """
+    reference: Optional[str]
+    kind: Optional[str]
+    source: str = SOURCE_FINDAPPRENTICESHIP
+
+
+def reference_from_href(href: str) -> LinkIdentity:
+    """Identify the vacancy a detail link points at.
+
+    On-site links keep their existing treatment. For an EXTERNAL link the query
+    string is part of the identity and must not be discarded: gov.uk cross-posts
+    public-sector roles to systems like Civil Service Jobs, where every vacancy
+    shares the path `/csr/viewjob.cgi` and differs only by `?jcode=`. Reducing
+    those to the path gave 16 cards one reference, and the in-page dedup then
+    kept exactly one of them.
+
+    References from external systems are namespaced ("jcode:2017911", or
+    host+path+query) so they cannot collide with an on-site numeric id.
+    """
+    if not href:
+        return LinkIdentity(None, None, SOURCE_OTHER)
+    href = href.strip()
+    if _NON_DETAIL_HREF_RE.match(href):
+        return LinkIdentity(None, None, SOURCE_OTHER)
+
+    parts = urlsplit(href)
+    source = _source_for_host(parts.netloc)
+
+    # On-site: the VAC reference is the canonical identity wherever it appears.
+    if source == SOURCE_FINDAPPRENTICESHIP:
+        m = VAC_REF_RE.search(href)
+        if m:
+            return LinkIdentity(m.group(1), "vac", source)
+
+    path = parts.path.rstrip("/")
+    query = _canonical_query(parts.query)
+
+    if source != SOURCE_FINDAPPRENTICESHIP:
+        # An id parameter is the tightest identity available, and short enough
+        # to read in an alert.
+        params = {k.lower(): v for k, v in
+                  parse_qsl(parts.query, keep_blank_values=True)}
+        for name in EXTERNAL_ID_PARAMS:
+            value = params.get(name)
+            if value:
+                return LinkIdentity(f"{name}:{value}", name, source)
+        # No recognised parameter: the whole normalised URL, which is still
+        # distinct per vacancy. Scheme is dropped so http/https don't split one
+        # listing in two.
+        host = parts.netloc.lower().removeprefix("www.")
+        ref = f"{host}{path}" + (f"?{query}" if query else "")
+        return LinkIdentity(ref or None, "url", source) if ref else \
+            LinkIdentity(None, None, source)
+
+    if not path:
+        return LinkIdentity(None, None, source)
+
+    segments = [s for s in path.split("/") if s]
+    if segments and ID_SEGMENT_RE.match(segments[-1]):
+        return LinkIdentity(segments[-1], "id", source)
+    return LinkIdentity(path.lower(), "path", source)
 
 
 # ----------------------------------------------------------------------

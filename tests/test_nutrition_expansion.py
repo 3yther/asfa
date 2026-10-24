@@ -36,7 +36,14 @@ _H = {"X-CSRF-Token": "tok"}
 
 
 def _today():
-    return datetime.now().strftime("%Y-%m-%d")
+    """Today in APP_TZ, which is what the writers key their rows on.
+
+    Not `datetime.now()`: that is the container clock. Between 23:00 UTC and
+    midnight UTC while London is on BST they are different DAYS, so a naive
+    "today" wrote to one date and read back from another — the test failed for
+    one hour a night, half the year, on any UTC host.
+    """
+    return db.today_str()
 
 
 def _shift(date_str, delta):

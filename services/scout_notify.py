@@ -6,9 +6,11 @@ there is exactly one email system rather than one per source.
 
 Transport is unchanged from the original Scout notifier: Gmail SMTP over
 STARTTLS using SCOUT_EMAIL_USER / SCOUT_EMAIL_PASS, delivering to
-NOTIFY_EMAIL_TO. Discord is optional and only fires when DISCORD_WEBHOOK_URL is
-set. Best-effort throughout — a send failure is logged and swallowed, never
-raised into a scan.
+the address in SCOUT_NOTIFY_EMAIL_TO. Discord is optional and only fires when
+DISCORD_WEBHOOK_URL is set. Neither is configured on Railway today, so the live
+channels are the in-app bell and Telegram, both reached through
+services.scheduler._notify. Best-effort throughout — a send failure is logged
+and swallowed, never raised into a scan.
 
 Scout has no alerts table; outcomes are recorded via db.log_audit, matching how
 scout_daily_scan already reports itself.
@@ -27,7 +29,18 @@ logger = logging.getLogger("asfa.scout_notify")
 
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
-NOTIFY_EMAIL_TO = "ami.salax08@gmail.com"
+
+
+def notify_email_to() -> str:
+    """Where Scout's email would go, from the environment.
+
+    This repo is PUBLIC and the address used to be a literal here. It now comes
+    from SCOUT_NOTIFY_EMAIL_TO (falling back to NOTIFY_EMAIL_TO), and when
+    neither is set the email path is skipped SILENTLY — no fallback to the old
+    address, which would defeat the point of moving it.
+    """
+    return (os.environ.get("SCOUT_NOTIFY_EMAIL_TO")
+            or os.environ.get("NOTIFY_EMAIL_TO") or "").strip()
 
 JOB = "job"
 APPRENTICESHIP = "apprenticeship"
@@ -36,7 +49,12 @@ APPRENTICESHIP = "apprenticeship"
 # ── Transport ────────────────────────────────────────────────────────────────
 
 def send_email(subject: str, html: str, text: str = None) -> tuple:
-    """Send one HTML email. Returns (ok, error). Never raises."""
+    """Send one HTML email. Returns (ok, error). Never raises.
+
+    Skips silently unless BOTH the credentials and a recipient are configured.
+    On Railway today none of them are, so this path is dormant: alerts go via
+    the in-app bell and Telegram (see services/scheduler._notify).
+    """
     user = os.environ.get("SCOUT_EMAIL_USER")
     password = os.environ.get("SCOUT_EMAIL_PASS")
     if not (user and password):
@@ -44,10 +62,16 @@ def send_email(subject: str, html: str, text: str = None) -> tuple:
         logger.info("scout_notify: %s — skipping email", msg)
         return False, msg
 
+    recipient = notify_email_to()
+    if not recipient:
+        msg = "SCOUT_NOTIFY_EMAIL_TO not set"
+        logger.info("scout_notify: %s — skipping email", msg)
+        return False, msg
+
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = user
-    msg["To"] = NOTIFY_EMAIL_TO
+    msg["To"] = recipient
     msg.set_content(text or _html_to_text(html))
     msg.add_alternative(html, subtype="html")
 
@@ -59,7 +83,8 @@ def send_email(subject: str, html: str, text: str = None) -> tuple:
             server.ehlo()
             server.login(user, password)
             server.send_message(msg)
-        logger.info("scout_notify: emailed %r to %s", subject, NOTIFY_EMAIL_TO)
+        # The address is not logged: this repo is public and logs get pasted.
+        logger.info("scout_notify: emailed %r", subject)
         return True, ""
     except Exception as e:
         logger.warning("scout_notify: email send failed: %s", e)
@@ -101,6 +126,10 @@ def _as_row(item, kind: str) -> dict:
         employer = getattr(item, "employer_display", None) or get("company") or ""
     return {
         "kind": kind,
+        # A watchlist match is marked with a star, not given exclusive rights to
+        # an alert: a Level 4+ digital role matters whoever posts it.
+        "starred": bool(get("starred", False)),
+        "reference": get("external_ref") or get("reference") or "",
         "title": get("title") or "Untitled",
         "employer": employer,
         "location": get("location") or "",
@@ -111,6 +140,34 @@ def _as_row(item, kind: str) -> dict:
         "training_course": get("training_course") or "",
         "closing_text": get("closing_text") or "",
     }
+
+
+def _dedupe_by_reference(rows: list) -> list:
+    """One alert per vacancy, however many times it was found.
+
+    A vacancy can arrive several times over: once per employer alias that
+    matched, once per keyword that returned it, and — for a multi-location
+    posting — once per location. The reference is the vacancy's identity, so it
+    is what collapses them. A row with no reference is kept as-is rather than
+    folded into the first other reference-less row.
+    """
+    seen = set()
+    out = []
+    for row in rows:
+        ref = row.get("reference")
+        if ref:
+            if ref in seen:
+                # Keep the starred copy if the duplicate is the one that
+                # matched the watchlist.
+                if row.get("starred"):
+                    for kept in out:
+                        if kept.get("reference") == ref:
+                            kept["starred"] = True
+                            break
+                continue
+            seen.add(ref)
+        out.append(row)
+    return out
 
 
 def _plural(n: int, word: str) -> str:
@@ -139,6 +196,9 @@ _BADGE = {
 
 def _render_row(row: dict) -> str:
     label, colour = _BADGE[row["kind"]]
+    star = ('<span title="watchlist employer" '
+            'style="color:#f08c00;font-size:15px;">&#9733;</span> '
+            if row.get("starred") else "")
     meta = []
     if row["kind"] == APPRENTICESHIP:
         # The fields the decision actually gets made on.
@@ -167,7 +227,7 @@ def _render_row(row: dict) -> str:
             {label}
           </span>
           <div style="font-weight:600;font-size:15px;margin-top:6px;">
-            <a href="{_esc(row['url'])}" style="color:{colour};text-decoration:none;">{_esc(row['title'])}</a>
+            {star}<a href="{_esc(row['url'])}" style="color:{colour};text-decoration:none;">{_esc(row['title'])}</a>
           </div>
           <div style="color:#495057;font-size:13px;margin-top:4px;">
             <strong>{_esc(row['employer'])}</strong>&nbsp;&middot;&nbsp;{_esc(row['location'])}
@@ -193,6 +253,21 @@ def _render_group(heading: str, rows: list) -> str:
     """
 
 
+def _with_level(rows: list) -> list:
+    return [r for r in rows if r.get("level")]
+
+
+def _without_level(rows: list) -> list:
+    """Listings whose level could not be read.
+
+    Off-site cross-posts (Civil Service Jobs and the like) carry no training
+    course, so gov.uk states no level for them. They are grouped and labelled
+    rather than mixed in with confirmed Level 4+ roles, because "level unknown"
+    is a different thing to act on from "Level 4".
+    """
+    return [r for r in rows if not r.get("level")]
+
+
 def render_email(jobs: list, apprenticeships: list, heading: str = None,
                  urgent: bool = False) -> str:
     """Build the combined HTML body, grouped by source."""
@@ -214,7 +289,9 @@ def render_email(jobs: list, apprenticeships: list, heading: str = None,
         </td>
       </tr>
       {_render_group("Jobs", jobs)}
-      {_render_group("Apprenticeships", apprenticeships)}
+      {_render_group("Apprenticeships · Level 4+", _with_level(apprenticeships))}
+      {_render_group("Apprenticeships · level unknown (off-site listing)",
+                     _without_level(apprenticeships))}
       <tr>
         <td style="padding:16px 24px;color:#868e96;font-size:12px;">
           Sent by ASFA Scout. Manage the employer watchlist at /scout/employers.
@@ -234,7 +311,8 @@ def alert_new_listings(jobs=None, apprenticeships=None) -> bool:
     simply omitted from the subject and body. Returns True if an email went out.
     """
     job_rows = [_as_row(j, JOB) for j in (jobs or [])]
-    appr_rows = [_as_row(a, APPRENTICESHIP) for a in (apprenticeships or [])]
+    appr_rows = _dedupe_by_reference([_as_row(a, APPRENTICESHIP)
+                                      for a in (apprenticeships or [])])
     if not (job_rows or appr_rows):
         return False
 

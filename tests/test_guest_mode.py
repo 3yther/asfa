@@ -102,9 +102,24 @@ def test_portfolio_is_public_and_carries_the_cv():
     body = r.get_data(as_text=True)
     assert r.status_code == 200
     for expected in ("AMIR SALAH", "Cloud Security Engineer", "Leigh UTC Dartford",
-                     "Worldpay", "TK Maxx", "Financial Times", "NQ ORB Bot",
-                     "ami.salax08@gmail.com"):
+                     "Worldpay", "TK Maxx", "Financial Times", "NQ ORB Bot"):
         assert expected in body
+
+
+def test_the_portfolio_contact_email_comes_only_from_the_environment(monkeypatch):
+    """There is no default address in the source — this repository is public.
+    The address below is synthetic; it is set for this test and nowhere else."""
+    monkeypatch.setenv("PORTFOLIO_EMAIL", "contact@example.invalid")
+    body = A.app.test_client().get("/portfolio").get_data(as_text=True)
+    assert "contact@example.invalid" in body
+    assert "mailto:contact@example.invalid" in body
+
+
+def test_the_portfolio_drops_the_email_chip_when_it_is_unset(monkeypatch):
+    monkeypatch.delenv("PORTFOLIO_EMAIL", raising=False)
+    body = A.app.test_client().get("/portfolio").get_data(as_text=True)
+    assert "mailto:" not in body, "unset means the chip is simply not rendered"
+    assert "AMIR SALAH" in body, "and the rest of the page is unaffected"
 
 
 def test_cv_download_404s_until_the_pdf_is_added():

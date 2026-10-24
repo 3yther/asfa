@@ -85,7 +85,12 @@ zero write privileges.
 
 > ⚠️ **Change the DB name.** The SQL hardcodes `railway` in the `GRANT CONNECT`
 > lines — if `\l` / the Connect tab shows a different database name, edit those.
-> Also rotate the pre-generated password if it's been shared in plaintext.
+
+> 🔑 **Set the password at paste time.** `01-grafana-reader.sql` deliberately
+> contains no password: it has a `:GRAFANA_READER_PASSWORD` placeholder, because
+> this repository is public. Generate one with `openssl rand -base64 24`,
+> substitute it as the file's header explains, and keep it only in a password
+> manager and the Grafana datasource. Never commit it.
 
 ---
 
@@ -97,7 +102,8 @@ zero write privileges.
    - **Host:** `<public-proxy-host>:<port>` from Phase 0.1
    - **Database:** `railway` (or your actual DB name)
    - **User:** `grafana_reader`  ← the read-only user, **not** the app's main user
-   - **Password:** the one in `01-grafana-reader.sql`
+   - **Password:** the one you generated when running `01-grafana-reader.sql`
+     (it is not stored in the repo — see the note above)
    - **TLS/SSL Mode:** `require`  ← Railway enforces TLS. Do **not** pick `disable`.
    - **Connection limits:** Max open 5 / Max idle 2 / Max lifetime 14400 (Phase 0.3)
    - **PostgreSQL version:** 15 (or match `SHOW server_version;`)

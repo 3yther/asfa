@@ -751,8 +751,14 @@ function wireBodyComp() {
 }
 
 // ── Scout Pipeline ─────────────────────────────────────────────────────────────
-const SP_STAGES = [["saved", "Saved"], ["applied", "Applied"], ["interview", "Interview"],
-                   ["offer", "Offer"], ["rejected", "Rejected"]];
+const SP_STAGES = [["saved", "Saved"], ["interested", "Interested"], ["applied", "Applied"],
+                   ["online_assessment", "Online Assessment"],
+                   ["video_interview", "Video Interview"],
+                   ["assessment_centre", "Assessment Centre"],
+                   ["offer", "Offer"], ["rejected", "Rejected"],
+                   ["withdrawn", "Withdrawn"],
+                   // Retired, kept so an existing row still renders its label.
+                   ["interview", "Interview"]];
 function spDaysAgo(iso) {
   if (!iso) return null;
   const d = new Date(iso.length <= 10 ? iso + "T00:00:00" : iso);

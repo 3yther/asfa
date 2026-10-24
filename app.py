@@ -917,8 +917,10 @@ def export_all_data():
 # CV or an application form, so it must render without the passphrase and
 # without a guest session. It reads nothing from the database.
 #
-# Contact details default to the values on the CV and can be overridden (or
-# blanked) with PORTFOLIO_* env vars — useful because this repo is public.
+# Contact details come from PORTFOLIO_* env vars. There is NO default for the
+# email: this repository is public, so a default in the source is a personal
+# address published on GitHub. Unset simply drops the chip — templates/
+# portfolio.html guards each one with {% if %}, so the page renders without it.
 CV_FILENAME = "Amir_Salah_CV.pdf"
 CV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "cv", CV_FILENAME)
 
@@ -929,7 +931,7 @@ def portfolio():
         "portfolio.html",
         active="portfolio",
         phone=os.environ.get("PORTFOLIO_PHONE", "07398 396363"),
-        email=os.environ.get("PORTFOLIO_EMAIL", "ami.salax08@gmail.com"),
+        email=os.environ.get("PORTFOLIO_EMAIL", "").strip(),
         linkedin=os.environ.get("PORTFOLIO_LINKEDIN",
                                 "https://www.linkedin.com/in/amir-salah"),
         cv_available=os.path.exists(CV_PATH),
@@ -2348,8 +2350,13 @@ def api_gym_session_start():
     # Backfill the whole session under a simulated clock (date + start_time).
     sim = db.get_simulated_time()
     date = _log_date(d.get("date"))
+    # The fallback must be LOCAL (APP_TZ), not the container clock. It is stored
+    # naive, and _minutes_between reads a naive start_time as already-local — so
+    # a naive UTC value written here would be re-read as London and over-report
+    # every duration by the BST offset. gym.js sends an aware toISOString(), so
+    # this path is only reached by a caller that omits start_time.
     start_time = sim.isoformat() if sim is not None else (
-        d.get("start_time") or datetime.now().isoformat())
+        d.get("start_time") or db.now_local().replace(tzinfo=None).isoformat())
     notes = d.get("notes", "")
     session_id = db.create_session(routine_id, date, start_time, notes)
     return jsonify({"ok": True, "session_id": session_id,
@@ -4389,6 +4396,356 @@ def scout_page():
     return render_template("scout.html")
 
 
+# ── Scout: the apprenticeship hub (Find roles / Upcoming / Tracker / Alerts) ──
+
+@app.route("/scout/roles")
+def scout_roles_page():
+    """The four-screen hub. Tabs switch client-side off the URL hash, so each
+    screen is linkable without a round trip on a phone."""
+    return render_template("scout_roles.html")
+
+
+def _roles_filters_from_request() -> dict:
+    """Filters off the query string. Unknown values are ignored, never fatal."""
+    args = request.args
+    out = {}
+    if args.get("q"):
+        out["q"] = args.get("q", "")[:120]
+    if args.get("level"):
+        out["level"] = args.get("level")
+    if args.get("source"):
+        out["source"] = args.get("source")
+    for flag in ("near_home", "watchlist_only", "hide_closed", "new_only"):
+        if args.get(flag) in ("1", "true", "yes", "on"):
+            out[flag] = True
+    return out
+
+
+@app.route("/api/scout/roles")
+def api_scout_roles():
+    from services import scout_roles
+    # `visit=1` is sent once by the page load. A plain refresh of the list must
+    # not keep resetting the "new since your last visit" line.
+    mark = request.args.get("visit") in ("1", "true", "yes")
+    return jsonify(scout_roles.roles_view(
+        _roles_filters_from_request(),
+        sort=request.args.get("sort", "recent"),
+        mark_visited=mark))
+
+
+@app.route("/api/scout/roles/<path:ref>")
+def api_scout_role_detail(ref):
+    from services import scout_detail, scout_roles
+    rows = [r for r in db.get_apprenticeship_rows()
+            if (r.get("external_ref") or "") == ref]
+    if not rows:
+        return jsonify({"error": "not found"}), 404
+    detail = db.get_scout_job_detail(ref) or {}
+    card = scout_roles.to_card(rows[0], db.scout_last_visited(), detail,
+                               watchlist=scout_roles.watchlist_terms())
+    card["stages"] = [{"key": k, "label": db.scout_stage_label(k)}
+                      for k in db.SCOUT_STAGES]
+    card["auto_stage"] = db.SCOUT_AUTO_STAGE
+    return jsonify(card)
+
+
+@app.route("/api/scout/roles/<path:ref>/stage", methods=["POST"])
+def api_scout_role_stage(ref):
+    """Set the stage for a listing, writing into Scout's own pipeline.
+
+    One source of truth: this is the same scout_pipeline the Tracker board
+    reads, not a second store beside it.
+    """
+    payload = request.get_json(silent=True) or {}
+    stage = (payload.get("stage") or "").strip()
+    if stage and stage not in db.SCOUT_ALL_STAGES:
+        return jsonify({"error": f"stage must be one of "
+                                 f"{', '.join(db.SCOUT_STAGES)}"}), 400
+    rows = [r for r in db.get_apprenticeship_rows()
+            if (r.get("external_ref") or "") == ref]
+    if not rows:
+        return jsonify({"error": "not found"}), 404
+    row = rows[0]
+    ok = db.upsert_scout_pipeline_for_listing(
+        job_title=row.get("title") or "",
+        company=row.get("employer_name_raw") or row.get("company") or "",
+        job_url=row.get("url") or "",
+        location=row.get("location") or "",
+        stage=stage or db.SCOUT_AUTO_STAGE,
+        source=row.get("source") or "gov_uk")
+    return jsonify({"ok": bool(ok), "ref": ref, "stage": stage})
+
+
+@app.route("/api/scout/roles/<path:ref>/detail", methods=["POST"])
+@limiter.limit("20 per minute")
+def api_scout_role_detail_fetch(ref):
+    """Fetch this one listing's detail page, under the approved conditions.
+
+    Every condition is enforced inside services.scout_detail.fetch_one, which
+    shares its eligibility clause and its 24-hour cache check with the
+    scheduled batch — so the button is not a looser door than the job. Rate
+    limited because a human holding it down is still traffic gov.uk sees.
+    """
+    from services import scout_detail
+    return jsonify(scout_detail.fetch_one(ref))
+
+
+@app.route("/api/scout/excluded")
+def api_scout_excluded():
+    """The audit view: everything the relevance filter dropped, with reasons."""
+    from services import scout_config
+    return jsonify({
+        "counts": db.count_scout_exclusions(listing_type="apprenticeship"),
+        "listings": db.get_scout_exclusions(limit=500,
+                                            listing_type="apprenticeship"),
+        "allowed": scout_config.allowed_overrides(),
+    })
+
+
+@app.route("/api/scout/excluded/allow", methods=["POST"])
+def api_scout_excluded_allow():
+    """"Never exclude this standard" / "...this employer" — writes the config.
+
+    Appends to config/scout_filters.json rather than editing Python, which is
+    what makes the filter lists tunable without a deploy.
+    """
+    from services import scout_config
+    payload = request.get_json(silent=True) or {}
+    kind = (payload.get("kind") or "").strip()
+    value = (payload.get("value") or "").strip()
+    if kind not in ("standard", "employer") or not value:
+        return jsonify({"error": "kind must be standard|employer "
+                                 "with a value"}), 400
+    try:
+        added = scout_config.allow_forever(kind, value)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error("scout allow_forever failed: %s", e)
+        return jsonify({"error": "could not store that correction"}), 500
+    return jsonify({"ok": True, "kind": kind, "value": value, "added": added,
+                    "allowed": scout_config.allowed_overrides()})
+
+
+@app.route("/api/scout/excluded/allow/<int:override_id>", methods=["DELETE"])
+def api_scout_excluded_undo(override_id):
+    """Undo one stored correction.
+
+    The corrections live in the database so they survive a Railway deploy; the
+    file they replaced was at least hand-editable, so moving them has to bring
+    a way back with it.
+    """
+    from services import scout_config
+    ok = scout_config.undo_override(override_id)
+    return jsonify({"ok": ok, "allowed": scout_config.allowed_overrides()}), \
+        (200 if ok else 404)
+
+
+@app.route("/api/scout/tracker")
+def api_scout_tracker():
+    """The board: programmes AND tracked listings, by stage.
+
+    Both kinds belong here. A programme is a scheme the user follows whether or
+    not a vacancy is live; a listing is a role they moved off Find roles. They
+    write to different tables (`scout_programmes` and `scout_pipeline`) but they
+    are the same question — what have I got going — so one board shows both, and
+    the card says which it is.
+    """
+    by_stage = {}
+    not_started = []
+
+    def bucket(entry):
+        stage = entry.get("stage") or ""
+        if stage:
+            by_stage.setdefault(stage, []).append(entry)
+        else:
+            not_started.append(entry)
+
+    for row in db.get_scout_programmes():
+        bucket({
+            "id": row["id"], "kind": "programme",
+            "company": row.get("company") or "",
+            "title": row.get("programme") or "",
+            "stage": row.get("stage") or "",
+            "next_step": row.get("next_step") or "",
+            "next_step_date": row.get("next_step_date") or "",
+            "deadline": row.get("deadline") or "",
+            "link": row.get("link") or row.get("official_link") or "",
+            "cloud_sec_fit": row.get("cloud_sec_fit") or "",
+            "level": row.get("level") or "",
+        })
+
+    # Listings the user has MOVED. Rows still at the auto stage are Scout's
+    # backfill, not a decision, so they stay on Find roles and off the board —
+    # otherwise every scraped listing would land here on the first scan.
+    for row in db.get_scout_pipeline():
+        stage = row.get("stage") or ""
+        if stage in (db.SCOUT_AUTO_STAGE, ""):
+            continue
+        bucket({
+            "id": row["id"], "kind": "listing",
+            "company": row.get("company") or "",
+            "title": row.get("job_title") or "",
+            "stage": stage,
+            "next_step": "", "next_step_date": "",
+            # A pipeline row records when you APPLIED, not when the vacancy
+            # closes, so it travels under its own name rather than being
+            # squeezed into the programme's `deadline`.
+            "applied_date": row.get("date_applied") or "",
+            "deadline": "",
+            "link": row.get("job_url") or "",
+            "cloud_sec_fit": "", "level": "",
+        })
+
+    # Columns cover the current stages PLUS any retired stage that still holds a
+    # row. "interview" was dropped from the offered list but never migrated, so
+    # a column-list built from SCOUT_STAGES alone would render those rows
+    # nowhere at all — the user's own record, silently gone from the board.
+    stage_keys = list(db.SCOUT_STAGES)
+    for key in by_stage:
+        if key not in stage_keys and key in db.SCOUT_ALL_STAGES:
+            stage_keys.append(key)
+    for key in stage_keys:
+        by_stage.setdefault(key, [])
+
+    # The 14-day banner states what the cleanup WOULD take, from the same dry
+    # run the cleanup script uses, rather than a sentence about the policy.
+    try:
+        cleanup = db.preview_job_pipeline_cleanup()
+        at_risk = cleanup.get("pipeline_by_stage", {}).get(
+            db.SCOUT_AUTO_STAGE, 0)
+        exempt = cleanup.get("pipeline_exempt_total", 0)
+    except Exception as e:
+        logger.warning("scout tracker: cleanup preview failed: %s", e)
+        at_risk, exempt = None, None
+
+    return jsonify({
+        "by_stage": by_stage,
+        "not_started": not_started,
+        "stages": [{"key": k, "label": db.scout_stage_label(k)}
+                   for k in stage_keys],
+        "closed_stages": list(db.SCOUT_CLOSED_STAGES),
+        "auto_stage": db.SCOUT_AUTO_STAGE,
+        "auto_stage_label": db.scout_stage_label(db.SCOUT_AUTO_STAGE),
+        "cleanup_days": 14,
+        "cleanup_at_risk": at_risk,
+        "cleanup_exempt": exempt,
+        "counts": db.count_scout_programmes(),
+    })
+
+
+@app.route("/api/scout/tracker/<kind>/<int:item_id>/stage", methods=["POST"])
+def api_scout_tracker_stage(kind, item_id):
+    """Move one card. `kind` says which table it lives in.
+
+    A programme's stage may be cleared (back to "not started"); a listing's may
+    not, because a pipeline row always holds a stage — clearing one sends it
+    back to the auto stage, where the 14-day cleanup can take it.
+    """
+    payload = request.get_json(silent=True) or {}
+    stage = (payload.get("stage") or "").strip() or None
+    if stage and stage not in db.SCOUT_ALL_STAGES:
+        return jsonify({"error": f"stage must be one of "
+                                 f"{', '.join(db.SCOUT_STAGES)}"}), 400
+
+    if kind == "listing":
+        row = db.update_scout_pipeline(item_id, stage=stage or db.SCOUT_AUTO_STAGE)
+        if not row:
+            return jsonify({"error": "could not update"}), 400
+        return jsonify({"ok": True, "id": item_id, "kind": kind,
+                        "stage": row.get("stage")})
+
+    if kind != "programme":
+        return jsonify({"error": "kind must be programme or listing"}), 400
+    fields = {k: v for k, v in payload.items()
+              if k in db.PROGRAMME_USER_FIELDS and k != "stage"}
+    ok = db.set_scout_programme_stage(item_id, stage, **fields)
+    if not ok:
+        return jsonify({"error": "could not update"}), 400
+    return jsonify({"ok": True, "id": item_id, "kind": kind, "stage": stage})
+
+
+@app.route("/api/scout/upcoming")
+def api_scout_upcoming():
+    """The Sep-to-Aug grid. Windows are LAST cycle's unless confirmed."""
+    months = ["sep", "oct", "nov", "dec", "jan", "feb", "mar", "apr",
+              "may", "jun", "jul", "aug"]
+    now_month = datetime.now().strftime("%b").lower()
+    rows = []
+    for row in db.get_scout_programmes():
+        open_months = [m for m in (row.get("open_months") or "").split(",") if m]
+        rows.append({
+            "id": row["id"],
+            "company": row.get("company") or "",
+            "programme": row.get("programme") or "",
+            "open_months": open_months,
+            "rolling": (row.get("rolling") or "").strip(),
+            "typical_close": (row.get("timeline_close")
+                              or row.get("typical_closes") or ""),
+            "confirmed_open_date": row.get("confirmed_open_date") or "",
+            "confirmed_close_date": row.get("confirmed_close_date") or "",
+            "confirmed_source": row.get("confirmed_source") or "",
+            "stage": row.get("stage") or "",
+            "stage_label": (db.scout_stage_label(row["stage"])
+                            if row.get("stage") else ""),
+            "cloud_sec_fit": row.get("cloud_sec_fit") or "",
+        })
+    return jsonify({"months": months, "current_month": now_month,
+                    "rows": rows})
+
+
+@app.route("/api/scout/upcoming/<int:programme_id>/confirm", methods=["POST"])
+def api_scout_upcoming_confirm(programme_id):
+    payload = request.get_json(silent=True) or {}
+    ok = db.set_scout_programme_stage(
+        programme_id, None,
+        confirmed_open_date=(payload.get("open_date") or "").strip(),
+        confirmed_close_date=(payload.get("close_date") or "").strip(),
+        confirmed_source=(payload.get("source") or "").strip())
+    if not ok:
+        return jsonify({"error": "could not update"}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/scout/alerts")
+def api_scout_alerts():
+    """Saved searches and each channel's state.
+
+    Channel state is a boolean and a sentence. No token, chat id or address is
+    ever returned — this is rendered in a page.
+    """
+    from services import scout_roles
+    return jsonify({
+        "searches": [{k: v for k, v in s.items() if k != "filters_json"}
+                     for s in db.list_saved_searches()],
+        "channels": scout_roles.channel_states(),
+    })
+
+
+@app.route("/api/scout/alerts", methods=["POST"])
+def api_scout_alerts_create():
+    payload = request.get_json(silent=True) or {}
+    name = (payload.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "a name is required"}), 400
+    new_id = db.add_saved_search(name, payload.get("filters") or {},
+                                 payload.get("channels") or ["bell"])
+    if not new_id:
+        return jsonify({"error": "could not create"}), 400
+    return jsonify({"ok": True, "id": new_id})
+
+
+@app.route("/api/scout/alerts/<int:search_id>", methods=["POST", "DELETE"])
+def api_scout_alerts_update(search_id):
+    if request.method == "DELETE":
+        return jsonify({"ok": db.delete_saved_search(search_id)})
+    payload = request.get_json(silent=True) or {}
+    ok = db.update_saved_search(search_id,
+                                enabled=payload.get("enabled"),
+                                channels=payload.get("channels"))
+    return jsonify({"ok": ok})
+
+
 @app.route("/scout/employers")
 def scout_employers_page():
     """Apprenticeship employer watchlist — list, toggle watching, add."""
@@ -4672,7 +5029,7 @@ def api_scout_pipeline():
         if not job_title or not company:
             return jsonify({"error": "job_title and company required"}), 400
         stage = (d.get("stage") or "saved").strip()
-        if stage not in db.SCOUT_STAGES:
+        if stage not in db.SCOUT_ALL_STAGES:
             return jsonify({"error": f"stage must be one of {', '.join(db.SCOUT_STAGES)}"}), 400
         pid = db.add_scout_pipeline_job(
             job_title, company, job_url=d.get("job_url") or None,
@@ -4680,7 +5037,7 @@ def api_scout_pipeline():
             stage=stage, notes=d.get("notes") or None, cv_version=d.get("cv_version") or None)
         return jsonify({"ok": True, "id": pid, "job": db.get_scout_pipeline_job(pid)})
     stage = request.args.get("stage")
-    if stage and stage not in db.SCOUT_STAGES:
+    if stage and stage not in db.SCOUT_ALL_STAGES:
         return jsonify({"error": "unknown stage"}), 400
     return jsonify(db.get_scout_pipeline(stage=stage))
 
@@ -4697,7 +5054,7 @@ def api_scout_pipeline_item(pid):
         return (jsonify({"ok": True}) if ok else (jsonify({"error": "not found"}), 404))
     d = request.get_json(force=True) or {}
     stage = d.get("stage")
-    if stage is not None and stage not in db.SCOUT_STAGES:
+    if stage is not None and stage not in db.SCOUT_ALL_STAGES:
         return jsonify({"error": f"stage must be one of {', '.join(db.SCOUT_STAGES)}"}), 400
     job = db.update_scout_pipeline(pid, stage=stage, notes=d.get("notes"),
                                    cv_version=d.get("cv_version"))
@@ -5072,6 +5429,31 @@ def scout_daily_scan():
         logger.error("scout audit log failed: %s", e)
 
 
+def apprenticeship_detail_job():
+    """Fills in the detail-panel fields for listings Scout has already kept.
+
+    Separate from the scan on purpose. The scan is one request per search; this
+    is one request per LISTING, so it is the heavier of the two and is kept to a
+    small batch on its own cadence. It only ever touches listings already in the
+    database, caches each page for a day, and stops the batch outright on a 429
+    or a 5xx rather than retrying — see services/scout_detail.py for the full
+    set of conditions.
+
+    Needs an app context only for the scan's SQLAlchemy half; the detail pass
+    itself uses the raw `db` layer, but the context costs nothing and keeps the
+    two jobs symmetrical.
+    """
+    try:
+        from services import scout_detail
+        summary = scout_detail.fetch_missing_details()
+        logger.info("Apprenticeship detail fetch: %s", summary)
+        if summary.get("stopped_early"):
+            logger.warning("Apprenticeship detail fetch stopped early: %s",
+                           summary.get("stop_reason"))
+    except Exception as e:
+        logger.error("apprenticeship detail fetch failed: %s", e)
+
+
 def apprenticeship_scan_job():
     """Every APPRENTICESHIP_POLL_MINUTES — scan gov.uk for apprenticeships.
 
@@ -5299,21 +5681,29 @@ def _start_background():
     # their own try/except so one failing can never abort the others.
     sched = start_scheduler()
 
-    # Scout job scan, daily at 06:00 (registered here to keep the scout feature
-    # self-contained without editing services/scheduler.py).
-    try:
-        sched.add_job(scout_daily_scan, "cron", hour=6, minute=0, id="scout_daily_scan")
-    except Exception as e:
-        logger.error("failed to register scout daily scan: %s", e)
+    # Scout jobs are registered here to keep the feature self-contained, but
+    # through services.scheduler._safe_add like every other job, so one bad
+    # registration cannot take the rest of the schedule down with it.
+    from services.scheduler import _safe_add
+
+    # Scout job scan, daily at 06:00.
+    _safe_add(sched, scout_daily_scan, "cron", hour=6, minute=0,
+              id="scout_daily_scan", replace_existing=True)
+
     # Apprenticeship scan on its own interval (default 6h) so we don't hammer
     # gov.uk. Same scheduler object as every other job — the Procfile pins
     # --workers 1 and ASFA_BG_STARTED guards double-start, so it runs once.
-    try:
-        from services.apprenticeships import poll_minutes
-        sched.add_job(apprenticeship_scan_job, "interval",
-                      minutes=poll_minutes(), id="apprenticeship_scan")
-    except Exception as e:
-        logger.error("failed to register apprenticeship scan: %s", e)
+    from services.apprenticeships import poll_minutes
+    _safe_add(sched, apprenticeship_scan_job, "interval",
+              minutes=poll_minutes(), id="apprenticeship_scan",
+              replace_existing=True)
+
+    # Detail pages for kept listings, hourly and in small batches. Offset from
+    # the scan so a fresh listing has been persisted before its page is asked
+    # for, and rate-limited by the scraper's own 1s floor regardless.
+    _safe_add(sched, apprenticeship_detail_job, "interval", minutes=60,
+              id="apprenticeship_detail_fetch", replace_existing=True,
+              misfire_grace_time=300)
 
     # Telegram bot — optional. A missing/invalid token must only warn, never
     # crash startup or take the scheduler down with it. start_bot() already
